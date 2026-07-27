@@ -32,6 +32,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -328,6 +329,39 @@ class BattlePlanGenerator:
             len(holdings_plans), len(candidate_plans), used_fallback,
         )
         return plan
+
+    # ------------------------------------------------------------------
+    # Markdown persistence (P3-C)
+    # ------------------------------------------------------------------
+
+    def save_plan_markdown(
+        self, plan, output_dir: Optional[Path] = None
+    ) -> Optional[Path]:
+        """Save a battle plan as a markdown file.
+
+        Args:
+            plan: BattlePlan object with to_markdown() method.
+            output_dir: Directory to save to. Defaults to self.output_dir
+                or data/paper_trading/reports/.
+
+        Returns:
+            Path to the saved file, or None on failure.
+        """
+        from pathlib import Path
+        try:
+            md = plan.to_markdown() if hasattr(plan, "to_markdown") else str(plan)
+            out = output_dir or getattr(self, "output_dir", None) or Path("data/paper_trading/reports")
+            out = Path(out)
+            out.mkdir(parents=True, exist_ok=True)
+            plan_date = getattr(plan, "date", "") or "unknown"
+            filename = f"battle_plan_{plan_date}.md"
+            filepath = out / filename
+            filepath.write_text(md, encoding="utf-8")
+            logger.info("Battle plan markdown saved: %s", filepath)
+            return filepath
+        except Exception as exc:
+            logger.warning("Failed to save battle plan markdown: %s", exc)
+            return None
 
     # ------------------------------------------------------------------
     # Sub-plan generators

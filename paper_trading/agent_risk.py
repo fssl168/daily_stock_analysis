@@ -77,7 +77,11 @@ REVIEW_PROMPT_TEMPLATE = """你是模拟交易系统的风控审核 Agent。一�
   "approved": true 或 false,
   "confidence": 0.0 到 1.0,
   "reason": "简短理由(50字以内)",
-  "concerns": ["风险点1", "风险点2"]
+  "concerns": ["风险点1", "风险点2"],
+  "action": "approve | reject | cancel | modify | sell | hold",
+  "code": "股票代码(可选,当action为cancel/modify/sell时必填)",
+  "stop_loss": 0.0,
+  "take_profit": 0.0
 }}
 """
 
@@ -94,6 +98,11 @@ class AgentReviewResult:
     error: Optional[str] = None
     elapsed_seconds: float = 0.0
     used_fallback: bool = False
+    action: str = "approve"  # approve / reject / cancel / modify / sell / hold
+    code: Optional[str] = None
+    quantity: Optional[float] = None
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -383,12 +392,38 @@ class AgentRiskReviewer:
                 concerns = [str(c) for c in concerns_raw][:5]
             else:
                 concerns = [str(concerns_raw)]
+            # Parse action with validation against the allowed set.
+            valid_actions = {"approve", "reject", "cancel", "modify", "sell", "hold"}
+            raw_action = str(verdict.get("action") or "").strip().lower()
+            if raw_action and raw_action in valid_actions:
+                action = raw_action
+            else:
+                action = "approve" if approved else "reject"
+            code_val = verdict.get("code")
+            code = str(code_val) if code_val is not None and str(code_val).strip() else None
+            try:
+                stop_loss = float(verdict.get("stop_loss")) if verdict.get("stop_loss") is not None else None
+            except (TypeError, ValueError):
+                stop_loss = None
+            try:
+                take_profit = float(verdict.get("take_profit")) if verdict.get("take_profit") is not None else None
+            except (TypeError, ValueError):
+                take_profit = None
+            try:
+                quantity = float(verdict.get("quantity")) if verdict.get("quantity") is not None else None
+            except (TypeError, ValueError):
+                quantity = None
             return AgentReviewResult(
                 approved=approved,
                 reason=reason or ("approved by agent" if approved else "vetoed by agent"),
                 confidence=confidence,
                 concerns=concerns,
                 raw_response=raw_text,
+                action=action,
+                code=code,
+                quantity=quantity,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
             )
 
         # Fallback: keyword detection on the raw text.

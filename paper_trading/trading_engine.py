@@ -257,6 +257,9 @@ class TradingEngine:
                 )
                 self._persist_agent_verdict(signal_id, verdict)
 
+            # P0-C / R2: Map agent verdict to order actions (cancel/sell/modify).
+            self._maybe_trigger_order_action(account_id, verdict, signal)
+
             if not verdict.approved:
                 self._update_signal_status(
                     signal_id, "rejected",
@@ -998,20 +1001,86 @@ class TradingEngine:
             row.agent_reason = agent_reason
             row.reviewed_at = datetime.now()
 
+    def _maybe_trigger_order_action(
+        self,
+        account_id: int,
+        verdict: AgentReviewResult,
+        signal: Signal,
+    ) -> None:
+        """Map an agent review verdict to order actions (P0-C / R2).
+
+        Uses RiskOrderAdapter to translate the verdict's action field into
+        concrete order commands (cancel/sell/modify) executed against the
+        TradingEngine. Fault-tolerant: failures are logged and never break
+        the main signal pipeline.
+        """
+        try:
+            from paper_trading.risk_order_adapter import RiskOrderAdapter
+            cmd = RiskOrderAdapter.from_agent_review(verdict)
+            if cmd is None:
+                return
+            if cmd.action == "cancel" and cmd.code:
+                try:
+                    with self.db.session_scope() as session:
+                        from src.storage import PaperOrder
+                        rows = session.execute(
+                            select(PaperOrder).where(
+                                PaperOrder.account_id == account_id,
+                                PaperOrder.code == cmd.code,
+                                PaperOrder.status.in_(["pending", "partially_filled"]),
+                            )
+                        ).scalars().all()
+                        for row in rows:
+                            if hasattr(self.order_mgr, "cancel_order"):
+                                self.order_mgr.cancel_order(
+                                    row.id, reason=f"agent_action: {cmd.reason}"
+                                )
+                                logger.info(
+                                    "Order canceled by risk action: order_id=%s code=%s",
+                                    row.id, cmd.code,
+                                )
+                except Exception as exc:
+                    logger.warning("Risk action cancel failed for code=%s: %s", cmd.code, exc)
+            elif cmd.action == "sell" and cmd.code:
+                try:
+                    from strategies_v2.rule_engine import Signal as V2Signal
+                    sell_signal = V2Signal(
+                        side="sell",
+                        code=cmd.code,
+                        strategy_name="risk_action",
+                        rule_name="agent_review",
+                        trigger_price=cmd.stop_loss or 0.0,
+                        suggested_quantity=cmd.quantity or 0.0,
+                        reason=cmd.reason or "agent risk action",
+                    )
+                    self.submit_signal(
+                        account_id=account_id,
+                        signal=sell_signal,
+                    )
+                    logger.info("Sell signal emitted by risk action: code=%s", cmd.code)
+                except Exception as exc:
+                    logger.warning("Risk action sell failed for code=%s: %s", cmd.code, exc)
+            elif cmd.action == "modify" and cmd.code:
+                try:
+                    self.position_mgr.update_stop_loss_take_profit(
+                        account_id=account_id,
+                        code=cmd.code,
+                        stop_loss=cmd.stop_loss,
+                        take_profit=cmd.take_profit,
+                    )
+                    logger.info(
+                        "Position modified by risk action: code=%s SL=%s TP=%s",
+                        cmd.code, cmd.stop_loss, cmd.take_profit,
+                    )
+                except Exception as exc:
+                    logger.warning("Risk action modify failed for code=%s: %s", cmd.code, exc)
+        except Exception as exc:
+            logger.warning("RiskOrderAdapter hook failed: %s", exc)
+
     # ------------------------------------------------------------------
     # Callback dispatch (P1-C)
     # ------------------------------------------------------------------
 
-
-        # R2 INTEGRATION: Trigger risk-based order actions
-        try:
-            from paper_trading.risk_order_adapter import RiskOrderAdapter
-            # Check if we have a decision that might need action mapping
-            # Note: decision here is the PMDecision object passed in
-            # For now, log that integration point exists
-            logger.debug("RiskOrderAdapter hook triggered for decision: %s", decision.action)
-        except Exception as e:
-            logger.debug("Risk adapter load issue: %s", e)
     def _fire_callback(
         self,
         callback: Optional[Any],

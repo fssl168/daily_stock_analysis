@@ -59,6 +59,7 @@ PM_SYSTEM_PROMPT = """你是模拟交易系统的 AI 基金经理,负责管理�
 - **顺势而为**: 只在多头排列(MA5 > MA10 > MA20)时买入,空头排列时减仓或观望。
 - **止损止盈**: 每笔买入必须设置 stop_loss 和 take_profit,基于 ATR + Fib + 筹码峰三位一体计算。
 - **仓位管理**: 分批建仓,首次买入不超过目标仓位的 50%,逢低加仓,亏损不加仓。
+- **挂单纪律**: 默认使用限价单(limit)挂单,基于最新价设置 limit_price,避免市价单滑点;仅在紧急止损/止盈离场时使用市价单(market)。
 - **复盘学习**: 调用 paper_trading_get_recent_reflections 查阅最近复盘笔记,避免重复犯错。
 
 ## 输出格式(严格 JSON)
@@ -769,7 +770,7 @@ def register_paper_trading_tools(
         code = str(kwargs.get("code") or "").strip()
         side = str(kwargs.get("side") or "").strip().lower()
         quantity = float(kwargs.get("quantity") or 0.0)
-        order_type = str(kwargs.get("order_type") or "market").strip().lower()
+        order_type = str(kwargs.get("order_type") or "limit").strip().lower()
         limit_price = kwargs.get("limit_price")
         entry_price = kwargs.get("entry_price")
         trigger_price_kw = kwargs.get("trigger_price")
@@ -788,7 +789,9 @@ def register_paper_trading_tools(
             from strategies_v2.rule_engine import Signal
             ot = OrderType.LIMIT if order_type == "limit" else OrderType.MARKET
             if ot == OrderType.LIMIT:
-                trigger_price = float(limit_price) if limit_price else 0.0
+                trigger_price = float(
+                    limit_price or entry_price or trigger_price_kw or 0.0
+                )
             else:
                 # Market orders need a valid reference price. Accept
                 # entry_price / trigger_price explicitly, or fall back to
@@ -844,8 +847,8 @@ def register_paper_trading_tools(
             ToolParameter(name="code", type="string", description="Stock code, e.g. '600519' or 'AAPL'.", required=True),
             ToolParameter(name="side", type="string", description="Order side.", enum=["buy", "sell"], required=True),
             ToolParameter(name="quantity", type="number", description="Number of shares (must be positive).", required=True),
-            ToolParameter(name="order_type", type="string", description="Order type.", enum=["market", "limit"], required=False, default="market"),
-            ToolParameter(name="limit_price", type="number", description="Required for limit orders. Ignored for market orders.", required=False),
+            ToolParameter(name="order_type", type="string", description="Order type. Default 'limit' to control execution price; use 'market' only for urgent stop-loss/take-profit exits.", enum=["market", "limit"], required=False, default="limit"),
+            ToolParameter(name="limit_price", type="number", description="Required for limit orders. For limit orders without explicit limit_price, entry_price is used as fallback. Ignored for market orders.", required=False),
             ToolParameter(name="entry_price", type="number", description="Reference price for market orders (required when order_type='market' and no trigger_price).", required=False),
             ToolParameter(name="trigger_price", type="number", description="Alias for entry_price; used as the market order reference price if entry_price is omitted.", required=False),
             ToolParameter(name="name", type="string", description="Stock display name (optional).", required=False),
@@ -956,16 +959,6 @@ def register_paper_trading_tools(
         category="data",
     ))
 
-    logger.info(
-        "[paper_trading_tools] Registered 7 tools for account_id=%s",
-        account_id,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Factory
-# ---------------------------------------------------------------------------
-
     # ---- Compute SLTP (smart stop-loss/take-profit) ----
     def _handle_compute_sltp(**kwargs) -> dict:
         """Compute the three-line exit plan for a position (P1-A gap fill)."""
@@ -995,7 +988,18 @@ def register_paper_trading_tools(
             ToolParameter(name="entry_price", type="number", description="Entry price for calculating SL/TP", required=True),
         ],
         handler=_handle_compute_sltp,
-        category="data",    ))
+        category="data",
+    ))
+
+    logger.info(
+        "[paper_trading_tools] Registered 8 tools for account_id=%s",
+        account_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Factory
+# ---------------------------------------------------------------------------
 
 def build_portfolio_manager_agent(
     config: Optional[Any] = None,

@@ -1179,6 +1179,16 @@ class Config:
     # position keeps whatever stop_loss/take_profit were supplied by the
     # signal/agent and the SLTP calculator is only available on demand.
     paper_trading_enable_auto_sltp: bool = True
+    # P1-A dynamic trailing stop: raise SL upward when profit ratio exceeds threshold.
+    paper_trading_enable_dynamic_sltp: bool = True
+    paper_trading_sltp_dynamic_threshold_pct: float = 20.0
+    # P0-C intraday position review via AgentRiskReviewer.
+    paper_trading_enable_position_review: bool = False
+    paper_trading_position_review_interval_seconds: float = 1800.0
+    # P2-A daily report auto-generation after market close.
+    paper_trading_enable_daily_report: bool = False
+    # P3-C save markdown to disk before pushing notifications.
+    paper_trading_save_markdown_before_push: bool = True
 
     # Risk-control limits (Phase 2)
     paper_trading_max_daily_loss_pct: float = 0.05  # 0 disables
@@ -1265,6 +1275,17 @@ class Config:
         2. WebUI 可写的运行期关键键优先复用持久化 `.env`，但保留启动时显式进程环境变量的 override
         3. 代码中的默认值
         """
+        # Capture pre-dotenv process env values for alias keys before setup_env()
+        # mutates os.environ via load_dotenv(override=True).
+        reflection_primary_env = os.environ.get("PAPER_TRADING_ENABLE_REFLECTION")
+        reflection_secondary_env = os.environ.get(
+            "PAPER_TRADING_LISTENER_ENABLE_DAILY_REFLECTION"
+        )
+        battle_plan_primary_env = os.environ.get("PAPER_TRADING_ENABLE_BATTLE_PLAN")
+        battle_plan_secondary_env = os.environ.get(
+            "PAPER_TRADING_LISTENER_ENABLE_BATTLE_PLAN"
+        )
+
         cls._capture_bootstrap_runtime_env_overrides()
         preexisting_report_language = os.environ.get("REPORT_LANGUAGE")
 
@@ -2148,14 +2169,20 @@ class Config:
             paper_trading_listener_enable_strategies=os.getenv(
                 'PAPER_TRADING_LISTENER_ENABLE_STRATEGIES', 'true'
             ).lower() == 'true',
-            paper_trading_listener_enable_daily_reflection=(
-                os.getenv('PAPER_TRADING_ENABLE_REFLECTION')
-                or os.getenv('PAPER_TRADING_LISTENER_ENABLE_DAILY_REFLECTION', 'true')
-            ).lower() == 'true',
-            paper_trading_listener_enable_battle_plan=(
-                os.getenv('PAPER_TRADING_ENABLE_BATTLE_PLAN')
-                or os.getenv('PAPER_TRADING_LISTENER_ENABLE_BATTLE_PLAN', 'true')
-            ).lower() == 'true',
+            paper_trading_listener_enable_daily_reflection=cls._resolve_aliased_bool(
+                reflection_primary_env,
+                reflection_secondary_env,
+                cls._get_env_file_value('PAPER_TRADING_ENABLE_REFLECTION'),
+                cls._get_env_file_value('PAPER_TRADING_LISTENER_ENABLE_DAILY_REFLECTION'),
+                default=True,
+            ),
+            paper_trading_listener_enable_battle_plan=cls._resolve_aliased_bool(
+                battle_plan_primary_env,
+                battle_plan_secondary_env,
+                cls._get_env_file_value('PAPER_TRADING_ENABLE_BATTLE_PLAN'),
+                cls._get_env_file_value('PAPER_TRADING_LISTENER_ENABLE_BATTLE_PLAN'),
+                default=True,
+            ),
             paper_trading_listener_pm_decision_interval_seconds=float(
                 os.getenv('PAPER_TRADING_LISTENER_PM_DECISION_INTERVAL_SECONDS', '600.0')
             ),
@@ -2213,6 +2240,24 @@ class Config:
             ).lower() == 'true',
             paper_trading_enable_auto_sltp=os.getenv(
                 'PAPER_TRADING_ENABLE_AUTO_SLTP', 'true'
+            ).lower() == 'true',
+            paper_trading_enable_dynamic_sltp=os.getenv(
+                'PAPER_TRADING_ENABLE_DYNAMIC_SLTP', 'true'
+            ).lower() == 'true',
+            paper_trading_sltp_dynamic_threshold_pct=float(
+                os.getenv('PAPER_TRADING_SLTP_DYNAMIC_THRESHOLD_PCT', '20.0')
+            ),
+            paper_trading_enable_position_review=os.getenv(
+                'PAPER_TRADING_ENABLE_POSITION_REVIEW', 'false'
+            ).lower() == 'true',
+            paper_trading_position_review_interval_seconds=float(
+                os.getenv('PAPER_TRADING_POSITION_REVIEW_INTERVAL_SECONDS', '1800.0')
+            ),
+            paper_trading_enable_daily_report=os.getenv(
+                'PAPER_TRADING_ENABLE_DAILY_REPORT', 'false'
+            ).lower() == 'true',
+            paper_trading_save_markdown_before_push=os.getenv(
+                'PAPER_TRADING_SAVE_MARKDOWN_BEFORE_PUSH', 'true'
             ).lower() == 'true',
             paper_trading_max_daily_loss_pct=float(
                 os.getenv('PAPER_TRADING_DAILY_LOSS_LIMIT_PCT', '0.05')
@@ -2586,6 +2631,34 @@ class Config:
         if value is None:
             return None
         return unescape_compose_sensitive_env_value(key, str(value))
+
+    @staticmethod
+    def _resolve_aliased_bool(
+        primary_env: Optional[str],
+        secondary_env: Optional[str],
+        primary_file: Optional[str],
+        secondary_file: Optional[str],
+        *,
+        default: bool = True,
+    ) -> bool:
+        """Resolve a boolean config with primary/secondary alias keys.
+
+        Priority:
+        1. Process env for primary key
+        2. Process env for secondary key
+        3. `.env` file for primary key
+        4. `.env` file for secondary key
+        5. Default
+        """
+        if primary_env is not None:
+            return primary_env.lower() == "true"
+        if secondary_env is not None:
+            return secondary_env.lower() == "true"
+        if primary_file is not None:
+            return primary_file.lower() == "true"
+        if secondary_file is not None:
+            return secondary_file.lower() == "true"
+        return default
 
     @classmethod
     def _resolve_env_value(

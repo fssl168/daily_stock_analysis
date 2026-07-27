@@ -33,6 +33,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from json_repair import repair_json
@@ -407,6 +408,38 @@ class ReflectionEngine:
             account_id=acct_id,
         )
         return note
+
+    # ------------------------------------------------------------------
+    # Markdown persistence (P3-C)
+    # ------------------------------------------------------------------
+
+    def save_reflection_markdown(
+        self, note, output_dir: Optional[Path] = None
+    ) -> Optional[Path]:
+        """Save a reflection note as a markdown file.
+
+        Args:
+            note: ReflectionNote object with to_markdown() method.
+            output_dir: Directory to save to. Defaults to data/paper_trading/reports/.
+
+        Returns:
+            Path to the saved file, or None on failure.
+        """
+        from pathlib import Path
+        try:
+            md = note.to_markdown() if hasattr(note, "to_markdown") else str(note)
+            out = Path(output_dir) if output_dir else Path("data/paper_trading/reports")
+            out.mkdir(parents=True, exist_ok=True)
+            created = getattr(note, "created_at", None)
+            note_date = created.strftime("%Y-%m-%d") if created else "unknown"
+            filename = f"reflection_{note_date}.md"
+            filepath = out / filename
+            filepath.write_text(md, encoding="utf-8")
+            logger.info("Reflection markdown saved: %s", filepath)
+            return filepath
+        except Exception as exc:
+            logger.warning("Failed to save reflection markdown: %s", exc)
+            return None
 
     # ------------------------------------------------------------------
     # Memory retrieval (P0-E integration point)

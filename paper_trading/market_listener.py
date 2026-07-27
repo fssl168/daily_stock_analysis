@@ -317,6 +317,14 @@ class MarketListenerConfig:
     enable_battle_plan: bool = True
     # Phase 3 additions
     strategy_timeframes: List[str] = field(default_factory=lambda: ["1d"])
+    # P1-A: Dynamic trailing stop-loss.
+    enable_dynamic_sltp: bool = True
+    sltp_dynamic_threshold_pct: float = 20.0
+    # P0-C: Intraday position review via AgentRiskReviewer.
+    enable_position_review: bool = False
+    position_review_interval_seconds: float = 1800.0
+    # P2-A: Daily report generation after settle.
+    enable_daily_report: bool = False
 
 
 # ============================================================
@@ -343,6 +351,8 @@ class MarketListener:
         pm_agent: Optional[Any] = None,
         reflection_engine: Optional[Any] = None,
         battle_plan_generator: Optional[Any] = None,
+        content_generator: Optional[Any] = None,
+        notifier: Optional[Any] = None,
     ):
         self.engine = engine
         self.fetcher = data_fetcher
@@ -352,6 +362,9 @@ class MarketListener:
         self.pm_agent = pm_agent
         self.reflection_engine = reflection_engine
         self.battle_plan_generator = battle_plan_generator
+        # P2-A: Optional daily-report content generator + notifier.
+        self.content_generator = content_generator
+        self.notifier = notifier
 
         self.rule_engine = RuleEngine()
         self._shutdown = threading.Event()
@@ -367,6 +380,8 @@ class MarketListener:
         # P1-C: Battle plan is generated once per day, per account, after close.
         self._last_battle_plan_date: Optional[date] = None
         self._last_daily_reflection_date: Optional[date] = None
+        # P0-C: Position review cadence tracking (last-triggered ts).
+        self._last_position_review_ts: Optional[datetime] = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -479,12 +494,132 @@ class MarketListener:
                 r.side, r.code, r.status,
             )
 
+        # 2a) P1-A: Dynamic trailing stop-loss for profitable positions.
+        self._check_dynamic_sltp(market, latest_prices)
+
+        # 2b) P0-C: Periodic intraday position review via AgentRiskReviewer.
+        self._maybe_review_open_positions(market, latest_prices)
+
         # 3) Evaluate strategies.
         if self.config.enable_strategies and self.strategies:
             self._evaluate_strategies(codes, latest_prices, market)
 
         # 4) P1-C: Periodically trigger PM agent decision cycle.
         self._maybe_trigger_pm_decision(market)
+
+    # ------------------------------------------------------------------
+    # P1-A / P0-C: Dynamic SL/TP and intraday position review
+    # ------------------------------------------------------------------
+
+    def _check_dynamic_sltp(
+        self,
+        market: str,
+        latest_prices: Dict[str, float],
+    ) -> None:
+        """Check and adjust stop-loss upward for profitable positions (P1-A trailing stop).
+
+        For each position with profit_ratio >= threshold, recompute SL via
+        SLTPCalculator and raise SL if the new value is higher. Only moves
+        SL up, never down. Skips positions without an existing stop_loss.
+        """
+        if not getattr(self.config, "enable_dynamic_sltp", True):
+            return
+        threshold = getattr(self.config, "sltp_dynamic_threshold_pct", 20.0) / 100.0
+        if threshold <= 0:
+            return
+        try:
+            from paper_trading.sltp_calculator import build_sltp_calculator
+            calculator = build_sltp_calculator(getattr(self, "data_provider", None))
+        except Exception as exc:
+            logger.warning("SLTP calculator unavailable for dynamic check: %s", exc)
+            return
+        try:
+            account_id = self.config.account_id
+            position_mgr = self.engine.position_mgr
+            positions = position_mgr.list_positions(account_id)
+        except Exception as exc:
+            logger.warning("Failed to list positions for dynamic SLTP: %s", exc)
+            return
+        for pos in positions or []:
+            code = getattr(pos, "code", None)
+            if not code or code not in latest_prices:
+                continue
+            current_sl = getattr(pos, "stop_loss", None)
+            if not current_sl or current_sl <= 0:
+                continue
+            avg_cost = getattr(pos, "avg_cost", None) or getattr(pos, "average_cost", None)
+            if not avg_cost or avg_cost <= 0:
+                continue
+            latest = latest_prices[code]
+            if latest <= 0:
+                continue
+            profit_ratio = (latest - avg_cost) / avg_cost
+            if profit_ratio < threshold:
+                continue
+            try:
+                result = calculator.calculate(code, current_price=latest, avg_cost=avg_cost)
+                new_sl = getattr(result, "stop_loss", None)
+                if not new_sl or new_sl <= current_sl:
+                    continue
+                position_mgr.update_stop_loss_take_profit(
+                    account_id=account_id,
+                    code=code,
+                    stop_loss=new_sl,
+                )
+                logger.info(
+                    "Dynamic SLTP raised: code=%s old_sl=%.4f new_sl=%.4f profit=%.2f%%",
+                    code, current_sl, new_sl, profit_ratio * 100,
+                )
+            except Exception as exc:
+                logger.warning("Dynamic SLTP calc failed for code=%s: %s", code, exc)
+
+    def _maybe_review_open_positions(self, market: str, latest_prices: Dict[str, float]) -> None:
+        """Periodically review open positions via AgentRiskReviewer (P0-C).
+
+        Fault-tolerant: failures are logged and never break the tick loop.
+        """
+        if not getattr(self.config, "enable_position_review", False):
+            return
+        reviewer = getattr(self.engine, "agent_reviewer", None)
+        if reviewer is None:
+            return
+        now = datetime.now()
+        last = getattr(self, "_last_position_review_ts", None)
+        interval = getattr(self.config, "position_review_interval_seconds", 1800.0)
+        if last is not None and (now - last).total_seconds() < interval:
+            return
+        self._last_position_review_ts = now
+        try:
+            account_id = self.config.account_id
+            position_mgr = self.engine.position_mgr
+            positions = position_mgr.list_positions(account_id)
+        except Exception as exc:
+            logger.warning("Position review list failed: %s", exc)
+            return
+        for pos in positions or []:
+            code = getattr(pos, "code", None)
+            if not code or code not in latest_prices:
+                continue
+            try:
+                account_snap = self.engine.account_mgr.snapshot(account_id)
+                from strategies_v2.rule_engine import Signal as V2Signal
+                review_signal = V2Signal(
+                    side="hold",
+                    code=code,
+                    strategy_name="position_review",
+                    rule_name="intraday_check",
+                    trigger_price=latest_prices[code],
+                    suggested_quantity=0.0,
+                    reason="intraday position review",
+                )
+                verdict = reviewer.review_signal(
+                    signal=review_signal,
+                    account_snapshot=account_snap,
+                    position=pos,
+                )
+                self.engine._maybe_trigger_order_action(account_id, verdict, review_signal)
+            except Exception as exc:
+                logger.warning("Position review failed for code=%s: %s", code, exc)
 
     def _codes_for_market(self, market: str) -> List[str]:
         """Filter watched codes to those belonging to ``market``.
@@ -734,6 +869,9 @@ class MarketListener:
             self._maybe_run_daily_reflection(today)
         if self.config.enable_battle_plan:
             self._maybe_generate_battle_plan(today)
+        # P2-A: daily report generation after settle hooks.
+        if self.config.enable_daily_report:
+            self._maybe_generate_daily_report(today)
 
     # ------------------------------------------------------------------
     # P1-C: PM agent / reflection / battle-plan triggers
@@ -828,6 +966,29 @@ class MarketListener:
                 "[MarketListener] battle plan generation failed: %s", exc,
             )
 
+    # ------------------------------------------------------------------
+    # P2-A: Daily report generation
+    # ------------------------------------------------------------------
+
+    def _maybe_generate_daily_report(self, today: str) -> None:
+        """Generate and optionally push a daily report (P2-A)."""
+        if not getattr(self.config, "enable_daily_report", False):
+            return
+        content_generator = getattr(self, "content_generator", None)
+        if content_generator is None:
+            return
+        try:
+            result = content_generator.generate_daily_report(save=True)
+            notifier = getattr(self, "notifier", None)
+            if notifier is not None and result is not None:
+                try:
+                    notifier.push_daily_summary(result)
+                except Exception as exc:
+                    logger.warning("Daily report push failed: %s", exc)
+            logger.info("Daily report generated: %s", getattr(result, "report_path", None))
+        except Exception as exc:
+            logger.warning("Daily report generation failed: %s", exc)
+
 
 # ============================================================
 # Factory
@@ -852,6 +1013,13 @@ def build_default_listener(
     enable_battle_plan: bool = True,
     on_trade_executed: Optional[Any] = None,
     on_signal_rejected: Optional[Any] = None,
+    content_generator: Optional[Any] = None,
+    notifier: Optional[Any] = None,
+    enable_dynamic_sltp: Optional[bool] = None,
+    sltp_dynamic_threshold_pct: Optional[float] = None,
+    enable_position_review: Optional[bool] = None,
+    position_review_interval_seconds: Optional[float] = None,
+    enable_daily_report: Optional[bool] = None,
 ) -> MarketListener:
     """Build a MarketListener wired to project defaults.
 
@@ -892,6 +1060,28 @@ def build_default_listener(
             when ``engine`` is None). Receives ``(TradeResult, trade_id=...)``.
         on_signal_rejected: P1-C: Callback injected into TradingEngine (only
             when ``engine`` is None). Receives ``TradeResult``.
+        content_generator: P2-A: Pre-built daily-report content generator.
+            When set and ``enable_daily_report`` is True, a daily report is
+            generated after ``daily_settle``.
+        notifier: P2-A: Pre-built notifier. When set, the daily report is
+            pushed via ``notifier.push_daily_summary(result)``.
+        enable_dynamic_sltp: P1-A: Override dynamic trailing stop-loss. When
+            None, falls back to ``config.paper_trading_enable_dynamic_sltp``
+            if present, else ``MarketListenerConfig.enable_dynamic_sltp``.
+        sltp_dynamic_threshold_pct: P1-A: Override the profit-ratio threshold
+            (in percent) above which trailing SL is recomputed. When None,
+            falls back to ``config.paper_trading_sltp_dynamic_threshold_pct``
+            if present, else ``MarketListenerConfig.sltp_dynamic_threshold_pct``.
+        enable_position_review: P0-C: Override intraday position review. When
+            None, falls back to ``config.paper_trading_enable_position_review``
+            if present, else ``MarketListenerConfig.enable_position_review``.
+        position_review_interval_seconds: P0-C: Override the review cadence.
+            When None, falls back to
+            ``config.paper_trading_position_review_interval_seconds`` if
+            present, else ``MarketListenerConfig.position_review_interval_seconds``.
+        enable_daily_report: P2-A: Override daily report generation. When
+            None, falls back to ``config.paper_trading_enable_daily_report``
+            if present, else ``MarketListenerConfig.enable_daily_report``.
     """
     # Lazy imports to keep module import cheap.
     from data_provider import DataFetcherManager
@@ -928,6 +1118,28 @@ def build_default_listener(
             on_signal_rejected=on_signal_rejected,
         )
 
+    # P1-A / P0-C / P2-A: resolve new config fields with config fallback.
+    if enable_dynamic_sltp is None:
+        enable_dynamic_sltp = bool(
+            getattr(config, "paper_trading_enable_dynamic_sltp", True)
+        )
+    if sltp_dynamic_threshold_pct is None:
+        sltp_dynamic_threshold_pct = float(
+            getattr(config, "paper_trading_sltp_dynamic_threshold_pct", 20.0)
+        )
+    if enable_position_review is None:
+        enable_position_review = bool(
+            getattr(config, "paper_trading_enable_position_review", False)
+        )
+    if position_review_interval_seconds is None:
+        position_review_interval_seconds = float(
+            getattr(config, "paper_trading_position_review_interval_seconds", 1800.0)
+        )
+    if enable_daily_report is None:
+        enable_daily_report = bool(
+            getattr(config, "paper_trading_enable_daily_report", False)
+        )
+
     listener_config = MarketListenerConfig(
         account_id=account_id,
         watched_codes=watched_codes,
@@ -945,6 +1157,11 @@ def build_default_listener(
         strategy_timeframes=list(
             getattr(config, "paper_trading_strategy_timeframes", ["1d"]) or ["1d"]
         ),
+        enable_dynamic_sltp=enable_dynamic_sltp,
+        sltp_dynamic_threshold_pct=sltp_dynamic_threshold_pct,
+        enable_position_review=enable_position_review,
+        position_review_interval_seconds=position_review_interval_seconds,
+        enable_daily_report=enable_daily_report,
     )
 
     return MarketListener(
@@ -955,4 +1172,6 @@ def build_default_listener(
         pm_agent=pm_agent,
         reflection_engine=reflection_engine,
         battle_plan_generator=battle_plan_generator,
+        content_generator=content_generator,
+        notifier=notifier,
     )

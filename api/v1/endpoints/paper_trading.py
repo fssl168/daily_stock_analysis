@@ -43,6 +43,7 @@ from api.v1.schemas.paper_trading import (
     ConditionalOrderCreateRequest,
     ConditionalOrderItem,
     DailyReflectionRequest,
+    DailyReportResponse,
     DrawdownItem,
     HoldingPlanItem,
     ListenerControlResponse,
@@ -1703,3 +1704,64 @@ def stop_listener(
     except Exception as exc:
         logger.error("[paper_trading] stop_listener failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Daily report (P2-A)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/accounts/{account_id}/daily-report/generate",
+    response_model=DailyReportResponse,
+    tags=["daily-report"],
+)
+async def generate_daily_report(
+    account_id: int,
+    save: bool = True,
+) -> DailyReportResponse:
+    """Generate a daily trading report (P2-A)."""
+    from datetime import date as date_cls
+    from paper_trading.content_generator import ContentGenerator
+    try:
+        generator = ContentGenerator()
+        result = generator.generate_daily_report(save=save)
+        return DailyReportResponse(
+            date=date_cls.today().isoformat(),
+            markdown=getattr(result, "markdown", None),
+            report_path=str(getattr(result, "report_path", None)) if getattr(result, "report_path", None) else None,
+            voice_path=str(getattr(result, "voice_path", None)) if getattr(result, "voice_path", None) else None,
+            used_fallback=getattr(result, "used_fallback", False),
+            error=getattr(result, "error", None),
+        )
+    except Exception as exc:
+        return DailyReportResponse(
+            date=date_cls.today().isoformat(),
+            error=str(exc),
+        )
+
+
+@router.get(
+    "/accounts/{account_id}/daily-report/{report_date}",
+    response_model=DailyReportResponse,
+    tags=["daily-report"],
+)
+async def get_daily_report(
+    account_id: int,
+    report_date: str,
+) -> DailyReportResponse:
+    """Retrieve a saved daily report by date (P2-A)."""
+    from pathlib import Path
+    try:
+        report_dir = Path("data/paper_trading/reports")
+        filepath = report_dir / f"daily_report_{report_date}.md"
+        if not filepath.exists():
+            return DailyReportResponse(date=report_date, error="Report not found")
+        markdown = filepath.read_text(encoding="utf-8")
+        return DailyReportResponse(
+            date=report_date,
+            markdown=markdown,
+            report_path=str(filepath),
+        )
+    except Exception as exc:
+        return DailyReportResponse(date=report_date, error=str(exc))

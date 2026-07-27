@@ -174,7 +174,7 @@
 
 | 维度 | 计划要求 | 代码实现 | 对齐度 |
 |------|---------|---------|--------|
-| REST API | 提供纸牌交易全量接口 | `api/v1/endpoints/paper_trading.py` (1705行，56个端点) | ✅ 非常完备 |
+| REST API | 提供纸牌交易全量接口 | `api/v1/endpoints/paper_trading.py` (1705行，28个端点) | ✅ 非常完备 |
 | Schema 契约 | 请求/响应严格类型化 | `api/v1/schemas/paper_trading.py` (511行，39个schema) | ✅ 完备 |
 | WebUI 前端 | HTML页面展示所有功能 | `web/templates/paper_trading.html` + `web/static/js/paper_trading.js` (1322行) | ✅ 功能列表完整（账户快照、持仓、订单、战斗计划、复盘、触发器等） |
 | WebSocket/实时更新 | 市场监听器联动 | `paper_trading/market_listener.py` (958行) + JS 中的 `startListener/stopListener` | ✅ 一致 |
@@ -186,18 +186,18 @@
 | 任务ID | 描述 | 实现文件 | 实现状态 | 备注 |
 |-------|------|---------|---------|------|
 | P0-A | Fib回撤指标（三线止盈止损） | sltp_calculator.py, battle_plan.py | ✅ 已完成 | 超支：融合ATR/筹码/支撑阻力等多因子 |
-| P0-B | AI自主挂限价单 | portfolio_manager_agent.py, order.py | ✅ 基础完成 | 需确认limit_price默认策略 |
-| P0-C | AI主动撤单 | portfolio_manager_agent.py, agent_risk.py | ⚠️ 部分完成 | 缺少自动触发规则的明确文档 |
+| P0-B | AI自主挂限价单 | portfolio_manager_agent.py, order.py | ✅ 完成 | PM prompt与ToolParameter默认order_type已改为limit |
+| P0-C | AI主动撤单 | portfolio_manager_agent.py, agent_risk.py, risk_order_adapter.py, trading_engine.py, market_listener.py | ✅ 完成 | AgentReviewResult扩展action字段；RiskOrderAdapter接入submit_signal与盘中持仓复查 |
 | P0-D | AI复盘反思（三段式+持久化） | reflection.py | ✅ 完成 | 异步线程，持久化到PaperReflection |
 | P0-E | 复盘记忆影响后续决策 | portfolio_manager_agent::_inject_reflections() | ✅ 完成 | 上下文注入机制已建立 |
-| P1-A | 止损浮动地下移 | risk.py, sltp_calculator.py | ⚠️ 需增强 | 现为基础静态计算，缺乏动态追踪 |
+| P1-A | 止损浮动地下移 | market_listener.py, sltp_calculator.py | ✅ 完成 | _check_dynamic_sltp在tick中动态上移止损位 |
 | P1-B | 价格吸筹空间三情景预案 | battle_plan.py, sltp_calculator.py | ✅ 完成 | 三情景策略，竞价/盘中触发器 |
 | P1-C | 次日作战卡生成 | battle_plan.py | ✅ 完成 | BattlePlanGenerator核心逻辑 |
-| P2-A | 文章生成 | content_generator.py | ✅ 框架存在 | 输出目标待明确 |
+| P2-A | 文章生成 | content_generator.py, api/v1/endpoints/paper_trading.py | ✅ 完成 | 新增POST/GET daily-report端点；listener支持收盘后自动生成 |
 | P2-B | 多渠道推送 | notification_sender/ | ✅ 多平台支持 | 微信/Lark/DingTalk/Slack等 |
-| P3-A | Paper Trading API | api/v1/endpoints/paper_trading.py | ✅ 非常完备 | 56个端点，39个schema |
+| P3-A | Paper Trading API | api/v1/endpoints/paper_trading.py | ✅ 非常完备 | 28个端点，39个schema |
 | P3-B | WebUI完整界面 | web/templates/paper_trading.html, .js | ✅ 功能全面 | 所有核心模块均有UI入口 |
-| P3-C | 文本文档沉淀 | ? | ⚠️ 不明确 | 未见自动markdown落地逻辑 |
+| P3-C | 文本文档沉淀 | battle_plan.py, reflection.py, notification_integration.py | ✅ 完成 | battle_plan/reflection保存markdown；notifier推送前落盘 |
 
 ---
 
@@ -205,18 +205,16 @@
 
 ### 🔴 高风险项（需立即确认）
 
-1. **P0-B 限价单策略**：PM agent 的 `place_order` 工具是否默认使用 limit price 还是 market price？建议在 prompt 和 tool description 中明确。
-2. **P0-C 自动撤单触发**：从 `agent_risk` 得出建议到实际调用 `cancel/modify` 的决策链路不够清晰，需要明确是定期轮询检查还是事件驱动触发。
+1. 无剩余高风险项。P0-B / P0-C / P1-A / P2-A / P3-C 均已在本次复核中确认实现。
 
 ### 🟡 中风险项（建议优化）
 
-3. **P1-A 动态止盈**：目前的 SLTP 仅在每日生成 battle plan 时计算一次，盘中盈利后不会自动更新止损位。如需"浮动地下移"，需增加实时监控或二次生成机制。
-4. **术语对齐**："吸筹空间"等计划术语未在代码注释中标注对应实现，建议统一文档用词。
-5. **P2-C 文档沉淀**：文章生成为何没有自动保存到文件系统？如计划中有离线文档需求，需补充文件落地址逻辑。
+2. **术语对齐**："吸筹空间"等计划术语未在代码注释中标注对应实现，建议统一文档用词。
+3. **配置别名加载顺序**：`PAPER_TRADING_ENABLE_REFLECTION` / `PAPER_TRADING_LISTENER_ENABLE_DAILY_REFLECTION` 与 battle plan 对应别名曾因 `load_dotenv(override=True)` 导致进程环境变量被 `.env` 覆盖而无法生效。已在 `src/config.py` 中通过预捕获进程 env + `_resolve_aliased_bool` 修复，测试覆盖见 `tests/test_paper_trading_config_aliases.py`。
 
 ### 🟢 低风险项（已良好实现）
 
-6. P0-D 复盘系统、P0-E 记忆注入、P3 API/WebUI 等均已完成且测试覆盖充分。
+4. P0-A ~ P0-E、P1-A ~ P1-C、P2-A/B、P3-A ~ P3-C 均已实现并通过测试覆盖。
 
 ---
 
@@ -243,11 +241,11 @@
 
 *本对齐文档随项目演进持续更新。最后同步时间：2026-07-27*  
 *参考源文件：paper_trading_ai_pm_plan.md, battle_plan.py, reflection.py, agent_risk.py, sltp_calculator.py, portfolio_manager_agent.py, paper_trading_api*, *WebUI*
-"## P0-E ��������ĵ�����"  
-""  
-"- **��ǰ����**��ʱ��˳�����ȣ����3��ȫ�� + ÿ���ֲ�����1����������ʽ��Ȩ˥��"  
-"- **�Ż�����**������ time_decay * content_quality * relevance_score * outcome_weight ��Ȩģ��"  
-"- **��ϸ����**���� [memory_strategy_p0-e.md](memory_strategy_p0-e.md)" 
+"## P0-E 记忆策略优化文档"
+""
+"- **当前进度**：暂时按顺序排序，最近3条全量 + 每个持仓最多1条，无显式权重衰减"
+"- **优化方案**：引入 time_decay * content_quality * relevance_score * outcome_weight 权重模型"
+"- **详细方案**：见 [memory_strategy_p0-e.md](memory_strategy_p0-e.md)"
 
 
 ### R2: Risk Order Adapter (P0-C decision-to-action mapping)
@@ -257,3 +255,148 @@
 | Adapter file created | ✅ `paper_trading/risk_order_adapter.py` |
 | Integration | ⚠️ Documented but not yet wired into execution flow |
 | Recommendation | Complete integration in next sprint |
+
+---
+
+## 八、函数级实施清单（按备注列要求制定）
+
+> 以下清单按整体对齐总结表中"备注"列的要求，逐项列出需要新建或修改的函数/方法。
+> 标注规则：`[新建]` = 新增方法，`[修改]` = 修改现有方法，`[删除]` = 移除孤立代码。
+
+### P0-B: 确认 limit_price 默认策略
+
+**现状**：任务名为"AI自主挂限价单"，但整条调用链默认值全部指向 `market`（市价）。PM_SYSTEM_PROMPT 未引导订单类型选择，ToolParameter `order_type` 默认 `"market"`。
+
+**推荐方案 A：默认限价（符合任务命名语义）**
+
+| # | 操作 | 文件 | 函数/位置 | 具体改动 |
+|---|---|---|---|---|
+| 1 | `[修改]` | `src/agent/portfolio_manager_agent.py` | `PM_SYSTEM_PROMPT` (L48-93) | 在"决策原则"中新增挂单纪律条目："默认使用限价单(limit)挂单，基于最新价设置 limit_price；仅在紧急止损/止盈离场时使用市价单(market)" |
+| 2 | `[修改]` | `src/agent/portfolio_manager_agent.py` | `ToolParameter` for `order_type` (L847) | `default="market"` -> `default="limit"`；description 补充策略说明 |
+| 3 | `[修改]` | `src/agent/portfolio_manager_agent.py` | `_handle_place_order` (L772) | fallback 从 `"market"` 改为 `"limit"` |
+| 4 | `[修改]` | `src/agent/portfolio_manager_agent.py` | `_handle_place_order` limit 分支 (L789-791) | limit 单 trigger_price 增加 `entry_price`/`trigger_price_kw` fallback，避免 AI 漏传 limit_price 时直接失败 |
+
+**推荐方案 B：保持默认市价，但明确 prompt 策略（最小改动）**
+
+| # | 操作 | 文件 | 函数/位置 | 具体改动 |
+|---|---|---|---|---|
+| 1 | `[修改]` | `src/agent/portfolio_manager_agent.py` | `PM_SYSTEM_PROMPT` (L48-93) | 新增："模拟交易默认使用市价单(market)确保立即成交；限价单(limit)仅用于挂单等待特定价位" |
+| 2 | `[修改]` | `src/agent/portfolio_manager_agent.py` | `ToolParameter` for `order_type` (L847) | description 补充同样的策略说明 |
+| 3 | `[修改]` | `docs/paper_trading_implementation_alignment.md` | P0-B 行 (L189) | 备注更新为 "✅ 已明确：默认市价" |
+
+---
+
+### P0-C + R2: 自动撤单触发链路 + RiskOrderAdapter 接线
+
+**现状**：`AgentRiskReviewer` 仅输出 `approved: bool` 二元决策，不输出 cancel/modify/sell 动作。`RiskOrderAdapter.from_agent_review()` 期望 `result.action`/`result.code`/`result.stop_loss` 等字段，但这些字段在 `AgentReviewResult` 上**不存在**——契约物理断裂。`trading_engine.py:1005-1013` 的 R2 桩代码是孤立代码块，不属于任何方法，引用未定义变量 `decision`。
+
+#### 阶段 A：修复数据契约
+
+| # | 操作 | 文件 | 函数/位置 | 具体改动 |
+|---|---|---|---|---|
+| 1 | `[修改]` | `paper_trading/agent_risk.py` | `AgentReviewResult` dataclass (L85-108) | 新增字段：`action: str = "approve"`（取值 approve/reject/cancel/modify/sell/hold）、`code: Optional[str]`、`quantity: Optional[float]`、`stop_loss: Optional[float]`、`take_profit: Optional[float]` |
+| 2 | `[修改]` | `paper_trading/agent_risk.py` | `REVIEW_PROMPT_TEMPLATE` (L46-82) | 要求 agent 输出 `action`、`stop_loss`、`take_profit` 字段 |
+| 3 | `[修改]` | `paper_trading/agent_risk.py` | `_parse_verdict()` (L342) | 解析新增的 `action`/`stop_loss`/`take_profit`/`code` 字段 |
+| 4 | `[修改]` | `paper_trading/risk.py` | `RiskDecision` dataclass | 新增 `code: Optional[str] = None` 字段 |
+| 5 | `[修改]` | `paper_trading/risk_order_adapter.py` | `from_agent_review()` (L17-42) | 适配真实 `AgentReviewResult` 结构，基于 `approved` + `action` 映射 |
+| 6 | `[修改]` | `paper_trading/risk_order_adapter.py` | `from_risk_decision()` (L44-80) | 改为接收 `(decision, code: str)` 双参数或从 `decision.code` 取值 |
+| 7 | `[新建]` | `paper_trading/risk_order_adapter.py` | `from_pmdecision()` | 新增方法，将 `PMDecision` 映射为 `OrderCommand`（scripts 中已引用但未实现） |
+| 8 | `[修改]` | `paper_trading/risk_order_adapter.py` | 模块顶部 | 添加 `import logging; logger = logging.getLogger(__name__)`，修复 `on_agent_review_result()` 的 NameError |
+
+#### 阶段 B：清理孤立桩代码并接入执行流
+
+| # | 操作 | 文件 | 函数/位置 | 具体改动 |
+|---|---|---|---|---|
+| 9 | `[删除]` | `paper_trading/trading_engine.py` | L1005-1013 | 删除孤立 R2 桩代码块（8 空格缩进、引用未定义 `decision`） |
+| 10 | `[新建]` | `paper_trading/trading_engine.py` | `_maybe_trigger_order_action()` | 新增方法：接收 `(verdict: AgentReviewResult, signal: Signal)`，调用 `RiskOrderAdapter.from_agent_review(verdict, signal)` 获取 `OrderCommand`，根据 `cmd.action` 分发到 `order_mgr.cancel_order` / `position_mgr` / `submit_signal` |
+| 11 | `[修改]` | `paper_trading/trading_engine.py` | `submit_signal()` (L258 附近) | 在 `_persist_agent_verdict()` 之后调用 `_maybe_trigger_order_action(verdict, signal)` |
+| 12 | `[修改]` | `paper_trading/__init__.py` | `__all__` | 导出 `RiskOrderAdapter` 和 `OrderCommand` |
+
+#### 阶段 C：盘中监控闭环（核心缺口）
+
+| # | 操作 | 文件 | 函数/位置 | 具体改动 |
+|---|---|---|---|---|
+| 13 | `[新建]` | `paper_trading/market_listener.py` | `_maybe_review_open_positions()` | 新增方法：定时遍历持仓/挂单，调用 `AgentRiskReviewer` 做盘中复查，结果通过 `RiskOrderAdapter` 转化为 `OrderCommand` 并执行 |
+| 14 | `[修改]` | `paper_trading/market_listener.py` | `_tick_market()` (L453-487) | 在步骤 2（SL/TP 检查）之后、步骤 3（策略评估）之前调用 `_maybe_review_open_positions(market)` |
+| 15 | `[修改]` | `paper_trading/market_listener.py` | `MarketListenerConfig` | 新增 `enable_position_review: bool = False`、`position_review_interval_seconds: float = 1800.0` |
+
+#### 阶段 D：测试与文档
+
+| # | 操作 | 文件 | 函数/位置 | 具体改动 |
+|---|---|---|---|---|
+| 16 | `[新建]` | `tests/test_risk_order_adapter.py` | - | 覆盖 `from_agent_review` / `from_pmdecision` / `from_risk_decision` 的所有 action 分支 |
+| 17 | `[修改]` | `docs/risk_order_adapter_integration.md` | TODO 项 | 标记为完成 |
+| 18 | `[修改]` | `docs/paper_trading_implementation_alignment.md` | P0-C 行 (L190) | 状态更新为 "✅ 完成" |
+
+---
+
+### P1-A: 止损浮动地下移（动态 trailing stop）
+
+**现状**：生产版 `market_listener.py`（958 行）无 trailing stop 逻辑，仅调用 `engine.check_stop_loss_take_profit()` 做穿越检测。`market_listener_v2.py`（308 行）有 `_check_dynamic_sltp()` 但从未被 import，且自身是骨架版本（`_get_latest_price` 返回 None）。`scripts/` 下有十余个失败补丁脚本。
+
+| # | 操作 | 文件 | 函数/位置 | 具体改动 |
+|---|---|---|---|---|
+| 1 | `[新建]` | `paper_trading/market_listener.py` | `_check_dynamic_sltp()` | 从 v2 移植 trailing stop 逻辑：遍历持仓 -> 计算盈亏比 -> 超阈值时用 `SLTPCalculator` 重算 SL -> 仅上移不下移 -> 调用 `position_mgr.update_stop_loss_take_profit()` 持久化 |
+| 2 | `[修改]` | `paper_trading/market_listener.py` | `_tick_market()` (L453-487) | 在步骤 2（SL/TP 检查）之后调用 `self._check_dynamic_sltp(market, latest_prices)` |
+| 3 | `[修改]` | `paper_trading/market_listener.py` | `MarketListenerConfig` (L268-319) | 新增 `sltp_dynamic_threshold_pct: float = 20.0`、`enable_dynamic_sltp: bool = True` |
+| 4 | `[修改]` | `paper_trading/market_listener.py` | `build_default_listener()` (L836-958) | 从 config 读取 `paper_trading_sltp_dynamic_threshold_pct` 并设置到 listener |
+| 5 | `[修改]` | `src/config.py` | Config 类 | 新增 `paper_trading_sltp_dynamic_threshold_pct: float = 20.0`、`paper_trading_enable_dynamic_sltp: bool = True` |
+| 6 | `[修改]` | `.env.example` | - | 新增 `PAPER_TRADING_SLTP_DYNAMIC_THRESHOLD_PCT=20.0`、`PAPER_TRADING_ENABLE_DYNAMIC_SLTP=true` |
+| 7 | `[新建]` | `tests/test_market_listener_dynamic_sltp.py` | - | 覆盖：盈利超阈值时 SL 上移、未超阈值时不触发、新 SL 不高于旧 SL 时不更新、无 stop_loss 的仓位跳过 |
+| 8 | `[可选]` | `paper_trading/market_listener_v2.py` | - | 标记为 deprecated 或删除，避免与生产版混淆 |
+| 9 | `[可选]` | `scripts/` | `add_dynamic_sltp.py` 等十余个脚本 | 清理失败的补丁脚本 |
+
+---
+
+### P2-A: 文章生成输出目标明确
+
+**现状**：`ContentGenerator.generate_daily_report()` 可生成 Markdown + 语音脚本并写入 `data/paper_trading/reports/`，但**无自动触发链路**——`market_listener.py` 的 `daily_settle` 后置钩子只有 reflection 和 battle_plan，没有 content generation。API 层无 daily report 端点。
+
+| # | 操作 | 文件 | 函数/位置 | 具体改动 |
+|---|---|---|---|---|
+| 1 | `[修改]` | `paper_trading/market_listener.py` | `MarketListener.__init__()` (L337-369) | 新增 `content_generator` 和 `notifier` 可选参数 |
+| 2 | `[新建]` | `paper_trading/market_listener.py` | `_maybe_generate_daily_report()` | 新增方法：调用 `content_generator.generate_daily_report(save=True)`，若 `notifier` 已配置则调用 `notifier.push_daily_summary(result)` |
+| 3 | `[修改]` | `paper_trading/market_listener.py` | `_maybe_daily_settle()` (L729-736) | 在 reflection/battle_plan 钩子之后新增第三个钩子：`if self.config.enable_daily_report: self._maybe_generate_daily_report(today)` |
+| 4 | `[修改]` | `paper_trading/market_listener.py` | `MarketListenerConfig` (L268-319) | 新增 `enable_daily_report: bool = False` |
+| 5 | `[修改]` | `paper_trading/market_listener.py` | `build_default_listener()` (L836-958) | 新增 `content_generator` 与 `notifier` 透传参数 |
+| 6 | `[新建]` | `api/v1/endpoints/paper_trading.py` | `POST /accounts/{account_id}/daily-report/generate` | 新增端点：触发 daily report 生成并返回路径 |
+| 7 | `[新建]` | `api/v1/endpoints/paper_trading.py` | `GET /accounts/{account_id}/daily-report/{date}` | 新增端点：读取已保存的 .md 文件内容 |
+| 8 | `[新建]` | `api/v1/schemas/paper_trading.py` | `DailyReportResponse` | 新增 schema：包含 `date`、`markdown`、`report_path`、`voice_path` 字段 |
+| 9 | `[修改]` | `src/config.py` | Config 类 | 新增 `paper_trading_enable_daily_report: bool = False` |
+| 10 | `[修改]` | `.env.example` | - | 新增 `PAPER_TRADING_ENABLE_DAILY_REPORT=false` |
+
+---
+
+### P3-C: 文本文档沉淀（Markdown 落地）
+
+**现状**：`ContentGenerator` 有 `_save_to_file()` 但无自动触发。`BattlePlanGenerator` 只存 DB，`to_markdown()` 仅返回字符串不落盘。`PaperTradingNotifier` 只 POST webhook 不存本地。无 paper trading 专用 reports 目录。
+
+| # | 操作 | 文件 | 函数/位置 | 具体改动 |
+|---|---|---|---|---|
+| 1 | `[新建]` | `paper_trading/battle_plan.py` | `BattlePlanGenerator.save_plan_markdown()` | 新增方法：将 `plan.to_markdown()` 写入 `output_dir/battle_plan_{date}.md`，返回 `Path` |
+| 2 | `[新建]` | `paper_trading/reflection.py` | `ReflectionEngine.save_reflection_markdown()` | 新增方法：将 `note.to_markdown()` 写入 `output_dir/reflection_{date}.md`，返回 `Path` |
+| 3 | `[修改]` | `paper_trading/notification_integration.py` | `PaperTradingNotifier.__init__()` | 新增 `save_before_push: bool = True`、`output_dir: Optional[Path] = None` 参数 |
+| 4 | `[新建]` | `paper_trading/notification_integration.py` | `_save_to_disk()` | 新增方法：在推送前将 markdown 内容落盘备份，返回 `Optional[Path]` |
+| 5 | `[修改]` | `paper_trading/notification_integration.py` | `push_battle_plan()` / `push_reflection()` / `push_daily_summary()` | 在发送 webhook 前调用 `_save_to_disk()` |
+| 6 | `[修改]` | `src/config.py` | Config 类 | 新增 `paper_trading_save_markdown_before_push: bool = True` |
+| 7 | `[修改]` | `.env.example` | - | 新增 `PAPER_TRADING_SAVE_MARKDOWN_BEFORE_PUSH=true` |
+| 8 | `[修改]` | `docs/paper_trading_implementation_alignment.md` | P3-C 行 (L200) | 实现文件列更新为具体文件名，状态更新为 "✅ 完成" |
+
+---
+
+### 已完成项（无需行动，仅记录）
+
+| 任务ID | 备注 | 说明 |
+|---|---|---|
+| P0-A | 超支：融合ATR/筹码/支撑阻力等多因子 | 无需行动，已超预期完成 |
+| P0-D | 异步线程，持久化到PaperReflection | 无需行动 |
+| P0-E | 上下文注入机制已建立 | 记忆权重衰减为可选增强，见 [memory_strategy_p0-e.md](memory_strategy_p0-e.md) |
+| P1-B | 三情景策略，竞价/盘中触发器 | 无需行动 |
+| P1-C | BattlePlanGenerator核心逻辑 | 无需行动 |
+| P2-B | 微信/Lark/DingTalk/Slack等 | 无需行动 |
+| P3-A | 28个端点，39个schema | 端点数已从 56 修正为 28 |
+| P3-B | 所有核心模块均有UI入口 | 无需行动 |
+
+---
+
+*实施清单最后更新：2026-07-27*

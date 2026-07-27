@@ -57,6 +57,7 @@ from paper_trading.reflection import (
     build_reflection_engine,
 )
 from paper_trading.risk import RiskChecker, RiskConfig, RiskDecision
+from paper_trading.risk_order_adapter import OrderCommand, RiskOrderAdapter
 from paper_trading.sltp_calculator import (
     SLTPCalculator,
     SLTPResult,
@@ -101,6 +102,9 @@ __all__ = [
     "RiskChecker",
     "RiskConfig",
     "RiskDecision",
+    # Risk order adapter (R2 fix)
+    "RiskOrderAdapter",
+    "OrderCommand",
     # Engine
     "TradingEngine",
     "TradeResult",

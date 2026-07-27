@@ -37,7 +37,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -103,6 +104,8 @@ class PaperTradingNotifier:
         dingtalk_max_bytes: int = DEFAULT_MAX_BYTES_DINGTALK,
         timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
         verify_ssl: bool = True,
+        save_before_push: bool = True,
+        output_dir: Optional[Path] = None,
     ):
         if config is None:
             from src.config import get_config
@@ -137,6 +140,8 @@ class PaperTradingNotifier:
         self.dingtalk_max_bytes = int(dingtalk_max_bytes)
         self.timeout_seconds = int(timeout_seconds)
         self.verify_ssl = bool(verify_ssl)
+        self.save_before_push = bool(save_before_push)
+        self.output_dir = output_dir
 
         # Lazy-initialized broadcast service
         self._broadcast_service: Optional[Any] = None
@@ -166,6 +171,12 @@ class PaperTradingNotifier:
 
         title_date = target_date or battle_plan.get("date") or datetime.now().date()
         markdown = self._render_battle_plan_markdown(battle_plan, title_date)
+        date_str = (
+            title_date.isoformat()
+            if hasattr(title_date, "isoformat")
+            else str(title_date)
+        )
+        self._save_to_disk(markdown, "battle_plan", date_str)
         header = f"📋 次日作战卡 · {title_date}"
         return self._dispatch(header, markdown, content_type="battle_plan")
 
@@ -186,6 +197,7 @@ class PaperTradingNotifier:
             return [PushResult(channel="skipped", success=False, error="empty reflection")]
 
         markdown = self._render_reflection_markdown(reflection)
+        self._save_to_disk(markdown, "reflection", "")
         subject = reflection.get("subject") or "基金经理复盘笔记"
         header = f"📝 {subject}"
         return self._dispatch(header, markdown, content_type="reflection")
@@ -208,8 +220,42 @@ class PaperTradingNotifier:
             return [PushResult(channel="skipped", success=False, error="empty markdown")]
 
         target_date = self._extract_date(daily_report)
+        self._save_to_disk(markdown, "daily_report", target_date)
         header = f"📊 纸面交易日报 · {target_date}"
         return self._dispatch(header, markdown, content_type="daily_summary")
+
+    # ------------------------------------------------------------------
+    # Markdown persistence (P3-C)
+    # ------------------------------------------------------------------
+
+    def _save_to_disk(
+        self, content: str, content_type: str, target_date: str = ""
+    ) -> Optional[Path]:
+        """Save markdown content to disk before pushing.
+
+        Args:
+            content: Markdown string to save.
+            content_type: Type label (e.g., "battle_plan", "reflection", "daily_report").
+            target_date: Date string for filename.
+
+        Returns:
+            Path to the saved file, or None on failure.
+        """
+        if not self.save_before_push:
+            return None
+        from pathlib import Path
+        try:
+            out = Path(self.output_dir) if self.output_dir else Path("data/paper_trading/reports")
+            out.mkdir(parents=True, exist_ok=True)
+            date_str = target_date or date.today().isoformat()
+            filename = f"{content_type}_{date_str}.md"
+            filepath = out / filename
+            filepath.write_text(content, encoding="utf-8")
+            logger.info("Markdown saved before push: %s", filepath)
+            return filepath
+        except Exception as exc:
+            logger.warning("Failed to save markdown to disk: %s", exc)
+            return None
 
     # ------------------------------------------------------------------
     # Dispatch logic

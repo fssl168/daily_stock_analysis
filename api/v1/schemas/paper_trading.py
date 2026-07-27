@@ -509,3 +509,19 @@ class RiskMetricsResponse(BaseModel):
     max_cash_per_buy_limit: float = 50.0
     max_daily_loss_limit: float = 5.0
     current_drawdown_pct: float = 0.0
+
+
+# ---------------------------------------------------------------------------
+# Daily report (P2-A)
+# ---------------------------------------------------------------------------
+
+
+class DailyReportResponse(BaseModel):
+    """Response model for daily report generation."""
+
+    date: str = Field(..., description="Report date (YYYY-MM-DD)")
+    markdown: Optional[str] = Field(None, description="Full markdown content")
+    report_path: Optional[str] = Field(None, description="Saved file path")
+    voice_path: Optional[str] = Field(None, description="Saved voice script path")
+    used_fallback: bool = Field(False, description="Whether fallback narrative was used")
+    error: Optional[str] = Field(None, description="Error message if generation failed")

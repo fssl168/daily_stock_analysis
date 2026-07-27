@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
+- [修复] 修复 `PAPER_TRADING_ENABLE_REFLECTION` / `PAPER_TRADING_LISTENER_ENABLE_DAILY_REFLECTION` 及 battle plan 对应配置别名在 `load_dotenv(override=True)` 后进程环境变量被 `.env` 覆盖的问题，新增 `Config._resolve_aliased_bool` 并预捕获进程 env 值。
+- [文档] 更新 `docs/paper_trading_implementation_alignment.md` 状态：P0-B / P0-C / P1-A / P2-A / P3-C 均标记为完成，并记录配置别名加载顺序风险。
 
 ## [3.26.0] - 未发布
 

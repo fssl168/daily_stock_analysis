@@ -41,6 +41,7 @@ class RiskDecision:
     passed: bool
     check_name: str
     reason: str
+    code: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {

@@ -11,6 +11,7 @@ import type {
   ConditionalOrderCreateRequest,
   ConditionalOrderItem,
   DailyReflectionRequest,
+  DailyReportResponse,
   DrawdownItem,
   ListenerControlResponse,
   ListenerStartRequest,
@@ -436,5 +437,27 @@ export const paperTradingApi = {
       '/api/v1/paper-trading/listener/stop'
     );
     return toCamelCase<ListenerControlResponse>(response.data);
+  },
+
+  /**
+   * Generate a daily trading report (P2-A).
+   */
+  generateDailyReport: async (accountId: number, save = true): Promise<DailyReportResponse> => {
+    const response = await apiClient.post<Record<string, unknown>>(
+      `/api/v1/paper-trading/accounts/${accountId}/daily-report/generate`,
+      undefined,
+      { params: { save } }
+    );
+    return toCamelCase<DailyReportResponse>(response.data);
+  },
+
+  /**
+   * Retrieve a saved daily report by date (P2-A).
+   */
+  getDailyReport: async (accountId: number, reportDate: string): Promise<DailyReportResponse> => {
+    const response = await apiClient.get<Record<string, unknown>>(
+      `/api/v1/paper-trading/accounts/${accountId}/daily-report/${reportDate}`
+    );
+    return toCamelCase<DailyReportResponse>(response.data);
   },
 };

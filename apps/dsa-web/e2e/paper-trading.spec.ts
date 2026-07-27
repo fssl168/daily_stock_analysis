@@ -115,7 +115,7 @@ const mockTrades = {
 
 const mockSignals = {
   account_id: 1,
-  total: 1,
+  total: 2,
   items: [
     {
       id: 1,
@@ -133,6 +133,23 @@ const mockSignals = {
       agent_reason: 'Risk checks passed',
       reviewed_at: '2026-07-22T10:00:00',
       created_at: '2026-07-22T10:00:00',
+    },
+    {
+      id: 2,
+      account_id: 1,
+      code: '000002',
+      name: '测试股份',
+      side: 'sell',
+      trigger_price: 10.5,
+      suggested_quantity: 50,
+      strategy_name: null,
+      rule_name: null,
+      reason: 'pending signal from WebUI',
+      status: 'pending',
+      agent_confirmed: null,
+      agent_reason: null,
+      reviewed_at: null,
+      created_at: '2026-07-22T11:00:00',
     },
   ],
 };
@@ -238,6 +255,21 @@ const mockRiskMetrics = {
   max_cash_per_buy_limit: 50,
   max_daily_loss_limit: 5,
   current_drawdown_pct: -0.5,
+};
+
+const mockDrawdownCurve = [
+  { date: '2026-07-20', net_value: 1000, peak_net_value: 1000, drawdown_pct: 0 },
+  { date: '2026-07-21', net_value: 1010, peak_net_value: 1010, drawdown_pct: 0 },
+  { date: '2026-07-22', net_value: 1000, peak_net_value: 1010, drawdown_pct: -0.99 },
+];
+
+const mockDailyReport = {
+  date: '2026-07-22',
+  markdown: '# Daily Report\n\n## Summary\nNet value: 1000.00\nReturn: 0.00%\n\n## Holdings\n- 000001: 100 shares @ 1.50\n\n## Reflection\nDisciplined execution, watch spreads.',
+  report_path: 'data/paper_trading/reports/daily_report_2026-07-22.md',
+  voice_path: null,
+  used_fallback: false,
+  error: null,
 };
 
 /**
@@ -475,6 +507,141 @@ async function mockPaperTradingApis(page: import('@playwright/test').Page) {
       return;
     }
 
+    // Drawdown curve: GET /api/v1/paper-trading/accounts/{id}/drawdown
+    if (path.match(/^\/api\/v1\/paper-trading\/accounts\/\d+\/drawdown$/)) {
+      await fulfillJson(route, mockDrawdownCurve);
+      return;
+    }
+
+    // Daily report generate: POST /api/v1/paper-trading/accounts/{id}/daily-report/generate
+    if (path.match(/^\/api\/v1\/paper-trading\/accounts\/\d+\/daily-report\/generate$/) && method === 'POST') {
+      await fulfillJson(route, mockDailyReport);
+      return;
+    }
+
+    // Daily report fetch: GET /api/v1/paper-trading/accounts/{id}/daily-report/{date}
+    if (path.match(/^\/api\/v1\/paper-trading\/accounts\/\d+\/daily-report\/\d{4}-\d{2}-\d{2}$/)) {
+      await fulfillJson(route, mockDailyReport);
+      return;
+    }
+
+    // Order cancel by order_id: POST /api/v1/paper-trading/orders/{id}/cancel
+    if (path.match(/^\/api\/v1\/paper-trading\/orders\/\d+\/cancel$/) && method === 'POST') {
+      await fulfillJson(route, {
+        signal_id: 2,
+        order_id: 2,
+        side: 'sell',
+        code: '000002',
+        status: 'cancelled',
+        fill_price: null,
+        fill_quantity: null,
+        fee: null,
+        reason: 'cancelled from WebUI',
+        risk_decisions: [],
+        agent_review: null,
+      });
+      return;
+    }
+
+    // Order modify by order_id: POST /api/v1/paper-trading/orders/{id}/modify
+    if (path.match(/^\/api\/v1\/paper-trading\/orders\/\d+\/modify$/) && method === 'POST') {
+      await fulfillJson(route, {
+        signal_id: 2,
+        order_id: 2,
+        side: 'sell',
+        code: '000002',
+        status: 'pending',
+        fill_price: null,
+        fill_quantity: null,
+        fee: null,
+        reason: 'modified from WebUI',
+        risk_decisions: [],
+        agent_review: null,
+      });
+      return;
+    }
+
+    // Signal cancel: POST /api/v1/paper-trading/signals/{id}/cancel
+    if (path.match(/^\/api\/v1\/paper-trading\/signals\/\d+\/cancel$/) && method === 'POST') {
+      await fulfillJson(route, {
+        signal_id: 2,
+        order_id: null,
+        side: 'sell',
+        code: '000002',
+        status: 'cancelled',
+        fill_price: null,
+        fill_quantity: null,
+        fee: null,
+        reason: 'cancelled from WebUI',
+        risk_decisions: [],
+        agent_review: null,
+      });
+      return;
+    }
+
+    // Signal modify: POST /api/v1/paper-trading/signals/{id}/modify
+    if (path.match(/^\/api\/v1\/paper-trading\/signals\/\d+\/modify$/) && method === 'POST') {
+      await fulfillJson(route, {
+        signal_id: 2,
+        order_id: null,
+        side: 'sell',
+        code: '000002',
+        status: 'pending',
+        fill_price: null,
+        fill_quantity: null,
+        fee: null,
+        reason: 'modified from WebUI',
+        risk_decisions: [],
+        agent_review: null,
+      });
+      return;
+    }
+
+    // PM decision trigger: POST /api/v1/paper-trading/accounts/{id}/pm-decisions/trigger
+    if (path.match(/^\/api\/v1\/paper-trading\/accounts\/\d+\/pm-decisions\/trigger$/) && method === 'POST') {
+      await fulfillJson(route, {
+        id: 2,
+        account_id: 1,
+        action: 'hold',
+        code: null,
+        name: null,
+        params: {},
+        reason: 'No action needed - market closed',
+        confidence: 0.65,
+        elapsed_seconds: 1.5,
+        used_fallback: false,
+        error: null,
+        created_at: '2026-07-22T12:00:00',
+      });
+      return;
+    }
+
+    // Daily reflection trigger: POST /api/v1/paper-trading/accounts/{id}/reflections/daily
+    if (path.match(/^\/api\/v1\/paper-trading\/accounts\/\d+\/reflections\/daily$/) && method === 'POST') {
+      await fulfillJson(route, {
+        id: 2,
+        account_id: 1,
+        scope: 'daily',
+        subject: 'Daily reflection 2026-07-22',
+        summary: 'Market was range-bound. Position held steady.',
+        takeaway: 'Patience paid off; wait for breakout confirmation.',
+        lessons: ['Monitor volume for breakout confirmation'],
+        tags: 'patience,volume',
+        mood: 'neutral',
+        trade_id: null,
+        order_id: null,
+        code: null,
+        created_at: '2026-07-22T15:00:00',
+      });
+      return;
+    }
+
+    // Battle plan generate: POST /api/v1/paper-trading/accounts/{id}/battle-plans/generate
+    if (path.match(/^\/api\/v1\/paper-trading\/accounts\/\d+\/battle-plans\/generate$/) && method === 'POST') {
+      await fulfillJson(route, mockBattlePlans[0]);
+      return;
+    }
+
     // Fallback: let the browser handle unmatched requests.
     await route.fallback();
   });
@@ -620,5 +787,106 @@ test.describe('Paper Trading Page', () => {
     await expect(page.getByTestId('orders-filter-count')).toHaveText('1 / 2');
     await expect(page.getByTestId('orders-table')).toContainText('000001');
     await expect(page.getByTestId('orders-table')).not.toContainText('000002');
+  });
+
+  test('cancels a pending order', async ({ page }) => {
+    await page.getByTestId('tab-orders').click();
+
+    // The pending order #2 should have a cancel button.
+    await expect(page.getByTestId('order-cancel-2')).toBeVisible();
+    await page.getByTestId('order-cancel-2').click();
+
+    // After cancel, the data reloads; the order should still be visible
+    // (mock returns the same list, but the cancel API was called).
+    await expect(page.getByTestId('orders-table')).toBeVisible();
+  });
+
+  test('modifies a pending limit order', async ({ page }) => {
+    await page.getByTestId('tab-orders').click();
+
+    // The pending limit order #2 should have a modify button.
+    await expect(page.getByTestId('order-modify-2')).toBeVisible();
+    await page.getByTestId('order-modify-2').click();
+
+    // Modify form should appear.
+    await expect(page.getByTestId('order-modify-form-2')).toBeVisible();
+    await page.getByTestId('order-modify-price-input').fill('11.00');
+    await page.getByTestId('order-modify-quantity-input').fill('60');
+    await page.getByTestId('order-modify-submit').click();
+
+    // After submit, the form should close (data reloads).
+    await expect(page.getByTestId('orders-table')).toBeVisible();
+  });
+
+  test('cancels a pending signal', async ({ page }) => {
+    await page.getByTestId('tab-signals').click();
+
+    // The pending signal #2 should have a cancel button.
+    await expect(page.getByTestId('signal-cancel-2')).toBeVisible();
+    await page.getByTestId('signal-cancel-2').click();
+
+    // After cancel, the data reloads.
+    await expect(page.getByTestId('signals-table')).toBeVisible();
+  });
+
+  test('modifies a pending signal', async ({ page }) => {
+    await page.getByTestId('tab-signals').click();
+
+    // The pending signal #2 should have a modify button.
+    await expect(page.getByTestId('signal-modify-2')).toBeVisible();
+    await page.getByTestId('signal-modify-2').click();
+
+    // Modify form should appear.
+    await expect(page.getByTestId('signal-modify-form-2')).toBeVisible();
+    await page.getByTestId('signal-modify-price-input').fill('11.00');
+    await page.getByTestId('signal-modify-quantity-input').fill('60');
+    await page.getByTestId('signal-modify-submit').click();
+
+    // After submit, the form should close (data reloads).
+    await expect(page.getByTestId('signals-table')).toBeVisible();
+  });
+
+  test('displays drawdown curve in performance card', async ({ page }) => {
+    // The drawdown chart should be visible in the performance card.
+    await expect(page.getByTestId('drawdown-chart')).toBeVisible();
+    await expect(page.getByText('Drawdown Curve')).toBeVisible();
+  });
+
+  test('generates a daily report', async ({ page }) => {
+    await page.getByTestId('tab-daily-report').click();
+
+    // Click generate button.
+    await page.getByTestId('daily-report-generate-button').click();
+
+    // The report content should appear.
+    await expect(page.getByTestId('daily-report-content')).toBeVisible();
+    await expect(page.getByTestId('daily-report-markdown')).toContainText('Daily Report');
+    await expect(page.getByText('saved')).toBeVisible();
+  });
+
+  test('loads a daily report by date', async ({ page }) => {
+    await page.getByTestId('tab-daily-report').click();
+
+    // Set date and load.
+    await page.getByTestId('daily-report-date-input').fill('2026-07-22');
+    await page.getByTestId('daily-report-fetch-button').click();
+
+    // The report content should appear.
+    await expect(page.getByTestId('daily-report-content')).toBeVisible();
+    await expect(page.getByText('Daily Report - 2026-07-22')).toBeVisible();
+  });
+
+  test('triggers PM decision', async ({ page }) => {
+    await page.getByTestId('trigger-pm-button').click();
+
+    // Button should show loading state then revert.
+    await expect(page.getByTestId('trigger-pm-button')).toBeEnabled();
+  });
+
+  test('triggers daily reflection', async ({ page }) => {
+    await page.getByTestId('trigger-reflection-button').click();
+
+    // Button should show loading state then revert.
+    await expect(page.getByTestId('trigger-reflection-button')).toBeEnabled();
   });
 });

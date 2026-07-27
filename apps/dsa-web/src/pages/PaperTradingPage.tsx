@@ -1,11 +1,12 @@
-import type React from 'react';
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { paperTradingApi } from '../api/paperTrading';
 import { Card, Badge } from '../components/common';
 import type {
   AccountSnapshotResponse,
   BatchOrderResponse,
   BattlePlanItem,
+  DailyReportResponse,
+  DrawdownItem,
   NetValuePoint,
   OrderItem,
   PMDecisionItem,
@@ -19,7 +20,7 @@ import type {
   TradeResultResponse,
 } from '../types/paperTrading';
 
-type TabKey = 'positions' | 'orders' | 'trades' | 'signals' | 'decisions' | 'reflections' | 'battle-plans';
+type TabKey = 'positions' | 'orders' | 'trades' | 'signals' | 'decisions' | 'reflections' | 'battle-plans' | 'daily-report';
 
 // ============ Helpers ============
 
@@ -132,9 +133,58 @@ const NetValueSparkline: React.FC<{ data: NetValuePoint[]; width?: number; heigh
 
 // ============ Performance Card ============
 
+const DrawdownSparkline: React.FC<{ data: DrawdownItem[]; width?: number; height?: number }> = ({
+  data,
+  width = 280,
+  height = 60,
+}) => {
+  if (data.length < 2) {
+    return <div className="text-xs text-muted">No drawdown data</div>;
+  }
+
+  const values = data.map(d => d.drawdownPct);
+  const min = Math.min(...values, 0);
+  const max = 0;
+  const range = max - min || 1;
+  const padding = 4;
+  const chartWidth = width - padding * 2;
+  const chartHeight = height - padding * 2;
+
+  const points = data.map((d, i) => {
+    const x = padding + (i / (data.length - 1)) * chartWidth;
+    const y = padding + ((max - d.drawdownPct) / range) * chartHeight;
+    return `${x},${y}`;
+  }).join(' ');
+
+  const areaPoints = `${padding},${padding} ${points} ${width - padding},${padding}`;
+
+  return (
+    <svg width={width} height={height} className="overflow-visible">
+      <defs>
+        <linearGradient id="drawdownGradient" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#ff4466" stopOpacity="0" />
+          <stop offset="100%" stopColor="#ff4466" stopOpacity="0.3" />
+        </linearGradient>
+      </defs>
+      <polygon points={areaPoints} fill="url(#drawdownGradient)" />
+      <polyline
+        points={points}
+        fill="none"
+        stroke="#ff4466"
+        strokeWidth={1.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+};
+
+// ============ Performance Card ============
+
 const PerformanceCard: React.FC<{ accountId: number }> = ({ accountId }) => {
   const [metrics, setMetrics] = useState<PerformanceMetricsResponse | null>(null);
   const [risk, setRisk] = useState<RiskMetricsResponse | null>(null);
+  const [drawdown, setDrawdown] = useState<DrawdownItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -142,12 +192,14 @@ const PerformanceCard: React.FC<{ accountId: number }> = ({ accountId }) => {
     setLoading(true);
     setError(null);
     try {
-      const [m, r] = await Promise.all([
+      const [m, r, dd] = await Promise.all([
         paperTradingApi.getPerformanceMetrics(accountId),
         paperTradingApi.getRiskMetrics(accountId),
+        paperTradingApi.getDrawdownCurve(accountId).catch(() => [] as DrawdownItem[]),
       ]);
       setMetrics(m);
       setRisk(r);
+      setDrawdown(dd);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load performance');
     } finally {
@@ -202,6 +254,12 @@ const PerformanceCard: React.FC<{ accountId: number }> = ({ accountId }) => {
         </div>
       ) : (
         <p className="mt-3 text-xs text-muted">Loading performance...</p>
+      )}
+      {drawdown.length >= 2 && (
+        <div className="mt-3" data-testid="drawdown-chart">
+          <p className="text-xxs text-muted uppercase mb-1">Drawdown Curve</p>
+          <DrawdownSparkline data={drawdown} />
+        </div>
       )}
       {risk && (
         <div className="mt-3 pt-3 border-t border-white/5 grid grid-cols-2 gap-3">
@@ -817,6 +875,10 @@ const OrdersTable: React.FC<{
   onFiltersChange: (filters: { status: string; side: string; code: string }) => void;
 }> = ({ orders, onRefresh, filters, onFiltersChange }) => {
   const [actingId, setActingId] = useState<number | null>(null);
+  const [modifyId, setModifyId] = useState<number | null>(null);
+  const [modifyPrice, setModifyPrice] = useState('');
+  const [modifyQty, setModifyQty] = useState('');
+  const [modifyError, setModifyError] = useState<string | null>(null);
 
   const handleCancel = async (orderId: number) => {
     setActingId(orderId);
@@ -826,6 +888,49 @@ const OrdersTable: React.FC<{
     } finally {
       setActingId(null);
     }
+  };
+
+  const handleModify = async (orderId: number) => {
+    setActingId(orderId);
+    setModifyError(null);
+    try {
+      const params: { newLimitPrice?: number; newQuantity?: number; reason: string } = {
+        reason: 'modified from WebUI',
+      };
+      if (modifyPrice) {
+        const price = parseFloat(modifyPrice);
+        if (Number.isNaN(price) || price <= 0) {
+          throw new Error('Invalid limit price');
+        }
+        params.newLimitPrice = price;
+      }
+      if (modifyQty) {
+        const qty = parseFloat(modifyQty);
+        if (Number.isNaN(qty) || qty <= 0) {
+          throw new Error('Invalid quantity');
+        }
+        params.newQuantity = qty;
+      }
+      if (!params.newLimitPrice && !params.newQuantity) {
+        throw new Error('Enter a new price or quantity to modify');
+      }
+      await paperTradingApi.modifyOrder(orderId, params);
+      setModifyId(null);
+      setModifyPrice('');
+      setModifyQty('');
+      onRefresh();
+    } catch (err) {
+      setModifyError(err instanceof Error ? err.message : 'Modify failed');
+    } finally {
+      setActingId(null);
+    }
+  };
+
+  const startModify = (order: OrderItem) => {
+    setModifyId(order.id);
+    setModifyPrice(order.price ? String(order.price) : '');
+    setModifyQty(String(order.quantity));
+    setModifyError(null);
   };
 
   const filteredOrders = useMemo(() => {
@@ -896,28 +1001,93 @@ const OrdersTable: React.FC<{
             </thead>
             <tbody>
               {filteredOrders.map((o) => (
-                <tr key={o.id} className="border-t border-white/5 hover:bg-hover transition-colors">
-                  <td className="px-3 py-2 text-xs text-muted">{o.id}</td>
-                  <td className="px-3 py-2 font-mono text-cyan text-xs">{o.code}</td>
-                  <td className="px-3 py-2">{sideBadge(o.side)}</td>
-                  <td className="px-3 py-2 text-xs text-secondary">{o.orderType}</td>
-                  <td className="px-3 py-2 text-xs text-right text-white">{formatNumber(o.quantity)}</td>
-                  <td className="px-3 py-2 text-xs text-right text-secondary">{formatNumber(o.filledQuantity)}</td>
-                  <td className="px-3 py-2">{statusBadge(o.status)}</td>
-                  <td className="px-3 py-2 text-xs text-muted">{formatDateTime(o.createdAt)}</td>
-                  <td className="px-3 py-2">
-                    {o.status === 'pending' && (
-                      <button
-                        type="button"
-                        onClick={() => handleCancel(o.id)}
-                        disabled={actingId === o.id}
-                        className="text-xs text-danger hover:text-red-300 disabled:opacity-50"
-                      >
-                        {actingId === o.id ? '...' : 'Cancel'}
-                      </button>
-                    )}
-                  </td>
-                </tr>
+                <React.Fragment key={o.id}>
+                  <tr className="border-t border-white/5 hover:bg-hover transition-colors">
+                    <td className="px-3 py-2 text-xs text-muted">{o.id}</td>
+                    <td className="px-3 py-2 font-mono text-cyan text-xs">{o.code}</td>
+                    <td className="px-3 py-2">{sideBadge(o.side)}</td>
+                    <td className="px-3 py-2 text-xs text-secondary">{o.orderType}</td>
+                    <td className="px-3 py-2 text-xs text-right text-white">{formatNumber(o.quantity)}</td>
+                    <td className="px-3 py-2 text-xs text-right text-secondary">{formatNumber(o.filledQuantity)}</td>
+                    <td className="px-3 py-2">{statusBadge(o.status)}</td>
+                    <td className="px-3 py-2 text-xs text-muted">{formatDateTime(o.createdAt)}</td>
+                    <td className="px-3 py-2">
+                      {o.status === 'pending' && (
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleCancel(o.id)}
+                            disabled={actingId === o.id}
+                            className="text-xs text-danger hover:text-red-300 disabled:opacity-50"
+                            data-testid={`order-cancel-${o.id}`}
+                          >
+                            {actingId === o.id && modifyId !== o.id ? '...' : 'Cancel'}
+                          </button>
+                          {o.orderType === 'limit' && (
+                            <button
+                              type="button"
+                              onClick={() => startModify(o)}
+                              disabled={actingId === o.id}
+                              className="text-xs text-cyan hover:text-cyan/80 disabled:opacity-50"
+                              data-testid={`order-modify-${o.id}`}
+                            >
+                              Modify
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                  {modifyId === o.id && (
+                    <tr className="border-t border-white/5 bg-elevated/50">
+                      <td colSpan={9} className="px-3 py-3">
+                        <div className="flex flex-wrap items-center gap-3" data-testid={`order-modify-form-${o.id}`}>
+                          <span className="text-xs text-muted">Modify {o.code}:</span>
+                          <input
+                            type="number"
+                            value={modifyPrice}
+                            onChange={(e) => setModifyPrice(e.target.value)}
+                            placeholder="New limit price"
+                            min={0.01}
+                            step={0.01}
+                            className="input-terminal text-xs py-1.5 w-36"
+                            data-testid="order-modify-price-input"
+                          />
+                          <input
+                            type="number"
+                            value={modifyQty}
+                            onChange={(e) => setModifyQty(e.target.value)}
+                            placeholder="New quantity"
+                            min={0.01}
+                            step={0.01}
+                            className="input-terminal text-xs py-1.5 w-32"
+                            data-testid="order-modify-quantity-input"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleModify(o.id)}
+                            disabled={actingId === o.id}
+                            className="btn-primary text-xs py-1.5 px-3"
+                            data-testid="order-modify-submit"
+                          >
+                            {actingId === o.id ? 'Saving...' : 'Save'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setModifyId(null); setModifyError(null); }}
+                            className="btn-secondary text-xs py-1.5 px-3"
+                            data-testid="order-modify-cancel"
+                          >
+                            Cancel
+                          </button>
+                          {modifyError && (
+                            <span className="text-xs text-danger">{modifyError}</span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
               ))}
             </tbody>
           </table>
@@ -961,10 +1131,70 @@ const TradesTable: React.FC<{ trades: TradeItem[] }> = ({ trades }) => {
   );
 };
 
-const SignalsTable: React.FC<{ signals: SignalItem[] }> = ({ signals }) => {
+const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> = ({ signals, onRefresh }) => {
+  const [actingId, setActingId] = useState<number | null>(null);
+  const [modifyId, setModifyId] = useState<number | null>(null);
+  const [modifyPrice, setModifyPrice] = useState('');
+  const [modifyQty, setModifyQty] = useState('');
+  const [modifyError, setModifyError] = useState<string | null>(null);
+
   if (signals.length === 0) {
     return <EmptyState message="No signals" />;
   }
+
+  const handleCancel = async (signalId: number) => {
+    setActingId(signalId);
+    try {
+      await paperTradingApi.cancelSignal(signalId, 'cancelled from WebUI');
+      onRefresh();
+    } finally {
+      setActingId(null);
+    }
+  };
+
+  const handleModify = async (signalId: number) => {
+    setActingId(signalId);
+    setModifyError(null);
+    try {
+      const params: { newLimitPrice?: number; newQuantity?: number; reason: string } = {
+        reason: 'modified from WebUI',
+      };
+      if (modifyPrice) {
+        const price = parseFloat(modifyPrice);
+        if (Number.isNaN(price) || price <= 0) {
+          throw new Error('Invalid limit price');
+        }
+        params.newLimitPrice = price;
+      }
+      if (modifyQty) {
+        const qty = parseFloat(modifyQty);
+        if (Number.isNaN(qty) || qty <= 0) {
+          throw new Error('Invalid quantity');
+        }
+        params.newQuantity = qty;
+      }
+      if (!params.newLimitPrice && !params.newQuantity) {
+        throw new Error('Enter a new price or quantity to modify');
+      }
+      await paperTradingApi.modifySignal(signalId, params);
+      setModifyId(null);
+      setModifyPrice('');
+      setModifyQty('');
+      onRefresh();
+    } catch (err) {
+      setModifyError(err instanceof Error ? err.message : 'Modify failed');
+    } finally {
+      setActingId(null);
+    }
+  };
+
+  const startModify = (signal: SignalItem) => {
+    setModifyId(signal.id);
+    setModifyPrice(signal.triggerPrice ? String(signal.triggerPrice) : '');
+    setModifyQty(signal.suggestedQuantity ? String(signal.suggestedQuantity) : '');
+    setModifyError(null);
+  };
+
   return (
     <div className="overflow-x-auto rounded-xl border border-white/5" data-testid="signals-table">
       <table className="w-full text-sm">
@@ -977,21 +1207,97 @@ const SignalsTable: React.FC<{ signals: SignalItem[] }> = ({ signals }) => {
             <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Status</th>
             <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Agent</th>
             <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Created</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Action</th>
           </tr>
         </thead>
         <tbody>
           {signals.map((s) => (
-            <tr key={s.id} className="border-t border-white/5 hover:bg-hover transition-colors">
-              <td className="px-3 py-2 font-mono text-cyan text-xs">{s.code}</td>
-              <td className="px-3 py-2">{sideBadge(s.side)}</td>
-              <td className="px-3 py-2 text-xs text-right text-white">{formatNumber(s.triggerPrice)}</td>
-              <td className="px-3 py-2 text-xs text-secondary">{s.strategyName || '--'}</td>
-              <td className="px-3 py-2">{statusBadge(s.status)}</td>
-              <td className="px-3 py-2 text-xs text-secondary">
-                {s.agentConfirmed == null ? '--' : s.agentConfirmed ? 'Confirmed' : 'Vetoed'}
-              </td>
-              <td className="px-3 py-2 text-xs text-muted">{formatDateTime(s.createdAt)}</td>
-            </tr>
+            <React.Fragment key={s.id}>
+              <tr className="border-t border-white/5 hover:bg-hover transition-colors">
+                <td className="px-3 py-2 font-mono text-cyan text-xs">{s.code}</td>
+                <td className="px-3 py-2">{sideBadge(s.side)}</td>
+                <td className="px-3 py-2 text-xs text-right text-white">{formatNumber(s.triggerPrice)}</td>
+                <td className="px-3 py-2 text-xs text-secondary">{s.strategyName || '--'}</td>
+                <td className="px-3 py-2">{statusBadge(s.status)}</td>
+                <td className="px-3 py-2 text-xs text-secondary">
+                  {s.agentConfirmed == null ? '--' : s.agentConfirmed ? 'Confirmed' : 'Vetoed'}
+                </td>
+                <td className="px-3 py-2 text-xs text-muted">{formatDateTime(s.createdAt)}</td>
+                <td className="px-3 py-2">
+                  {s.status === 'pending' && (
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleCancel(s.id)}
+                        disabled={actingId === s.id}
+                        className="text-xs text-danger hover:text-red-300 disabled:opacity-50"
+                        data-testid={`signal-cancel-${s.id}`}
+                      >
+                        {actingId === s.id && modifyId !== s.id ? '...' : 'Cancel'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => startModify(s)}
+                        disabled={actingId === s.id}
+                        className="text-xs text-cyan hover:text-cyan/80 disabled:opacity-50"
+                        data-testid={`signal-modify-${s.id}`}
+                      >
+                        Modify
+                      </button>
+                    </div>
+                  )}
+                </td>
+              </tr>
+              {modifyId === s.id && (
+                <tr className="border-t border-white/5 bg-elevated/50">
+                  <td colSpan={8} className="px-3 py-3">
+                    <div className="flex flex-wrap items-center gap-3" data-testid={`signal-modify-form-${s.id}`}>
+                      <span className="text-xs text-muted">Modify {s.code}:</span>
+                      <input
+                        type="number"
+                        value={modifyPrice}
+                        onChange={(e) => setModifyPrice(e.target.value)}
+                        placeholder="New limit price"
+                        min={0.01}
+                        step={0.01}
+                        className="input-terminal text-xs py-1.5 w-36"
+                        data-testid="signal-modify-price-input"
+                      />
+                      <input
+                        type="number"
+                        value={modifyQty}
+                        onChange={(e) => setModifyQty(e.target.value)}
+                        placeholder="New quantity"
+                        min={0.01}
+                        step={0.01}
+                        className="input-terminal text-xs py-1.5 w-32"
+                        data-testid="signal-modify-quantity-input"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleModify(s.id)}
+                        disabled={actingId === s.id}
+                        className="btn-primary text-xs py-1.5 px-3"
+                        data-testid="signal-modify-submit"
+                      >
+                        {actingId === s.id ? 'Saving...' : 'Save'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setModifyId(null); setModifyError(null); }}
+                        className="btn-secondary text-xs py-1.5 px-3"
+                        data-testid="signal-modify-cancel"
+                      >
+                        Cancel
+                      </button>
+                      {modifyError && (
+                        <span className="text-xs text-danger">{modifyError}</span>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </React.Fragment>
           ))}
         </tbody>
       </table>
@@ -1063,18 +1369,52 @@ const ReflectionsList: React.FC<{ reflections: ReflectionNoteItem[] }> = ({ refl
 };
 
 const BattlePlansList: React.FC<{ plans: BattlePlanItem[] }> = ({ plans }) => {
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [markdown, setMarkdown] = useState<string | null>(null);
+  const [loadingMd, setLoadingMd] = useState(false);
+
   if (plans.length === 0) {
     return <EmptyState message="No battle plans" />;
   }
+
+  const toggleMarkdown = async (planId: number) => {
+    if (expandedId === planId) {
+      setExpandedId(null);
+      setMarkdown(null);
+      return;
+    }
+    setExpandedId(planId);
+    setMarkdown(null);
+    setLoadingMd(true);
+    try {
+      const res = await paperTradingApi.getBattlePlanMarkdown(planId);
+      setMarkdown(res.markdown);
+    } catch {
+      setMarkdown('Failed to load markdown');
+    } finally {
+      setLoadingMd(false);
+    }
+  };
+
   return (
     <div className="space-y-3">
       {plans.map((p) => (
         <div key={p.planId} className="p-3 rounded-xl bg-elevated border border-white/5">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-white">Battle Plan {p.date}</span>
-            <Badge variant={p.usedFallback ? 'warning' : 'success'}>
-              {p.usedFallback ? 'fallback' : 'AI'}
-            </Badge>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => toggleMarkdown(p.planId)}
+                className="text-xs text-cyan hover:text-cyan/80"
+                data-testid={`battle-plan-md-${p.planId}`}
+              >
+                {expandedId === p.planId ? 'Hide MD' : 'View MD'}
+              </button>
+              <Badge variant={p.usedFallback ? 'warning' : 'success'}>
+                {p.usedFallback ? 'fallback' : 'AI'}
+              </Badge>
+            </div>
           </div>
           <p className="mt-1 text-xs text-secondary">{p.marketReview || 'No market review'}</p>
           {p.mainTheme && (
@@ -1090,6 +1430,15 @@ const BattlePlansList: React.FC<{ plans: BattlePlanItem[] }> = ({ plans }) => {
               <p className="text-xs text-secondary">{p.candidates.map(c => c.code).join(', ') || '--'}</p>
             </div>
           </div>
+          {expandedId === p.planId && (
+            <div className="mt-3 pt-3 border-t border-white/5" data-testid={`battle-plan-md-content-${p.planId}`}>
+              {loadingMd ? (
+                <p className="text-xs text-muted">Loading markdown...</p>
+              ) : (
+                <pre className="text-xs text-secondary whitespace-pre-wrap font-mono max-h-96 overflow-y-auto">{markdown || 'No markdown available'}</pre>
+              )}
+            </div>
+          )}
         </div>
       ))}
     </div>
@@ -1106,6 +1455,105 @@ const EmptyState: React.FC<{ message: string }> = ({ message }) => (
     <p className="text-xs text-muted">{message}</p>
   </div>
 );
+
+// ============ Daily Report Tab (P2-A) ============
+
+const DailyReportTab: React.FC<{ accountId: number }> = ({ accountId }) => {
+  const [report, setReport] = useState<DailyReportResponse | null>(null);
+  const [reportDate, setReportDate] = useState(new Date().toISOString().slice(0, 10));
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleGenerate = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await paperTradingApi.generateDailyReport(accountId, true);
+      setReport(res);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to generate report');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleFetch = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await paperTradingApi.getDailyReport(accountId, reportDate);
+      setReport(res);
+      if (res.error) {
+        setError(res.error);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load report');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2 p-3 rounded-xl bg-elevated border border-white/5">
+        <input
+          type="date"
+          value={reportDate}
+          onChange={(e) => setReportDate(e.target.value)}
+          className="input-terminal text-xs py-1.5"
+          data-testid="daily-report-date-input"
+        />
+        <button
+          type="button"
+          onClick={handleFetch}
+          disabled={loading}
+          className="btn-secondary text-xs py-1.5 px-3"
+          data-testid="daily-report-fetch-button"
+        >
+          {loading ? 'Loading...' : 'Load Report'}
+        </button>
+        <button
+          type="button"
+          onClick={handleGenerate}
+          disabled={loading}
+          className="btn-primary text-xs py-1.5 px-3"
+          data-testid="daily-report-generate-button"
+        >
+          {loading ? 'Generating...' : 'Generate Today'}
+        </button>
+      </div>
+
+      {error && (
+        <p className="text-xs text-danger" data-testid="daily-report-error">{error}</p>
+      )}
+
+      {report && (
+        <div className="p-3 rounded-xl bg-elevated border border-white/5" data-testid="daily-report-content">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-medium text-white">Daily Report - {report.date}</span>
+            <div className="flex items-center gap-2">
+              {report.usedFallback && <Badge variant="warning">fallback</Badge>}
+              {report.reportPath && (
+                <Badge variant="info">saved</Badge>
+              )}
+            </div>
+          </div>
+          {report.markdown ? (
+            <pre className="text-xs text-secondary whitespace-pre-wrap font-mono max-h-[60vh] overflow-y-auto" data-testid="daily-report-markdown">
+              {report.markdown}
+            </pre>
+          ) : (
+            <p className="text-xs text-muted">No markdown content available</p>
+          )}
+        </div>
+      )}
+
+      {!report && !error && !loading && (
+        <EmptyState message="No daily report loaded. Generate or load a report." />
+      )}
+    </div>
+  );
+};
 
 // ============ Main Page ============
 
@@ -1126,6 +1574,7 @@ const PaperTradingPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [triggeringPm, setTriggeringPm] = useState(false);
   const [generatingPlan, setGeneratingPlan] = useState(false);
+  const [triggeringReflection, setTriggeringReflection] = useState(false);
   const [orderFilters, setOrderFilters] = useState({ status: '', side: '', code: '' });
 
   const loadAll = useCallback(async () => {
@@ -1219,6 +1668,18 @@ const PaperTradingPage: React.FC = () => {
     }
   };
 
+  const handleTriggerReflection = async () => {
+    setTriggeringReflection(true);
+    try {
+      await paperTradingApi.triggerDailyReflection({ accountId });
+      await loadAll();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Daily reflection failed');
+    } finally {
+      setTriggeringReflection(false);
+    }
+  };
+
   const tabs: { key: TabKey; label: string; count?: number }[] = useMemo(() => [
     { key: 'positions', label: 'Positions', count: positions.length },
     { key: 'orders', label: 'Orders', count: orders.length },
@@ -1227,6 +1688,7 @@ const PaperTradingPage: React.FC = () => {
     { key: 'decisions', label: 'Decisions', count: decisions.length },
     { key: 'reflections', label: 'Reflections', count: reflections.length },
     { key: 'battle-plans', label: 'Battle Plans', count: battlePlans.length },
+    { key: 'daily-report', label: 'Daily Report' },
   ], [positions.length, orders.length, trades.length, signals.length, decisions.length, reflections.length, battlePlans.length]);
 
   return (
@@ -1272,6 +1734,15 @@ const PaperTradingPage: React.FC = () => {
               data-testid="trigger-pm-button"
             >
               {triggeringPm ? 'PM Thinking...' : 'Trigger PM'}
+            </button>
+            <button
+              type="button"
+              onClick={handleTriggerReflection}
+              disabled={triggeringReflection}
+              className="btn-secondary text-xs py-2 px-3"
+              data-testid="trigger-reflection-button"
+            >
+              {triggeringReflection ? 'Reflecting...' : 'Trigger Reflection'}
             </button>
             <button
               type="button"
@@ -1389,10 +1860,11 @@ const PaperTradingPage: React.FC = () => {
               />
             )}
             {activeTab === 'trades' && <TradesTable trades={trades} />}
-            {activeTab === 'signals' && <SignalsTable signals={signals} />}
+            {activeTab === 'signals' && <SignalsTable signals={signals} onRefresh={loadAll} />}
             {activeTab === 'decisions' && <DecisionsList decisions={decisions} />}
             {activeTab === 'reflections' && <ReflectionsList reflections={reflections} />}
             {activeTab === 'battle-plans' && <BattlePlansList plans={battlePlans} />}
+            {activeTab === 'daily-report' && <DailyReportTab accountId={accountId} />}
           </div>
         </section>
       </main>

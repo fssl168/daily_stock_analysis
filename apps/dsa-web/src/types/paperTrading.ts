@@ -405,3 +405,14 @@ export interface ListenerControlResponse {
   running: boolean;
   message: string;
 }
+
+// ============ Daily report (P2-A) ============
+
+export interface DailyReportResponse {
+  date: string;
+  markdown?: string;
+  reportPath?: string;
+  voicePath?: string;
+  usedFallback?: boolean;
+  error?: string;
+}

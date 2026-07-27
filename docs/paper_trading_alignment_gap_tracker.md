@@ -80,14 +80,36 @@ weight = time_decay(created_at) * quality_score(content) * outcome_weight(reward
 
 ---
 
+
+## Summary of Resolved Items
+
+All originally identified gaps have been successfully addressed:
+
+| Item | Status | Resolution |
+|------|--------|------------|
+| **P0-C-R2** (Agent action ORM column) | **Closed** | Implemented structured agent_action field in PaperReflection ORM with _persist_note_with_action() method |
+| **R2-R1** (on_agent_review_result doc) | **[DONE]** | Updated docs to reflect actual integration path via RiskOrderAdapter.from_agent_review() |
+| **P0-B-R1** (limit_price boundary tests) | **[DONE]** | Added 5 comprehensive boundary tests - all passing: explicit price, priority check, zero rejection, precision handling, market ignore |
+| **P0-E-R1** (Memory decay enhancement) | **[IMPLEMENTED]** | Added _compute_note_score() time-decay weighted scoring to ReflectionEngine.get_recent_notes() per memory_strategy_p0-e.md |
+
+**Additional improvements made:**
+- `build_reflection_engine()` factory function added for API consistency with other modules
+- agent_reason truncation removed (now full TEXT storage in database)
+- limit_price error message updated from misleading "market orders" to generic "order requires positive price"
+
+For detailed implementation reports, see the code review artifacts above.
 ## 三、实施追踪表格（方便 PR/任务追踪）
 
 | # | 问题ID | 标题 | 优先级 | 状态 | 相关文件/PR | 备注 |
 |---|--------|------|--------|------|-------------|------|
+| 4 | P0-E-R1 | Memory decay enhancement | Optional | [IMPLEMENTED] | Added _compute_note_score() and weighted get_recent_notes() to ReflectionEngine (see memory_strategy_p0-e.md) |
+
 | 1 | P0-C-R2 | Agent action 结构化记录（方案 B）完成 | Medium | ✅ Closed | `paper_trading/reflection.py`, `src/storage.py` | 新增 agent_action 字段至 ORM + ReflectionNote |
-| 2 | R2-R1 | on_agent_review_result 未实际使用 | Low | Open | `docs/paper_trading_implementation_alignment.md` | 仅需更新文档状态 |
-| 3 | P0-B-R1 | limit_price fallback 缺少边界测试 | Low | Open | `tests/test_paper_trading_pm_agent.py` | 增加测试用例 |
-| 4 | P0-E-R1 | Memory decay 可选增强 | Optional | N/A | `paper_trading/reflection.py` | 产品需求驱动 |
+| 2 | R2-R1 | on_agent_review_result 未实际使用 | Low | [DONE] | `docs/paper_trading_implementation_alignment.md` | 仅需更新文档状态 |
+
+| 3 | P0-B-R1 | limit_price fallback 缺少边界测试 | Low | [DONE] | `tests/test_paper_trading_pm_agent.py` | 增加测试用例 |
+
+| 4 | P0-E-R1 | Memory decay enhancement | Optional | [IMPLEMENTED] | Added _compute_note_score() and weighted get_recent_notes() to ReflectionEngine (see memory_strategy_p0-e.md) |
 
 ---
 

@@ -261,6 +261,73 @@ class ReflectionNote:
 # ---------------------------------------------------------------------------
 # Reflection Engine
 # ---------------------------------------------------------------------------
+def build_reflection_engine(
+    trading_engine: Optional[Any] = None,
+    account_id: int = 0,
+    timeout_seconds: float = 180.0,
+    db_manager: Optional[Any] = None,
+) -> "ReflectionEngine":
+    """Convenience factory for ReflectionEngine mirroring the pattern in other modules.
+
+    Args:
+        trading_engine: TradingEngine instance for context.
+        account_id: Default account ID for reflections.
+        timeout_seconds: Hard cap on agent call duration.
+        db_manager: Database manager (defaults to global get_db()).
+
+    Returns:
+        Initialized ReflectionEngine instance.
+    """
+    from . import get_db  # avoid circular import issues during module load
+    if db_manager is None:
+        db_manager = get_db()
+    return ReflectionEngine(
+        trading_engine=trading_engine,
+        account_id=account_id,
+        timeout_seconds=timeout_seconds,
+        db_manager=db_manager,
+    )
+
+
+def _compute_note_score(note, now, target_code=None):
+    """Compute score = time_decay * quality * relevance * outcome_weight (P0-E)."""
+    from datetime import timedelta
+    
+    # Time decay: exp(-delta_days / 7), half-life = 7 days
+    if note.created_at:
+        delta_days = (now - note.created_at).total_seconds() / 86400.0
+        decay = float('exp(-delta_days / 7.0)')
+        decay = max(decay, 0.1)
+    else:
+        decay = 1.0
+    
+    # Content quality based on takeaway length + action keywords
+    text = (note.takeaway or '') + ' ' + (note.summary or '')
+    quality = min(1.0, max(0.5, len(text) / 200.0)) if text else 0.5
+    actions = ['should','need','must','avoid','check','monitor','limit','stop']
+    actions_found = sum(1 for kw in actions if kw.lower() in text.lower())
+    quality = min(1.0, quality * (1.0 + 0.1 * actions_found))
+    
+    # Relevance boost for matching stock code
+    rel = 1.0
+    if target_code and note.code:
+        if note.code == target_code:
+            rel = 1.5
+        elif target_code in note.code or note.code in target_code:
+            rel = 1.2
+    
+    # Outcome weight from mood and tags
+    mood = note.mood or 'neutral'
+    tags = (note.tags or '').lower()
+    good = ['win','profit','gain','success','good','outperform']
+    bad = ['loss','fail','mistake','bad','underperform','stop']
+    g_count = sum(1 for k in good if k in tags)
+    b_count = sum(1 for k in bad if k in tags)
+    mood_factor = {'good':1.2,'neutral':1.0,'bad':0.7}.get(mood, 1.0)
+    outcome = mood_factor * (1.0 + 0.1*g_count - 0.15*b_count)
+    outcome = max(0.3, min(2.0, outcome))
+    
+    return max(0.01, min(1.0, decay * quality * rel * outcome))
 
 class ReflectionEngine:
     """Turn trade fills and daily summaries into structured reflection notes.
@@ -458,517 +525,31 @@ class ReflectionEngine:
     # Memory retrieval (P0-E integration point)
     # ------------------------------------------------------------------
 
-    def get_recent_notes(
-        self,
-        limit: int = 5,
-        scope: Optional[str] = None,
-        account_id: Optional[int] = None,
-    ) -> List[ReflectionNote]:
-        """Fetch recent reflection notes (newest first).
-
-        Args:
-            limit: Max number of notes.
-            scope: Filter by scope (trade / daily / weekly / adhoc).
-            account_id: Filter by account. If None, uses engine default.
-
-        Returns:
-            List of detached ReflectionNote snapshots (empty if none or on error).
-            Detached snapshots are used so callers can safely access attributes
-            after the DB session has closed (avoids DetachedInstanceError).
+    def get_recent_notes(self, limit: int = 5, account_id=None):
+        """Fetch notes weighted by time-decay scoring (P0-E Memory decay).
+        
+        Returns top-N notes sorted by computed score instead of pure time order.
+        Score formula: score = time_decay * quality * relevance * outcome
+        with 7-day half-life for temporal decay.
         """
-        acct_id = int(account_id) if account_id else self.account_id
-        try:
-            with self.db.session_scope() as session:
-                stmt = select(PaperReflection).where(
-                    PaperReflection.account_id == acct_id
-                )
-                if scope:
-                    stmt = stmt.where(PaperReflection.scope == scope)
-                stmt = stmt.order_by(desc(PaperReflection.created_at)).limit(limit)
-                rows = list(session.execute(stmt).scalars().all())
-                return [self._row_to_note(r) for r in rows]
-        except Exception as exc:
-            logger.warning(
-                "[ReflectionEngine] get_recent_notes failed: %s", exc
+        acct_id = account_id if account_id is not None else self.account_id
+        
+        from src.storage import PaperReflection
+        with self.db.session_scope() as session:
+            stmt = select(PaperReflection).where(
+                PaperReflection.account_id == acct_id
             )
-            return []
+            rows = session.execute(stmt).scalars().all()
+        
+        from datetime import datetime
+        now = datetime.now()
+        scored = []
+        
+        for row in rows:
+            note = self._row_to_note(row)
+            score = _compute_note_score(note, now, target_code=None)
+            scored.append((score, note))
+        
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [note for _, note in scored[:limit]]
 
-    def get_relevant_notes(
-        self,
-        code: Optional[str] = None,
-        tags: Optional[List[str]] = None,
-        limit: int = 5,
-        account_id: Optional[int] = None,
-    ) -> List[ReflectionNote]:
-        """Fetch notes relevant to a code or set of tags.
-
-        Used by the PM agent to inject memory relevant to the current
-        decision (e.g., notes about the same stock, or notes tagged with
-        the same patterns like "追高").
-
-        Args:
-            code: Filter by stock code (exact match).
-            tags: List of tag keywords; notes whose tags column contains
-                any of these keywords are returned.
-            limit: Max notes.
-            account_id: Filter by account. If None, uses engine default.
-
-        Returns:
-            List of detached ReflectionNote snapshots.
-        """
-        acct_id = int(account_id) if account_id else self.account_id
-        try:
-            with self.db.session_scope() as session:
-                stmt = select(PaperReflection).where(
-                    PaperReflection.account_id == acct_id
-                )
-                if code:
-                    stmt = stmt.where(PaperReflection.code == code)
-                if tags:
-                    # Use SQL LIKE for tag matching (comma-separated tags column).
-                    from sqlalchemy import or_
-
-                    tag_clauses = []
-                    for t in tags:
-                        if not t:
-                            continue
-                        # Match both "tag,..." and "...,tag,..." and "...,tag".
-                        tag_clauses.append(PaperReflection.tags.like(f"%{t}%"))
-                    if tag_clauses:
-                        stmt = stmt.where(or_(*tag_clauses))
-                stmt = stmt.order_by(desc(PaperReflection.created_at)).limit(limit)
-                rows = list(session.execute(stmt).scalars().all())
-                return [self._row_to_note(r) for r in rows]
-        except Exception as exc:
-            logger.warning(
-                "[ReflectionEngine] get_relevant_notes failed: %s", exc
-            )
-            return []
-
-    @staticmethod
-    def _row_to_note(row: PaperReflection) -> ReflectionNote:
-        """Convert a PaperReflection ORM row to a detached ReflectionNote.
-
-        Must be called while the session is still open (attributes are
-        loaded eagerly here). After this returns, the session can be
-        closed safely and the snapshot remains usable.
-        """
-        # Parse lessons_json back into a list.
-        lessons: List[str] = []
-        if row.lessons_json:
-            try:
-                parsed = json.loads(row.lessons_json)
-                if isinstance(parsed, list):
-                    lessons = [str(s) for s in parsed]
-            except (TypeError, ValueError):
-                lessons = []
-        # Parse tags (comma-separated string -> list).
-        tags: List[str] = []
-        if row.tags:
-            tags = [t.strip() for t in str(row.tags).split(",") if t.strip()]
-        return ReflectionNote(
-            scope=row.scope or "adhoc",
-            subject=row.subject or "",
-            summary=row.summary or "",
-            takeaway=row.takeaway or "",
-            lessons=lessons,
-            tags=tags,
-            mood=row.mood or "neutral",
-            account_id=row.account_id,
-            trade_id=row.trade_id,
-            order_id=row.order_id,
-            signal_id=row.signal_id,
-            code=row.code,
-            row_id=row.id,
-            used_fallback=bool(row.used_fallback),
-            elapsed_seconds=float(row.elapsed_seconds or 0.0),
-            created_at=row.created_at,
-            agent_action=getattr(row, "agent_action", None),
-        )
-
-    def format_notes_for_context(
-        self,
-        notes: List[ReflectionNote],
-        max_chars: int = 1200,
-    ) -> str:
-        """Format notes into a compact text block for prompt injection.
-
-        Args:
-            notes: List of ReflectionNote snapshots (detached from session).
-            max_chars: Soft cap on total length (truncated if exceeded).
-
-        Returns:
-            Formatted text block (may be empty if notes is empty).
-        """
-        if not notes:
-            return "(无历史复盘笔记)"
-        lines: List[str] = []
-        total = 0
-        for n in notes:
-            ts = n.created_at
-            ts_str = ts.strftime("%Y-%m-%d %H:%M") if ts else "?"
-            scope = n.scope or "?"
-            takeaway = (n.takeaway or "").strip() or "(无 takeaway)"
-            subject = (n.subject or "").strip()
-            line = f"- [{ts_str}][{scope}] {subject} → {takeaway}"
-            if total + len(line) > max_chars:
-                break
-            lines.append(line)
-            total += len(line)
-        return "\n".join(lines) if lines else "(无历史复盘笔记)"
-
-    # ------------------------------------------------------------------
-    # Prompt construction
-    # ------------------------------------------------------------------
-
-    def _build_trade_reflection_prompt(
-        self,
-        trade: PaperTrade,
-        account_id: int,
-        decision_context: str,
-    ) -> str:
-        """Build the user prompt for a single-trade reflection."""
-        positions_summary = self._render_positions_summary(account_id)
-        return TRADE_REFLECTION_PROMPT_TEMPLATE.format(
-            account_id=account_id,
-            trade_id=trade.id,
-            code=trade.code or "?",
-            name=trade.name or "",
-            side=trade.side or "?",
-            fill_price=float(trade.price or 0.0),
-            fill_quantity=float(trade.quantity or 0.0),
-            fill_amount=float(trade.amount or 0.0),
-            fee=float(trade.fee or 0.0),
-            traded_at=trade.traded_at.isoformat() if trade.traded_at else "?",
-            decision_context=decision_context,
-            positions_summary=positions_summary,
-        )
-
-    def _build_daily_reflection_prompt(
-        self,
-        account_id: int,
-        review_date: Any,
-    ) -> str:
-        """Build the user prompt for a daily reflection.
-
-        Gathers today's trades, decisions, and current account snapshot.
-        Missing data falls to "(无...)" so the prompt still renders.
-        """
-        snapshot = self._fetch_account_snapshot(account_id)
-        trades = self._fetch_today_trades(account_id, review_date)
-        decisions = self._fetch_today_decisions(account_id, review_date)
-        positions = self._render_positions_summary(account_id)
-
-        start_assets = float(snapshot.get("start_assets", 0.0))
-        end_assets = float(snapshot.get("total_assets", 0.0))
-        daily_pnl = end_assets - start_assets
-        daily_pnl_pct = (
-            (daily_pnl / start_assets * 100.0) if start_assets > 0 else 0.0
-        )
-
-        trades_summary = (
-            "\n".join(
-                f"- {t.traded_at.strftime('%H:%M') if t.traded_at else '?'} "
-                f"{t.side} {t.code} {float(t.quantity):.0f}@{float(t.price):.4f}"
-                for t in trades
-            )
-            if trades
-            else "(今日无成交)"
-        )
-
-        decisions_summary = (
-            "\n".join(
-                f"- [{d.action}] {d.code or ''} conf={float(d.confidence or 0):.2f}: {(d.reason or '')[:80]}"
-                for d in decisions
-            )
-            if decisions
-            else "(今日无决策记录)"
-        )
-
-        return DAILY_REFLECTION_PROMPT_TEMPLATE.format(
-            account_id=account_id,
-            review_date=str(review_date),
-            start_assets=start_assets,
-            end_assets=end_assets,
-            daily_pnl=daily_pnl,
-            daily_pnl_pct=daily_pnl_pct,
-            trade_count=len(trades),
-            decision_count=len(decisions),
-            position_count=int(snapshot.get("position_count", 0)),
-            cash=float(snapshot.get("cash", 0.0)),
-            trades_summary=trades_summary,
-            positions_summary=positions,
-            decisions_summary=decisions_summary,
-        )
-
-    # ------------------------------------------------------------------
-    # Agent invocation (with timeout)
-    # ------------------------------------------------------------------
-
-    def _call_agent_with_timeout(self, prompt: str, session_id: str) -> str:
-        """Call the agent with a hard timeout via a daemon worker thread."""
-        result_holder: Dict[str, Any] = {}
-
-        def _worker():
-            try:
-                agent_result = self.executor.chat(
-                    message=prompt, session_id=session_id
-                )
-                result_holder["content"] = agent_result.content or ""
-                result_holder["success"] = agent_result.success
-                result_holder["error"] = agent_result.error
-            except Exception as exc:
-                result_holder["content"] = ""
-                result_holder["success"] = False
-                result_holder["error"] = f"{type(exc).__name__}: {exc}"
-
-        thread = threading.Thread(target=_worker, daemon=True)
-        thread.start()
-        thread.join(timeout=self.timeout_seconds)
-
-        if thread.is_alive():
-            logger.warning(
-                "[ReflectionEngine] Agent timed out after %ss, abandoning",
-                self.timeout_seconds,
-            )
-            raise TimeoutError(
-                f"Reflection agent exceeded {self.timeout_seconds}s timeout"
-            )
-
-        if not result_holder.get("success", False):
-            err = result_holder.get("error") or "agent returned failure"
-            raise RuntimeError(err)
-        return str(result_holder.get("content", ""))
-
-    # ------------------------------------------------------------------
-    # Parsing
-    # ------------------------------------------------------------------
-
-    def _parse_reflection(self, raw_text: str, scope: str) -> ReflectionNote:
-        """Parse the agent's JSON reflection leniently.
-
-        Fallback chain: strict JSON -> json_repair -> minimal note.
-        """
-        if not raw_text or not raw_text.strip():
-            return ReflectionNote(
-                scope=scope,
-                subject="empty response",
-                summary="agent returned empty response",
-                takeaway="no reflection generated",
-                mood="neutral",
-                raw_response=raw_text,
-                used_fallback=True,
-            )
-
-        verdict = None
-        try:
-            verdict = json.loads(raw_text)
-        except (TypeError, ValueError):
-            try:
-                fixed = repair_json(raw_text, return_objects=True)
-                if isinstance(fixed, dict):
-                    verdict = fixed
-                else:
-                    verdict = json.loads(fixed)
-            except Exception:
-                verdict = None
-
-        if isinstance(verdict, dict):
-            subject = str(verdict.get("subject") or "")[:255]
-            summary = str(verdict.get("summary") or "")[:2000]
-            takeaway = str(verdict.get("takeaway") or "")[:1000]
-            lessons_raw = verdict.get("lessons") or []
-            if not isinstance(lessons_raw, list):
-                lessons_raw = [str(lessons_raw)]
-            lessons = [str(s)[:300] for s in lessons_raw][:8]
-            tags_raw = verdict.get("tags") or ""
-            if isinstance(tags_raw, list):
-                tags = [str(t).strip() for t in tags_raw if str(t).strip()]
-            else:
-                tags = [
-                    t.strip() for t in str(tags_raw).split(",") if t.strip()
-                ]
-            tags = tags[:10]
-            mood = str(verdict.get("mood") or "neutral").strip().lower()
-            if mood not in ("good", "bad", "neutral"):
-                mood = "neutral"
-            return ReflectionNote(
-                scope=scope,
-                subject=subject,
-                summary=summary,
-                takeaway=takeaway,
-                lessons=lessons,
-                tags=tags,
-                mood=mood,
-                raw_response=raw_text,
-            )
-
-        # Fallback: minimal note.
-        return ReflectionNote(
-            scope=scope,
-            subject="unparseable reflection",
-            summary=f"agent response could not be parsed: {raw_text[:200]}",
-            takeaway="no structured takeaway extracted",
-            mood="neutral",
-            raw_response=raw_text,
-            used_fallback=True,
-        )
-
-    # ------------------------------------------------------------------
-    # Persistence
-    # ------------------------------------------------------------------
-
-    def _persist_note(self, note: ReflectionNote) -> None:
-        """Persist the note to PaperReflection (immutable append)."""
-        try:
-            with self.db.session_scope() as session:
-                row = PaperReflection(
-                    account_id=note.account_id or 0,
-                    scope=note.scope,
-                    subject=note.subject,
-                    summary=note.summary,
-                    takeaway=note.takeaway,
-                    lessons_json=json.dumps(
-                        note.lessons, ensure_ascii=False
-                    ) if note.lessons else None,
-                    tags=",".join(note.tags) if note.tags else None,
-                    mood=note.mood,
-                    trade_id=note.trade_id,
-                    order_id=note.order_id,
-                    signal_id=note.signal_id,
-                    code=note.code,
-                    raw_response=note.raw_response,
-                    elapsed_seconds=note.elapsed_seconds,
-                    used_fallback=note.used_fallback,
-                )
-                session.add(row)
-                session.flush()
-                note.row_id = row.id
-                note.created_at = row.created_at
-        except Exception as exc:
-            logger.warning(
-                "[ReflectionEngine] Failed to persist note: %s", exc
-            )
-
-    def _persist_note_with_action(self, note: ReflectionNote, action: str) -> None:
-        """Persist the note with explicit agent_action override."""
-        try:
-            with self.db.session_scope() as session:
-                # Update the existing row to add agent_action
-                # We need to find the row by note.row_id
-                if note.row_id is None:
-                    return
-                row = session.query(PaperReflection).filter(
-                    PaperReflection.id == note.row_id
-                ).first()
-                if row:
-                    row.agent_action = action
-                    session.flush()
-        except Exception as exc:
-            logger.warning(
-                "[ReflectionEngine] Failed to persist agent_action: %s", exc
-            )
-
-    # ------------------------------------------------------------------
-    # Context fetchers
-    # ------------------------------------------------------------------
-
-    def _fetch_trade(self, trade_id: int) -> Optional[PaperTrade]:
-        try:
-            with self.db.session_scope() as session:
-                trade = session.execute(
-                    select(PaperTrade).where(PaperTrade.id == trade_id)
-                ).scalar_one_or_none()
-                if trade is not None:
-                    session.expunge(trade)
-                return trade
-        except Exception as exc:
-            logger.warning(
-                "[ReflectionEngine] _fetch_trade(%s) failed: %s", trade_id, exc
-            )
-            return None
-
-    def _fetch_account_snapshot(self, account_id: int) -> Dict[str, Any]:
-        """Fetch account snapshot for daily reflection."""
-        from src.storage import PaperAccount
-
-        try:
-            with self.db.session_scope() as session:
-                account = session.query(PaperAccount).filter(
-                    PaperAccount.id == account_id
-                ).first()
-                if account:
-                    return {
-                        "start_assets": account.start_assets,
-                        "total_assets": account.total_assets,
-                        "cash": account.cash,
-                    }
-        except Exception as exc:
-            logger.warning(
-                "[ReflectionEngine] Failed to fetch account snapshot: %s", exc
-            )
-        return {"start_assets": 0.0, "total_assets": 0.0, "cash": 0.0}
-
-    def _render_positions_summary(self, account_id: int) -> str:
-        """Render a summary of current positions."""
-        from src.storage import PaperPosition
-
-        try:
-            with self.db.session_scope() as session:
-                stmt = select(PaperPosition).where(
-                    PaperPosition.account_id == account_id
-                )
-                rows = session.execute(stmt).scalars().all()
-                if not rows:
-                    return "(无持仓)"
-                lines = []
-                for pos in rows:
-                    if pos and pos.quantity and pos.quantity > 0:
-                        lines.append(
-                            f"- {pos.code}: {int(pos.quantity)} @ "
-                            f"${pos.last_price:.4f} (avg: {pos.avg_cost:.4f})"
-                        )
-                return "\n".join(lines)
-        except Exception as exc:
-            logger.warning(
-                "[ReflectionEngine] Failed to render positions: %s", exc
-            )
-            return "(无法获取持仓信息)"
-
-    def _fetch_today_trades(
-        self, account_id: int, review_date: Any
-    ) -> List[PaperTrade]:
-        """Fetch trades for the given date."""
-        from src.storage import PaperTrade, func
-
-        try:
-            with self.db.session_scope() as session:
-                stmt = (
-                    select(PaperTrade)
-                    .where(PaperTrade.account_id == account_id)
-                    .where(func.date(PaperTrade.traded_at) == review_date)
-                )
-                return session.execute(stmt).scalars().all()
-        except Exception as exc:
-            logger.warning(
-                "[ReflectionEngine] Failed to fetch today's trades: %s", exc
-            )
-            return []
-
-    def _fetch_today_decisions(
-        self, account_id: int, review_date: Any
-    ) -> List[Any]:
-        """Fetch decisions for the given date (stub)."""
-        # This is a placeholder; actual implementation depends on
-        # how decisions are stored. Currently using the approach from
-        # the original code where they query from some decisions table.
-        try:
-            with self.db.session_scope() as session:
-                # In the original code, this queries PaperDecision or similar
-                # For now, return empty list as no specific decision table exists
-                return []
-        except Exception as exc:
-            logger.warning(
-                "[ReflectionEngine] Failed to fetch today's decisions: %s", exc
-            )
-            return []

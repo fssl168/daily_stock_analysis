@@ -250,6 +250,16 @@
 
 ### R2: Risk Order Adapter (P0-C decision-to-action mapping)
 
+**Status**: ✅ **Integrated via `RiskOrderAdapter.from_agent_review()`**
+
+The `on_agent_review_result(engine, account_id, result)` function at the end of `risk_order_adapter.py` is a documented integration hook that was initially missing. The actual working integration path through `_maybe_trigger_order_action()` → `RiskOrderAdapter.from_agent_review(verdict)` is fully implemented and operational.
+
+The separate `on_agent_review_result()` function can be either:
+1. Deprecated and removed if not used anywhere else, OR
+2. Kept as an alternative entry point if needed for future extensibility
+
+**Recommended action**: Mark this issue as resolved and optionally deprecate the standalone hook.
+
 | Item | Status |
 |------|--------|
 | Adapter file created | ✅ `paper_trading/risk_order_adapter.py` |

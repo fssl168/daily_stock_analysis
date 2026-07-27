@@ -352,7 +352,21 @@ class PortfolioManagerAgent:
 
 
     def _inject_reflections(self, account_id):
-        """Inject reflection memory into decision context (P0-E gap fill)."""
+        """Inject reflection memory into decision context (P0-E).
+        
+        Strategy:
+          - Fetch up to 3 most recent global reflections (by weighted score desc).
+          - For each held stock (max 5 codes), fetch latest relevant note.
+          - Deduplicate by row_id; prepend global notes, append stock-specific notes.
+          - Format: "[timestamp][scope] code takeover".
+          
+        Scoring formula: score = time_decay * quality * relevance * outcome
+        where time_decay has 7-day half-life, quality based on takeaway length
+        + action keywords, relevance boosts same-stock notes, and outcome
+        weights mood (+good/-bad) plus tag-based win/loss signals.
+        
+        See docs/memory_strategy_p0-e.md for full strategy specification.
+        """
         if self.reflection_engine is None:
             return "(复盘系统未启用)"
         try:
@@ -800,7 +814,7 @@ def register_paper_trading_tools(
                     trigger_price_kw or entry_price or limit_price or 0.0
                 )
             if trigger_price <= 0:
-                return {"error": "market orders require a positive entry_price or trigger_price"}
+                return {"error": "order requires a positive price"}
             signal = Signal(
                 side=side,
                 code=code,

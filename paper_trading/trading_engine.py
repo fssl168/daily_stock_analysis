@@ -989,7 +989,7 @@ class TradingEngine:
             parts.append("concerns: " + "; ".join(verdict.concerns))
         if verdict.used_fallback:
             parts.append(f"[fallback] error={verdict.error}")
-        agent_reason = " | ".join(parts)[:500]
+        agent_reason = " | ".join(parts)
 
         with self.db.session_scope() as session:
             row = session.execute(

@@ -9,17 +9,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- 📊 **Paper Trading System (AI Portfolio Manager)** — full virtual trading pipeline with 1000 CNY initial capital
+  - **Virtual account & orders**: `PaperAccountManager` / `OrderManager` with limit/market orders, pending → partially_filled → filled / canceled / rejected state machine, T+1 enforcement, cancel/modify with parent_order_id audit trail
+  - **Fee & slippage model**: commission (0.025% min 5 CNY) + stamp duty (sell-side 0.05%) + transfer fee (0.001%) + slippage (5 bps on market orders)
+  - **Pre-trade risk checks**: account status, cash sufficiency, position availability (T+1), single-stock concentration ≤30% of total assets, max 8 open positions, single buy ≤50% of cash
+  - **Strategy rule engine**: YAML-defined indicators (MA/EMA/RSI/MACD/BOLL) + rule matching (`> < >= <= == cross_up cross_down`)
+  - **Smart stop-loss/take-profit**: `SLTPCalculator` blends ATR + Fibonacci retracement + support/resistance + chip distribution to compute three-line exit plan (SL / TP1 / TP2)
+  - **TradingEngine**: signal submission → risk check → order creation → matching → settlement → daily net-value snapshot, with stop-loss/take-profit auto-trigger and daily settlement
+  - **AI Portfolio Manager Agent** (`PortfolioManagerAgent`): autonomous tool-calling agent for market analysis and trade planning, supports place/cancel/modify order tools, with timeout + retry + JSON parsing fallback (strict JSON → json_repair → keyword)
+  - **Agent risk-control layer** (`AgentRiskReviewer`): reuses `build_agent_executor` factory to double-confirm programmatic signals before execution; vetoed signals are persisted with reason
+  - **Real-time market listener** (`MarketListener`): daemon-thread lifecycle, per-tick pipeline (match_pending_orders → check_stop_loss_take_profit → evaluate_strategies), intraday session windows (CN/HK/US), per-(code,strategy,side) cooldown dedupe, post-close daily_settle with 5min buffer
+  - **Reflection system** (`ReflectionEngine`): auto-triggers post-trade review, generates PM notes, persists to `PaperReflection`, feeds into subsequent decision context
+  - **Daily battle plan** (`BattlePlanGenerator`): three-scenario (strong/neutral/weak) response per holding + candidate plans with auction/intraday triggers + AI market review (rule-based fallback when PM agent offline), persisted to `PaperBattlePlan` with upsert on (account_id, date)
+  - **Content generator** (`ContentGenerator`): auto-generates paper trading daily report (Markdown + voice script), LLM-optional with rule-based fallback
+  - **Notification integration** (`PaperTradingNotifier`): pushes battle plan / reflection / daily summary to Lark/DingTalk with chunking and DingTalk URL signing
+  - **API endpoints**: `/api/v1/paper-trading/*` covering account snapshot, positions, orders, signals, battle plans, reflections, daily reports
+  - **ORM models**: `PaperAccount`, `PaperPosition`, `PaperOrder`, `PaperTrade`, `PaperSignal`, `PaperNetValue`, `PaperDecision`, `PaperReflection`, `PaperBattlePlan`
+  - **Configuration**: comprehensive `.env.example` section with independent toggles per module (account, listener, PM agent, agent review, reflection, battle plan AI, broadcast, SLTP)
+  - **Integration tests**: 5 smoke test suites covering content generation, notification dispatch, PM agent loop, order cancel/modify, and battle plan generation
+
 ### Fixed
 - 🐛 **AstrBot sender docstring misplaced** — `import time` placed before docstring in `_send_astrbot`, causing it to become dead code
 - 🐛 **Telegram Markdown link escaping** — `_convert_to_telegram_markdown` escaped `[]()` characters, breaking all Markdown links in reports
 - 🐛 **Duplicate `discord_bot_status` field** in Config dataclass — second declaration silently shadowed the first
 - 🧹 **Unused imports** — removed `shutil`/`subprocess` from `main.py`
+- 🐛 **`OrderManager.get_order` DetachedInstanceError** — returned `PaperOrder` was not expunged from session, causing attribute access to fail after session close; now expunges consistently with `_get_order`
+- 🐛 **`paper_trading_modify_order` tool returned wrong order_id** — handler returned the original order id instead of the replacement order's id; now returns `order_id` (new) + `original_order_id` (for audit linkage)
+- 🐛 **`OrderManager.fill_order` DetachedInstanceError** — `PaperTrade` instance was not expunged, causing attribute access failures after session close
+- 🐛 **`_smoke_p2a.py` stale DB on rerun** — test cleaned DB only in `finally`; now also cleans at start of `main()` for resilience to interrupted prior runs
+
+### Added (Paper Trading Gap Alignment — G1-G8 + G13)
+- 🧩 **`PositionManager.unfreeze_quantity`** — closes G1; enables release of frozen sell quantity when sell-limit orders are canceled
+- 🧩 **`ReflectionNote.to_markdown`** — closes G2; renders structured reflection notes as Markdown for API/display reuse
+- 🧩 **`PortfolioManagerAgent._inject_reflections`** — closes G3; explicit reflection-memory injection step for PM agent context
+- 🧩 **`paper_trading_compute_sltp` tool** — closes G4; PM Agent can now preview ATR+Fib+support three-line stop-loss/take-profit plans
+- 🧩 **Order-id cancel/modify API & engine methods** — closes G5; adds `POST /orders/{order_id}/cancel`, `POST /orders/{order_id}/modify`, plus `TradingEngine.cancel_order` / `TradingEngine.modify_order`
+- 🧩 **Formal pytest coverage for paper trading** — closes G6/G7; adds `tests/test_paper_trading_indicators.py`, `tests/test_paper_trading_sltp.py`, `tests/test_paper_trading_cancel_modify.py`, `tests/test_paper_trading_pm_agent.py`, `tests/test_paper_trading_battle_plan.py`
+- 🧩 **`PAPER_TRADING_ENABLE_AUTO_SLTP` config toggle** — closes G8; independent switch for automatic SL/TP calculation on buy fills
+- 🧩 **Config aliases for reflection / battle plan toggles** — closes G13; `PAPER_TRADING_ENABLE_REFLECTION` and `PAPER_TRADING_ENABLE_BATTLE_PLAN` now take precedence over the legacy `PAPER_TRADING_LISTENER_ENABLE_*` names; backward compatibility preserved
+- 🧩 **End-to-end integration test** — adds `tests/test_paper_trading_e2e.py` covering the full AI loop: PM Agent decision → signal submission → fill → auto SLTP → reflection note → memory injection influencing the next decision
+
+### Added (Paper Trading WebUI Frontend)
+- 🎨 **React-based Paper Trading page** — `apps/dsa-web/src/pages/PaperTradingPage.tsx` integrates account snapshot, net-value sparkline, manual order form, market listener control, and tabbed views for positions/orders/trades/signals/decisions/reflections/battle plans
+- 🔌 **Frontend API client & types** — `apps/dsa-web/src/api/paperTrading.ts` and `apps/dsa-web/src/types/paperTrading.ts` provide typed snake_case ↔ camelCase adapters for all `/api/v1/paper-trading/*` endpoints
+- 🧭 **SPA routing & navigation** — `apps/dsa-web/src/App.tsx` adds `/paper-trading` route and dock entry; `api/app.py` removes the legacy standalone page mount so the page is served by the React SPA
+- 🧪 **Playwright e2e tests** — `apps/dsa-web/e2e/paper-trading.spec.ts` covers header rendering, account summary, tab switching, manual order submission, limit-price conditional input, market listener start/stop, and dock navigation; mocks handle cross-origin CORS preflight for dev-server → backend requests
+- ⚙️ **Playwright configuration** — `apps/dsa-web/playwright.config.ts` auto-starts the Vite dev server and targets Chromium
+
+### Fixed
+- 🐛 **`ReflectionEngine._fetch_trade` DetachedInstanceError** — expunges the `PaperTrade` row before returning so attributes remain accessible outside the session
+- 🐛 **`PortfolioManagerAgent._inject_reflections` position dict handling** — `PositionManager.list_positions()` returns dicts; `_inject_reflections` now reads `row.get("code")` instead of `row.code`
+- 🧹 **ESLint artifact ignores** — `apps/dsa-web/eslint.config.js` now ignores `test-results` and `playwright-report`
 
 ### Changed
 - ⚙️ **Auto-tag workflow defaults to NO tag** — only tags when commit message explicitly contains `#patch`, `#minor`, or `#major`
 
 ### Docs
 - 📝 Clarified GitHub Actions non-trading-day manual run controls (`TRADING_DAY_CHECK_ENABLED` + `force_run`) for Issue #461 / PR #466
+- 📝 **README** — added paper trading row to features table; added dedicated "纸面交易（AI 基金经理）" section with module table, quick-start steps, and API endpoint reference
 
 ## [3.4.7] - 2026-02-28
 

@@ -168,28 +168,28 @@ def create_app(static_dir: Optional[Path] = None) -> FastAPI:
             status="ok",
             timestamp=datetime.now().isoformat()
         )
-    
+
     # ============================================================
     # 静态文件托管（前端 SPA）
     # ============================================================
-    
+
     if has_frontend:
         # 挂载静态资源目录
         assets_dir = static_dir / "assets"
         if assets_dir.exists():
             app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
-        
+
         # SPA 路由回退
         @app.get("/{full_path:path}", include_in_schema=False)
         async def serve_spa(request: Request, full_path: str):
             """SPA 路由回退 - 非 API 路由返回 index.html"""
             if full_path.startswith("api/"):
                 return None
-            
+
             file_path = static_dir / full_path
             if file_path.exists() and file_path.is_file():
                 return FileResponse(file_path)
-            
+
             return FileResponse(static_dir / "index.html")
     
     return app

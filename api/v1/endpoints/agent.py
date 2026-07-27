@@ -209,13 +209,22 @@ async def agent_chat_stream(request: ChatRequest):
     async def event_generator():
         # Start executor in a thread so we don't block the event loop
         fut = loop.run_in_executor(None, run_sync)
+        idle_seconds = 0.0
+        heartbeat_interval = 15.0
+        max_idle = 600.0  # 10 min without any event = timeout
         try:
             while True:
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=300.0)
+                    event = await asyncio.wait_for(queue.get(), timeout=heartbeat_interval)
+                    idle_seconds = 0.0
                 except asyncio.TimeoutError:
-                    yield "data: " + json.dumps({"type": "error", "message": "分析超时"}, ensure_ascii=False) + "\n\n"
-                    break
+                    idle_seconds += heartbeat_interval
+                    if idle_seconds >= max_idle:
+                        yield "data: " + json.dumps({"type": "error", "message": "分析超时"}, ensure_ascii=False) + "\n\n"
+                        break
+                    # SSE comment line: keeps connection alive, ignored by frontend parser
+                    yield ": heartbeat\n\n"
+                    continue
                 yield "data: " + json.dumps(event, ensure_ascii=False) + "\n\n"
                 if event.get("type") in ("done", "error"):
                     break

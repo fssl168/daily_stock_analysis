@@ -6,6 +6,7 @@ import SettingsPage from './pages/SettingsPage';
 import LoginPage from './pages/LoginPage';
 import NotFoundPage from './pages/NotFoundPage';
 import ChatPage from './pages/ChatPage';
+import PaperTradingPage from './pages/PaperTradingPage';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import './App.css';
 
@@ -36,6 +37,13 @@ const ChatIcon: React.FC<{ active?: boolean }> = ({active}) => (
     <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={active ? 2 : 1.5}
               d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/>
+    </svg>
+);
+
+const PaperTradingIcon: React.FC<{ active?: boolean }> = ({active}) => (
+    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={active ? 2 : 1.5}
+              d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6M3 21h18"/>
     </svg>
 );
 
@@ -71,6 +79,12 @@ const NAV_ITEMS: DockItem[] = [
         label: '回测',
         to: '/backtest',
         icon: BacktestIcon,
+    },
+    {
+        key: 'paper-trading',
+        label: '模拟交易',
+        to: '/paper-trading',
+        icon: PaperTradingIcon,
     },
     {
         key: 'settings',
@@ -176,6 +190,7 @@ const AppContent: React.FC = () => {
                     <Route path="/" element={<HomePage/>}/>
                     <Route path="/chat" element={<ChatPage/>}/>
                     <Route path="/backtest" element={<BacktestPage/>}/>
+                    <Route path="/paper-trading" element={<PaperTradingPage/>}/>
                     <Route path="/settings" element={<SettingsPage/>}/>
                     <Route path="/login" element={<LoginPage/>}/>
                     <Route path="*" element={<NotFoundPage/>}/>

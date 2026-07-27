@@ -1,0 +1,321 @@
+Def indent: 0
+End line: 1002
+Functions spans lines 685 to 1002
+def register_paper_trading_tools(
+    registry: ToolRegistry,
+    engine: Any,
+    account_id: int,
+    reflection_engine: Optional[Any] = None,
+) -> None:
+    """Register ``paper_trading_*`` tools on the given registry.
+
+    Tools are closures over the TradingEngine + account_id, so each tool
+    call automatically targets the PM agent's account. Re-registering a
+    tool replaces the handler (idempotent).
+
+    Tools registered:
+    - paper_trading_get_account_snapshot
+    - paper_trading_get_positions
+    - paper_trading_get_open_orders
+    - paper_trading_place_order
+    - paper_trading_cancel_order
+    - paper_trading_modify_order
+    - paper_trading_get_recent_reflections (no-op if reflection_engine is None)
+    """
+    from paper_trading.order import OrderRequest, OrderSide, OrderType
+
+    # ---- Account snapshot ----
+    def _handle_account_snapshot(**kwargs) -> dict:
+        acct_id = int(kwargs.get("account_id") or account_id)
+        try:
+            snap = engine.account_mgr.snapshot(acct_id)
+            return {
+                "account_id": acct_id,
+                "cash": float(getattr(snap, "cash", 0.0)),
+                "total_assets": float(getattr(snap, "total_assets", 0.0)),
+                "net_value": float(getattr(snap, "net_value", 1.0)),
+                "return_pct": float(getattr(snap, "return_pct", 0.0)),
+                "frozen_cash": float(getattr(snap, "frozen_cash", 0.0)),
+            }
+        except Exception as exc:
+            return {"error": f"{type(exc).__name__}: {exc}"}
+
+    registry.register(ToolDefinition(
+        name="paper_trading_get_account_snapshot",
+        description="Get the current paper-trading account snapshot (cash, total assets, net value, return).",
+        parameters=[
+            ToolParameter(
+                name="account_id", type="integer",
+                description="Paper trading account id. If omitted, uses the PM agent's default account.",
+                required=False,
+            ),
+        ],
+        handler=_handle_account_snapshot,
+        category="action",
+    ))
+
+    # ---- Positions ----
+    def _handle_get_positions(**kwargs) -> dict:
+        acct_id = int(kwargs.get("account_id") or account_id)
+        try:
+            rows = engine.position_mgr.list_positions(acct_id)
+            out = []
+            for p in rows:
+                out.append({
+                    "code": p.code,
+                    "name": p.name,
+                    "quantity": float(p.quantity),
+                    "available_quantity": float(p.available_quantity),
+                    "avg_cost": float(p.avg_cost),
+                    "last_price": float(p.last_price or 0.0),
+                    "stop_loss": float(p.stop_loss or 0.0),
+                    "take_profit": float(p.take_profit or 0.0),
+                })
+            return {"positions": out, "count": len(out)}
+        except Exception as exc:
+            return {"error": f"{type(exc).__name__}: {exc}"}
+
+    registry.register(ToolDefinition(
+        name="paper_trading_get_positions",
+        description="List all open positions in the paper-trading account.",
+        parameters=[
+            ToolParameter(
+                name="account_id", type="integer",
+                description="Paper trading account id. If omitted, uses the PM agent's default account.",
+                required=False,
+            ),
+        ],
+        handler=_handle_get_positions,
+        category="action",
+    ))
+
+    # ---- Open orders ----
+    def _handle_get_open_orders(**kwargs) -> dict:
+        acct_id = int(kwargs.get("account_id") or account_id)
+        try:
+            from src.storage import PaperOrder
+            with engine.db.session_scope() as session:
+                rows = session.execute(
+                    select(PaperOrder).where(
+                        PaperOrder.account_id == acct_id,
+                        PaperOrder.status.in_(["pending", "partially_filled"]),
+                    ).order_by(PaperOrder.created_at.desc())
+                ).scalars().all()
+                out = []
+                for o in rows:
+                    out.append({
+                        "order_id": o.id,
+                        "code": o.code,
+                        "name": o.name,
+                        "side": o.side,
+                        "order_type": o.order_type,
+                        "price": float(o.price) if o.price is not None else None,
+                        "quantity": float(o.quantity),
+                        "filled_quantity": float(o.filled_quantity or 0.0),
+                        "status": o.status,
+                        "strategy_name": o.strategy_name,
+                        "created_at": o.created_at.isoformat() if o.created_at else None,
+                    })
+                return {"open_orders": out, "count": len(out)}
+        except Exception as exc:
+            return {"error": f"{type(exc).__name__}: {exc}"}
+
+    registry.register(ToolDefinition(
+        name="paper_trading_get_open_orders",
+        description="List all pending / partially-filled orders in the paper-trading account.",
+        parameters=[
+            ToolParameter(
+                name="account_id", type="integer",
+                description="Paper trading account id. If omitted, uses the PM agent's default account.",
+                required=False,
+            ),
+        ],
+        handler=_handle_get_open_orders,
+        category="action",
+    ))
+
+    # ---- Place order ----
+    def _handle_place_order(**kwargs) -> dict:
+        acct_id = int(kwargs.get("account_id") or account_id)
+        code = str(kwargs.get("code") or "").strip()
+        side = str(kwargs.get("side") or "").strip().lower()
+        quantity = float(kwargs.get("quantity") or 0.0)
+        order_type = str(kwargs.get("order_type") or "market").strip().lower()
+        limit_price = kwargs.get("limit_price")
+        name = kwargs.get("name")
+        reason = kwargs.get("reason")
+        stop_loss = kwargs.get("stop_loss")
+        take_profit = kwargs.get("take_profit")
+
+        if not code or side not in ("buy", "sell") or quantity <= 0:
+            return {"error": "code, side (buy/sell), quantity are required and quantity must be positive"}
+
+        try:
+            # Build a synthetic Signal so we can reuse submit_signal which
+            # handles risk checks, fee model, agent review (if any), and
+            # persistence.
+            from strategies_v2.rule_engine import Signal
+            trigger_price = float(limit_price) if limit_price else 0.0
+            signal = Signal(
+                side=side,
+                code=code,
+                name=name,
+                strategy_name="pm_agent",
+                rule_name="pm_autonomous",
+                trigger_price=trigger_price,
+                suggested_quantity=quantity,
+                reason=reason or f"PM agent autonomous {side} {quantity} {code}",
+            )
+            ot = OrderType.LIMIT if order_type == "limit" else OrderType.MARKET
+            result = engine.submit_signal(
+                account_id=acct_id,
+                signal=signal,
+                order_type=ot,
+                limit_price=float(limit_price) if limit_price and ot == OrderType.LIMIT else None,
+                quantity_override=quantity,
+            )
+            # If buy filled and SL/TP provided, update the position.
+            if (
+                result.status == "executed"
+                and side == "buy"
+                and (stop_loss or take_profit)
+            ):
+                try:
+                    engine.position_mgr.update_stop_loss_take_profit(
+                        account_id=acct_id,
+                        code=code,
+                        stop_loss=float(stop_loss) if stop_loss else None,
+                        take_profit=float(take_profit) if take_profit else None,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[paper_trading_place_order] SL/TP update failed: %s", exc
+                    )
+            return result.to_dict()
+        except Exception as exc:
+            return {"error": f"{type(exc).__name__}: {exc}"}
+
+    registry.register(ToolDefinition(
+        name="paper_trading_place_order",
+        description="Place a buy or sell order in the paper-trading account. "
+                    "Risk checks (cash sufficiency, position availability, concentration) are enforced.",
+        parameters=[
+            ToolParameter(name="code", type="string", description="Stock code, e.g. '600519' or 'AAPL'.", required=True),
+            ToolParameter(name="side", type="string", description="Order side.", enum=["buy", "sell"], required=True),
+            ToolParameter(name="quantity", type="number", description="Number of shares (must be positive).", required=True),
+            ToolParameter(name="order_type", type="string", description="Order type.", enum=["market", "limit"], required=False, default="market"),
+            ToolParameter(name="limit_price", type="number", description="Required for limit orders. Ignored for market orders.", required=False),
+            ToolParameter(name="name", type="string", description="Stock display name (optional).", required=False),
+            ToolParameter(name="reason", type="string", description="Reason for the order (optional, recorded for audit).", required=False),
+            ToolParameter(name="stop_loss", type="number", description="Stop-loss price to attach to the resulting position (buys only, optional).", required=False),
+            ToolParameter(name="take_profit", type="number", description="Take-profit price to attach to the resulting position (buys only, optional).", required=False),
+            ToolParameter(name="account_id", type="integer", description="Account id. If omitted, uses the PM agent's default.", required=False),
+        ],
+        handler=_handle_place_order,
+        category="action",
+    ))
+
+    # ---- Cancel order ----
+    def _handle_cancel_order(**kwargs) -> dict:
+        acct_id = int(kwargs.get("account_id") or account_id)
+        order_id = int(kwargs.get("order_id") or 0)
+        if order_id <= 0:
+            return {"error": "order_id is required"}
+        try:
+            # OrderManager.cancel_order is added in P0-C; for now use a
+            # graceful fallback if the method is missing.
+            if hasattr(engine.order_mgr, "cancel_order"):
+                row = engine.order_mgr.cancel_order(order_id, reason="pm_agent_cancel")
+                return {"status": "canceled", "order_id": order_id, "code": row.code}
+            return {"error": "cancel_order not implemented on OrderManager yet (P0-C pending)"}
+        except Exception as exc:
+            return {"error": f"{type(exc).__name__}: {exc}"}
+
+    registry.register(ToolDefinition(
+        name="paper_trading_cancel_order",
+        description="Cancel a pending paper-trading order by id.",
+        parameters=[
+            ToolParameter(name="order_id", type="integer", description="The id of the order to cancel.", required=True),
+            ToolParameter(name="account_id", type="integer", description="Account id. If omitted, uses the PM agent's default.", required=False),
+        ],
+        handler=_handle_cancel_order,
+        category="action",
+    ))
+
+    # ---- Modify order ----
+    def _handle_modify_order(**kwargs) -> dict:
+        order_id = int(kwargs.get("order_id") or 0)
+        new_price = kwargs.get("new_price")
+        new_quantity = kwargs.get("new_quantity")
+        if order_id <= 0:
+            return {"error": "order_id is required"}
+        try:
+            if hasattr(engine.order_mgr, "modify_order"):
+                row = engine.order_mgr.modify_order(
+                    order_id,
+                    new_price=float(new_price) if new_price else None,
+                    new_quantity=float(new_quantity) if new_quantity else None,
+                )
+                # row is the replacement order (new id assigned by modify_order).
+                # Return the NEW order_id so callers can track the replacement,
+                # and include original_order_id for audit linkage.
+                return {
+                    "status": "modified",
+                    "order_id": int(getattr(row, "id", 0) or 0),
+                    "original_order_id": order_id,
+                    "code": row.code,
+                }
+            return {"error": "modify_order not implemented on OrderManager yet (P0-C pending)"}
+        except Exception as exc:
+            return {"error": f"{type(exc).__name__}: {exc}"}
+
+    registry.register(ToolDefinition(
+        name="paper_trading_modify_order",
+        description="Modify the price or quantity of a pending paper-trading order.",
+        parameters=[
+            ToolParameter(name="order_id", type="integer", description="The id of the order to modify.", required=True),
+            ToolParameter(name="new_price", type="number", description="New limit price (optional).", required=False),
+            ToolParameter(name="new_quantity", type="number", description="New quantity (optional).", required=False),
+        ],
+        handler=_handle_modify_order,
+        category="action",
+    ))
+
+    # ---- Recent reflections ----
+    def _handle_get_recent_reflections(**kwargs) -> dict:
+        limit = int(kwargs.get("limit") or 5)
+        if reflection_engine is None:
+            return {"reflections": [], "note": "reflection engine not configured"}
+        try:
+            notes = reflection_engine.get_recent_notes(limit=limit)
+            out = []
+            for n in notes:
+                out.append({
+                    "created_at": getattr(n, "created_at", None).isoformat()
+                                  if getattr(n, "created_at", None) else None,
+                    "scope": getattr(n, "scope", None),
+                    "subject": getattr(n, "subject", None),
+                    "takeaway": getattr(n, "takeaway", None) or getattr(n, "summary", None),
+                    "lessons": getattr(n, "lessons", None),
+                })
+            return {"reflections": out, "count": len(out)}
+        except Exception as exc:
+            return {"error": f"{type(exc).__name__}: {exc}"}
+
+    registry.register(ToolDefinition(
+        name="paper_trading_get_recent_reflections",
+        description="Fetch recent reflection notes from the AI reflection system. "
+                    "Use these to avoid repeating past mistakes and to reinforce winning patterns.",
+        parameters=[
+            ToolParameter(name="limit", type="integer", description="Max number of notes to return (default 5).", required=False, default=5),
+        ],
+        handler=_handle_get_recent_reflections,
+        category="data",
+    ))
+
+    logger.info(
+        "[paper_trading_tools] Registered 7 tools for account_id=%s",
+        account_id,
+    )
+
+

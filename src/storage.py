@@ -378,6 +378,372 @@ class ConversationMessage(Base):
     created_at = Column(DateTime, default=datetime.now, index=True)
 
 
+# === Paper Trading Models ===
+# Virtual account / orders / positions / trades / signals / net-value curve
+# for the real-time paper trading subsystem (initial capital configurable,
+# default 1000 CNY per the project requirement).
+
+class PaperAccount(Base):
+    """Virtual paper-trading account.
+
+    A single row is the canonical account; subsequent rows allow multi-account
+    scenarios in the future without schema changes.
+    """
+
+    __tablename__ = 'paper_accounts'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(64), nullable=False, default='default')
+    # Initial capital (CNY). Default 1000 per project requirement.
+    initial_capital = Column(Float, nullable=False, default=1000.0)
+    # Cash currently available for new buys.
+    cash = Column(Float, nullable=False, default=1000.0)
+    # Cash frozen by pending limit orders.
+    frozen_cash = Column(Float, nullable=False, default=0.0)
+    # Account status: active / paused / stopped.
+    status = Column(String(16), nullable=False, default='active', index=True)
+    # Config snapshot (JSON): commission rate, slippage, etc.
+    config_json = Column(Text)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        UniqueConstraint('name', name='uix_paper_account_name'),
+    )
+
+    def __repr__(self) -> str:
+        return f"<PaperAccount(name={self.name}, cash={self.cash}, status={self.status})>"
+
+
+class PaperPosition(Base):
+    """Long position per stock within a paper-trading account."""
+
+    __tablename__ = 'paper_positions'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey('paper_accounts.id'), nullable=False, index=True)
+    code = Column(String(10), nullable=False, index=True)
+    name = Column(String(50))
+    # Total held quantity (shares).
+    quantity = Column(Float, nullable=False, default=0.0)
+    # Quantity available to sell (T+1 rule: shares bought today are not available).
+    available_quantity = Column(Float, nullable=False, default=0.0)
+    # Average cost per share (including fees on buy side).
+    avg_cost = Column(Float, nullable=False, default=0.0)
+    # Last synced market price for PnL display.
+    last_price = Column(Float, default=0.0)
+    # Optional stop-loss / take-profit guards.
+    stop_loss = Column(Float)
+    take_profit = Column(Float)
+    # P1-A: Second take-profit target (mid-term) and audit reasoning from
+    # SLTPCalculator. take_profit_1 is stored in take_profit above for
+    # backwards compatibility with check_stop_loss_take_profit.
+    take_profit_2 = Column(Float)
+    sltp_reasoning = Column(Text)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        UniqueConstraint('account_id', 'code', name='uix_paper_position_account_code'),
+        Index('ix_paper_position_account_code', 'account_id', 'code'),
+    )
+
+    def __repr__(self) -> str:
+        return f"<PaperPosition(code={self.code}, qty={self.quantity}, avg_cost={self.avg_cost})>"
+
+
+class PaperOrder(Base):
+    """Paper-trading order with a small state machine.
+
+    Status flow:
+      pending -> partially_filled -> filled
+      pending -> canceled
+      pending -> rejected
+    """
+
+    __tablename__ = 'paper_orders'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey('paper_accounts.id'), nullable=False, index=True)
+    code = Column(String(10), nullable=False, index=True)
+    name = Column(String(50))
+    # buy / sell
+    side = Column(String(8), nullable=False)
+    # market / limit
+    order_type = Column(String(8), nullable=False, default='market')
+    # Limit price (None for market orders).
+    price = Column(Float)
+    # Ordered quantity (shares).
+    quantity = Column(Float, nullable=False)
+    # Filled quantity (shares).
+    filled_quantity = Column(Float, nullable=False, default=0.0)
+    # Average filled price.
+    filled_price_avg = Column(Float, nullable=False, default=0.0)
+    # pending / partially_filled / filled / canceled / rejected
+    status = Column(String(16), nullable=False, default='pending', index=True)
+    # Strategy that emitted the triggering signal.
+    strategy_name = Column(String(64))
+    # Linked signal id (PaperSignal.id), optional.
+    signal_id = Column(Integer, index=True)
+    # Human-readable reason for the order.
+    reason = Column(Text)
+    # Rejection reason (if any).
+    reject_reason = Column(String(255))
+    # Cancel reason (P0-C: set when an order is canceled).
+    cancel_reason = Column(String(255))
+    # Parent order id (P0-C: set when this order is a modification replacement
+    # of an earlier order; the old order is canceled and this new order is
+    # created with parent_order_id pointing to the original).
+    parent_order_id = Column(Integer, index=True)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    # Modification timestamp (P0-C): set when the order is modified.
+    modified_at = Column(DateTime)
+    filled_at = Column(DateTime)
+
+    __table_args__ = (
+        Index('ix_paper_order_account_status', 'account_id', 'status'),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<PaperOrder(id={self.id}, code={self.code}, side={self.side}, "
+            f"qty={self.quantity}, status={self.status})>"
+        )
+
+
+class PaperTrade(Base):
+    """Filled trade record (one order may produce multiple trades)."""
+
+    __tablename__ = 'paper_trades'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey('paper_accounts.id'), nullable=False, index=True)
+    order_id = Column(Integer, ForeignKey('paper_orders.id'), nullable=False, index=True)
+    code = Column(String(10), nullable=False, index=True)
+    name = Column(String(50))
+    side = Column(String(8), nullable=False)
+    price = Column(Float, nullable=False)
+    quantity = Column(Float, nullable=False)
+    amount = Column(Float, nullable=False)  # price * quantity
+    fee = Column(Float, nullable=False, default=0.0)
+    traded_at = Column(DateTime, default=datetime.now, index=True)
+
+    def __repr__(self) -> str:
+        return f"<PaperTrade(code={self.code}, side={self.side}, price={self.price}, qty={self.quantity})>"
+
+
+class PaperSignal(Base):
+    """Strategy signal emitted by the rule engine, optionally confirmed by Agent.
+
+    status: pending / executed / rejected / expired
+    agent_confirmed: None (not reviewed) / True (confirmed) / False (vetoed)
+    """
+
+    __tablename__ = 'paper_signals'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey('paper_accounts.id'), nullable=False, index=True)
+    code = Column(String(10), nullable=False, index=True)
+    name = Column(String(50))
+    # buy / sell
+    side = Column(String(8), nullable=False)
+    # Suggested price (e.g., current last price) for downstream order.
+    trigger_price = Column(Float)
+    # Suggested quantity (shares); None means "let engine decide".
+    suggested_quantity = Column(Float)
+    # Rule strategy that emitted the signal.
+    strategy_name = Column(String(64))
+    rule_name = Column(String(64))
+    # Why the signal was emitted (rule details).
+    reason = Column(Text)
+    # Agent risk-control review result.
+    agent_confirmed = Column(Boolean, nullable=True)
+    agent_reason = Column(Text)
+    status = Column(String(16), nullable=False, default='pending', index=True)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    reviewed_at = Column(DateTime)
+
+    def __repr__(self) -> str:
+        return f"<PaperSignal(code={self.code}, side={self.side}, strategy={self.strategy_name}, status={self.status})>"
+
+
+class PaperNetValue(Base):
+    """Daily net-value snapshot of a paper-trading account."""
+
+    __tablename__ = 'paper_net_values'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey('paper_accounts.id'), nullable=False, index=True)
+    date = Column(Date, nullable=False, index=True)
+    total_assets = Column(Float, nullable=False)  # cash + market_value
+    cash = Column(Float, nullable=False)
+    market_value = Column(Float, nullable=False)
+    # Net value normalized to initial_capital = 1.0
+    net_value = Column(Float, nullable=False)
+    # Cumulative return pct since account creation.
+    return_pct = Column(Float, nullable=False, default=0.0)
+    # Per-day return pct.
+    daily_return_pct = Column(Float, default=0.0)
+    created_at = Column(DateTime, default=datetime.now)
+
+    __table_args__ = (
+        UniqueConstraint('account_id', 'date', name='uix_paper_net_value_account_date'),
+    )
+
+    def __repr__(self) -> str:
+        return f"<PaperNetValue(date={self.date}, total={self.total_assets}, nv={self.net_value})>"
+
+
+class PaperDecision(Base):
+    """AI Portfolio Manager Agent decision log.
+
+    Records each autonomous decision made by the PM agent: the proposed action
+    (buy/sell/hold/cancel/modify/plan), the target code, structured params
+    (entry/stop-loss/take-profit/quantity), the free-text reason, confidence,
+    and the raw LLM response for audit.
+
+    action: buy / sell / hold / cancel / modify / plan / nop
+    status: pending / executed / rejected / skipped
+    """
+
+    __tablename__ = 'paper_decisions'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey('paper_accounts.id'), nullable=False, index=True)
+    # Decision action: buy / sell / hold / cancel / modify / plan / nop.
+    action = Column(String(16), nullable=False, index=True)
+    # Target stock code (None for plan-level decisions like market review).
+    code = Column(String(10), index=True)
+    name = Column(String(50))
+    # Structured parameters JSON: entry_price, stop_loss, take_profit,
+    # quantity, take_profit_1, take_profit_2, etc.
+    params_json = Column(Text)
+    # Free-text reasoning from the agent.
+    reason = Column(Text)
+    # Confidence in [0.0, 1.0].
+    confidence = Column(Float, default=0.0)
+    # Optional trigger source: pm_agent / rule_engine / manual / scheduled.
+    source = Column(String(32), default='pm_agent')
+    # Status: pending / executed / rejected / skipped.
+    status = Column(String(16), default='pending', index=True)
+    # Failure / rejection reason if any.
+    reject_reason = Column(String(255))
+    # Raw LLM response for audit / debugging.
+    raw_response = Column(Text)
+    # Optional related signal/order IDs.
+    signal_id = Column(Integer, index=True)
+    order_id = Column(Integer)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+    def __repr__(self) -> str:
+        return (
+            f"<PaperDecision(action={self.action}, code={self.code}, "
+            f"confidence={self.confidence}, status={self.status})>"
+        )
+
+
+class PaperReflection(Base):
+    """AI reflection / post-trade review note (P0-D).
+
+    Records the AI portfolio manager's reflection on a completed trade or
+    end-of-day review. Each note has:
+    - scope: trade / daily / weekly / adhoc
+    - subject: short title (e.g., "买入 600519 复盘")
+    - summary: 1-2 sentence outcome recap
+    - takeaway: the single most important lesson
+    - lessons: structured list of lessons (JSON array of strings)
+    - tags: comma-separated keywords for retrieval (e.g., "追高,止损过晚")
+    - related trade_id / order_id / signal_id for audit
+    - mood: optional emotional / qualitative rating (good / bad / neutral)
+    - raw_response: full LLM response for debugging
+
+    Notes are appended to (never edited) so the reflection history is
+    immutable and auditable. The PM agent queries recent notes via
+    ReflectionEngine.get_recent_notes() to inject memory into its context.
+    """
+
+    __tablename__ = 'paper_reflections'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey('paper_accounts.id'), nullable=False, index=True)
+    # Reflection scope: trade / daily / weekly / adhoc.
+    scope = Column(String(16), nullable=False, default='trade', index=True)
+    # Short title summarising the reflection subject.
+    subject = Column(String(255))
+    # 1-2 sentence outcome recap (what happened, PnL, etc.).
+    summary = Column(Text)
+    # The single most important lesson from this reflection.
+    takeaway = Column(Text)
+    # JSON array of structured lessons (list[str]).
+    lessons_json = Column(Text)
+    # Comma-separated keyword tags for retrieval.
+    tags = Column(String(255), index=True)
+    # Optional qualitative mood: good / bad / neutral.
+    mood = Column(String(16))
+    # Related entities for audit trail.
+    trade_id = Column(Integer, index=True)
+    order_id = Column(Integer, index=True)
+    signal_id = Column(Integer, index=True)
+    code = Column(String(10), index=True)
+    # Full raw LLM response for debugging.
+    raw_response = Column(Text)
+    # Elapsed seconds for the reflection call (for perf tracking).
+    elapsed_seconds = Column(Float, default=0.0)
+    # True if the note was generated by a fallback path (agent unavailable).
+    used_fallback = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+    def __repr__(self) -> str:
+        return (
+            f"<PaperReflection(scope={self.scope}, subject={self.subject}, "
+            f"mood={self.mood})>"
+        )
+
+
+class PaperBattlePlan(Base):
+    """Daily battle plan (next-trading-day operations card, P1-B).
+
+    Persisted by ``BattlePlanGenerator.generate`` at end-of-day. Each row is
+    one (account_id, date) pair — the operations card the PM agent will
+    reference when trading that day.
+
+    Stored as JSON blobs:
+    - ``holdings_plans_json``: List[HoldingPlan.to_dict()]
+    - ``candidates_json``: List[CandidatePlan.to_dict()]
+    """
+
+    __tablename__ = 'paper_battle_plans'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey('paper_accounts.id'), nullable=False, index=True)
+    # The trading day this plan applies to (usually next trading day).
+    date = Column(Date, nullable=False, index=True)
+    # JSON-serialized list of holding plans.
+    holdings_plans_json = Column(Text, nullable=False, default='[]')
+    # JSON-serialized list of candidate plans.
+    candidates_json = Column(Text, nullable=False, default='[]')
+    # AI-generated market review paragraph.
+    market_review = Column(Text, nullable=False, default='')
+    # Sentiment score 0-100 (higher = more bullish).
+    sentiment_score = Column(Integer, nullable=False, default=50)
+    # Main market theme (one-line summary).
+    main_theme = Column(String(200), nullable=False, default='')
+    # Optional fallback flag (true if AI was unavailable and rules filled in).
+    used_fallback = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+    __table_args__ = (
+        UniqueConstraint('account_id', 'date', name='uq_battle_plan_account_date'),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<PaperBattlePlan(account={self.account_id}, date={self.date}, "
+            f"sentiment={self.sentiment_score})>"
+        )
+
+
 class DatabaseManager:
     """
     数据库管理器 - 单例模式

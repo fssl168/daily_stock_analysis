@@ -1,0 +1,392 @@
+# -*- coding: utf-8 -*-
+"""Paper trading API schemas (P3-A).
+
+Pydantic models for the paper trading subsystem endpoints. Mirrors the
+dataclasses/ORM rows exposed by ``paper_trading/``:
+
+- Account snapshots (cash, net value, return %)
+- Orders (create / cancel / modify / list)
+- Positions (list with PnL)
+- Trades (history)
+- Signals (audit trail with agent verdict)
+- Reflection notes (post-trade / daily reviews)
+- Battle plans (next-day operations card)
+- PM decisions (AI portfolio manager timeline)
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, Field
+
+
+# ---------------------------------------------------------------------------
+# Account
+# ---------------------------------------------------------------------------
+
+
+class AccountSnapshotResponse(BaseModel):
+    """Paper trading account snapshot."""
+
+    account_id: int
+    name: str
+    initial_capital: float
+    cash: float
+    frozen_cash: float
+    total_market_value: float = Field(0.0, description="Sum of position market value")
+    net_value: float = Field(..., description="Cash + market value")
+    return_pct: float = Field(0.0, description="(net_value/initial_capital - 1) * 100")
+    position_count: int = 0
+    status: str = "active"
+
+
+class AccountCreateRequest(BaseModel):
+    """Create-or-reset paper trading account."""
+
+    name: str = Field("default", description="Account name (unique)")
+    initial_capital: float = Field(1000.0, gt=0, description="Initial cash (CNY)")
+    reset_if_exists: bool = Field(
+        False, description="If true and account exists, reset its cash/positions"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Orders
+# ---------------------------------------------------------------------------
+
+
+class OrderCreateRequest(BaseModel):
+    """Submit a manual order (bypasses signal pipeline).
+
+    For strategy-driven orders, use the signal endpoint instead.
+    """
+
+    account_id: int
+    code: str
+    side: str = Field(..., description="buy | sell")
+    quantity: float = Field(..., gt=0)
+    order_type: str = Field("market", description="market | limit")
+    limit_price: Optional[float] = Field(None, gt=0)
+    name: Optional[str] = None
+    strategy_name: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class OrderCancelRequest(BaseModel):
+    """Cancel a pending signal and its associated order."""
+
+    signal_id: int
+    reason: Optional[str] = None
+
+
+class OrderModifyRequest(BaseModel):
+    """Modify a pending limit order's price/quantity."""
+
+    signal_id: int
+    new_limit_price: Optional[float] = Field(None, gt=0)
+    new_quantity: Optional[float] = Field(None, gt=0)
+    reason: Optional[str] = None
+
+
+class TradeResultResponse(BaseModel):
+    """Outcome of a submitted signal/order."""
+
+    signal_id: int
+    order_id: Optional[int] = None
+    side: str
+    code: str
+    status: str = Field(..., description="executed | rejected | pending")
+    fill_price: Optional[float] = None
+    fill_quantity: Optional[float] = None
+    fee: Optional[float] = None
+    reason: str = ""
+    risk_decisions: List[Dict[str, Any]] = Field(default_factory=list)
+    agent_review: Optional[Dict[str, Any]] = None
+
+
+class OrderItem(BaseModel):
+    """Paper order row."""
+
+    id: int
+    account_id: int
+    code: str
+    name: Optional[str] = None
+    side: str
+    order_type: str
+    price: Optional[float] = None
+    quantity: float
+    filled_quantity: float = 0.0
+    filled_price_avg: float = 0.0
+    status: str
+    strategy_name: Optional[str] = None
+    signal_id: Optional[int] = None
+    reason: Optional[str] = None
+    reject_reason: Optional[str] = None
+    created_at: Optional[str] = None
+    filled_at: Optional[str] = None
+
+
+class OrderListResponse(BaseModel):
+    account_id: int
+    total: int
+    items: List[OrderItem]
+
+
+# ---------------------------------------------------------------------------
+# Positions / Trades / Signals
+# ---------------------------------------------------------------------------
+
+
+class PositionItem(BaseModel):
+    account_id: int
+    code: str
+    name: Optional[str] = None
+    quantity: float
+    available_quantity: float
+    avg_cost: float
+    last_price: float
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
+    take_profit_2: Optional[float] = None
+    sltp_reasoning: Optional[str] = None
+    floating_pnl: float = 0.0
+    floating_pnl_pct: float = 0.0
+
+
+class PositionListResponse(BaseModel):
+    account_id: int
+    positions: List[PositionItem]
+    total_market_value: float
+
+
+class TradeItem(BaseModel):
+    id: int
+    order_id: int
+    account_id: int
+    code: str
+    name: Optional[str] = None
+    side: str
+    fill_price: float
+    fill_quantity: float
+    fee: float
+    realized_pnl: Optional[float] = None
+    traded_at: str
+
+
+class TradeListResponse(BaseModel):
+    account_id: int
+    total: int
+    items: List[TradeItem]
+
+
+class SignalItem(BaseModel):
+    id: int
+    account_id: int
+    code: str
+    name: Optional[str] = None
+    side: str
+    trigger_price: float
+    suggested_quantity: Optional[float] = None
+    strategy_name: Optional[str] = None
+    rule_name: Optional[str] = None
+    reason: Optional[str] = None
+    status: str
+    agent_confirmed: Optional[bool] = None
+    agent_reason: Optional[str] = None
+    reviewed_at: Optional[str] = None
+    created_at: str
+
+
+class SignalListResponse(BaseModel):
+    account_id: int
+    total: int
+    items: List[SignalItem]
+
+
+# ---------------------------------------------------------------------------
+# Reflection notes
+# ---------------------------------------------------------------------------
+
+
+class ReflectionNoteItem(BaseModel):
+    id: int
+    account_id: int
+    scope: str = Field(..., description="trade | daily | weekly | adhoc")
+    subject: str
+    summary: str
+    takeaway: str
+    lessons: List[str] = Field(default_factory=list)
+    tags: str = ""
+    mood: str = "neutral"
+    trade_id: Optional[int] = None
+    order_id: Optional[int] = None
+    code: Optional[str] = None
+    created_at: str
+
+
+class ReflectionListResponse(BaseModel):
+    account_id: int
+    total: int
+    items: List[ReflectionNoteItem]
+
+
+class DailyReflectionRequest(BaseModel):
+    """Trigger a daily reflection manually."""
+
+    account_id: int
+    review_date: Optional[str] = Field(
+        None, description="ISO date; defaults to today"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Battle plan
+# ---------------------------------------------------------------------------
+
+
+class HoldingPlanItem(BaseModel):
+    code: str
+    name: str = ""
+    current_price: float
+    strong_scenario: str = ""
+    neutral_scenario: str = ""
+    weak_scenario: str = ""
+    action_conditions: List[str] = Field(default_factory=list)
+    stop_loss: Optional[float] = None
+    take_profit_1: Optional[float] = None
+    take_profit_2: Optional[float] = None
+
+
+class CandidatePlanItem(BaseModel):
+    code: str
+    name: str = ""
+    auction_condition: str = ""
+    intraday_trigger: str = ""
+    position_ratio: float
+    stop_loss: Optional[float] = None
+    take_profit_1: Optional[float] = None
+    take_profit_2: Optional[float] = None
+    technical_score: float
+
+
+class BattlePlanItem(BaseModel):
+    plan_id: int
+    account_id: int
+    date: str
+    holdings_plans: List[HoldingPlanItem] = Field(default_factory=list)
+    candidates: List[CandidatePlanItem] = Field(default_factory=list)
+    market_review: str = ""
+    sentiment_score: int = 50
+    main_theme: str = ""
+    used_fallback: bool = False
+    created_at: Optional[str] = None
+
+
+class BattlePlanGenerateRequest(BaseModel):
+    """Trigger battle plan generation manually."""
+
+    account_id: int
+    target_date: Optional[str] = Field(
+        None, description="ISO date; defaults to next trading day"
+    )
+    watched_codes: Optional[List[str]] = None
+
+
+class BattlePlanMarkdownResponse(BaseModel):
+    """Markdown rendering of a battle plan (for Lark/DingTalk push)."""
+
+    plan_id: int
+    date: str
+    markdown: str
+
+
+# ---------------------------------------------------------------------------
+# PM decisions
+# ---------------------------------------------------------------------------
+
+
+class PMDecisionItem(BaseModel):
+    id: int
+    account_id: int
+    action: str
+    code: Optional[str] = None
+    name: Optional[str] = None
+    params: Dict[str, Any] = Field(default_factory=dict)
+    reason: str = ""
+    confidence: float = 0.0
+    elapsed_seconds: float = 0.0
+    used_fallback: bool = False
+    error: Optional[str] = None
+    created_at: str
+
+
+class PMDecisionListResponse(BaseModel):
+    account_id: int
+    total: int
+    items: List[PMDecisionItem]
+
+
+class PMDecisionTriggerRequest(BaseModel):
+    """Manually trigger one PM decision cycle."""
+
+    account_id: int
+    extra_context: Optional[Dict[str, Any]] = None
+
+
+# ---------------------------------------------------------------------------
+# Net value curve
+# ---------------------------------------------------------------------------
+
+
+class NetValuePoint(BaseModel):
+    date: str
+    net_value: float
+    cash: float
+    market_value: float
+    return_pct: float = 0.0
+
+
+class NetValueCurveResponse(BaseModel):
+    account_id: int
+    points: List[NetValuePoint]
+
+
+# ---------------------------------------------------------------------------
+# Listener status
+# ---------------------------------------------------------------------------
+
+
+class ListenerStatusResponse(BaseModel):
+    """Runtime status of the MarketListener (if started)."""
+
+    running: bool
+    account_id: Optional[int] = None
+    watched_codes_count: int = 0
+    strategies_count: int = 0
+    markets: List[str] = Field(default_factory=list)
+    last_settle_date: Optional[str] = None
+    last_battle_plan_date: Optional[str] = None
+    last_daily_reflection_date: Optional[str] = None
+    last_pm_decision_at: Optional[Dict[str, str]] = None
+
+
+class ListenerStartRequest(BaseModel):
+    """Start the MarketListener with optional overrides."""
+
+    account_id: int
+    watched_codes: Optional[List[str]] = None
+    markets: Optional[List[str]] = None
+    tick_interval_seconds: Optional[float] = Field(None, gt=0)
+    enable_strategies: bool = True
+    enable_agent_review: bool = False
+    enable_daily_reflection: bool = True
+    enable_battle_plan: bool = True
+    pm_decision_interval_seconds: Optional[float] = Field(None, ge=0)
+
+
+class ListenerControlResponse(BaseModel):
+    """Result of a listener start/stop command."""
+
+    running: bool
+    message: str = ""

@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>纸面交易 - AI 基金经理工作台</title>
+  <!-- Tailwind via CDN (dark terminal theme matches dsa-web) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Vue 3 via CDN -->
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <!-- ECharts via CDN for net-value curve -->
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <style>
+    :root {
+      --color-cyan: #00d4ff;
+      --color-purple: #6f61f1;
+      --color-success: #00ff88;
+      --color-warning: #ffaa00;
+      --color-danger: #ff4466;
+      --bg-base: #08080c;
+      --bg-card: #0d0d14;
+      --bg-elevated: #12121a;
+      --bg-hover: #1a1a24;
+      --border-dim: rgba(255, 255, 255, 0.06);
+      --border-default: rgba(255, 255, 255, 0.1);
+      --text-primary: #ffffff;
+      --text-secondary: #a0a0b0;
+      --text-muted: #606070;
+    }
+    html, body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg-base);
+      color: var(--text-primary);
+      font-family: 'Inter', 'SF Pro Display', system-ui, -apple-system, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    .terminal-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-default);
+      border-radius: 12px;
+      position: relative;
+      overflow: hidden;
+    }
+    .terminal-card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: 12px;
+      padding: 1px;
+      background: linear-gradient(135deg, rgba(0,212,255,0.18) 0%, rgba(0,212,255,0.05) 50%, rgba(0,212,255,0.18) 100%);
+      -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+      mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      pointer-events: none;
+    }
+    .tab-btn {
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      color: var(--text-secondary);
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      background: transparent;
+    }
+    .tab-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
+    .tab-btn.active {
+      color: var(--color-cyan);
+      background: rgba(0, 212, 255, 0.08);
+      border-color: rgba(0, 212, 255, 0.3);
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #00d4ff 0%, #00a8cc 100%);
+      color: #08080c;
+      font-weight: 600;
+      padding: 6px 14px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .btn-primary:hover { box-shadow: 0 0 16px rgba(0,212,255,0.4); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-ghost {
+      background: var(--bg-elevated);
+      color: var(--text-secondary);
+      padding: 6px 14px;
+      border-radius: 8px;
+      border: 1px solid var(--border-default);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .btn-ghost:hover { color: var(--text-primary); border-color: rgba(0,212,255,0.3); }
+    .btn-danger {
+      background: rgba(255, 68, 102, 0.1);
+      color: var(--color-danger);
+      padding: 6px 14px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 68, 102, 0.3);
+      cursor: pointer;
+    }
+    .btn-danger:hover { background: rgba(255, 68, 102, 0.2); }
+    .stat-value { font-family: 'JetBrains Mono', 'SF Mono', monospace; font-variant-numeric: tabular-nums; }
+    .text-profit { color: var(--color-success); }
+    .text-loss { color: var(--color-danger); }
+    .text-muted { color: var(--text-muted); }
+    .text-secondary { color: var(--text-secondary); }
+    .text-cyan { color: var(--color-cyan); }
+    .text-warning { color: var(--color-warning); }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+    .badge-success { background: rgba(0,255,136,0.1); color: var(--color-success); border: 1px solid rgba(0,255,136,0.3); }
+    .badge-warning { background: rgba(255,170,0,0.1); color: var(--color-warning); border: 1px solid rgba(255,170,0,0.3); }
+    .badge-danger { background: rgba(255,68,102,0.1); color: var(--color-danger); border: 1px solid rgba(255,68,102,0.3); }
+    .badge-info { background: rgba(0,212,255,0.1); color: var(--color-cyan); border: 1px solid rgba(0,212,255,0.3); }
+    .badge-muted { background: var(--bg-elevated); color: var(--text-muted); border: 1px solid var(--border-default); }
+    table.terminal-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    table.terminal-table th {
+      text-align: left; padding: 10px 12px; font-weight: 500;
+      color: var(--text-muted); border-bottom: 1px solid var(--border-default);
+      font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    table.terminal-table td { padding: 10px 12px; border-bottom: 1px solid var(--border-dim); }
+    table.terminal-table tr:hover td { background: var(--bg-hover); }
+    input.field, select.field {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-default);
+      border-radius: 6px;
+      padding: 6px 10px;
+      color: var(--text-primary);
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.15s ease;
+    }
+    input.field:focus, select.field:focus { border-color: rgba(0,212,255,0.5); }
+    .loading-shimmer {
+      background: linear-gradient(90deg, var(--bg-elevated) 25%, var(--bg-hover) 50%, var(--bg-elevated) 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+      border-radius: 4px;
+    }
+    @keyframes shimmer { 0% {background-position: 200% 0;} 100% {background-position: -200% 0;} }
+    .reflection-card {
+      background: var(--bg-elevated);
+      border-left: 3px solid var(--color-purple);
+      border-radius: 0 8px 8px 0;
+      padding: 14px 16px;
+    }
+    .decision-timeline-item {
+      position: relative;
+      padding-left: 24px;
+      padding-bottom: 16px;
+      border-left: 2px solid var(--border-default);
+    }
+    .decision-timeline-item:last-child { border-left-color: transparent; }
+    .decision-timeline-item::before {
+      content: '';
+      position: absolute;
+      left: -7px;
+      top: 4px;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--color-cyan);
+      box-shadow: 0 0 8px rgba(0,212,255,0.6);
+    }
+    .decision-timeline-item.hold::before { background: var(--text-muted); box-shadow: none; }
+    .decision-timeline-item.sell::before { background: var(--color-danger); box-shadow: 0 0 8px rgba(255,68,102,0.6); }
+    .scenario-card {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-default);
+      border-radius: 8px;
+      padding: 14px;
+    }
+    .scenario-card.bull { border-left: 3px solid var(--color-success); }
+    .scenario-card.neutral { border-left: 3px solid var(--color-warning); }
+    .scenario-card.bear { border-left: 3px solid var(--color-danger); }
+    .toast {
+      position: fixed; top: 20px; right: 20px; z-index: 50;
+      padding: 12px 18px; border-radius: 8px; font-size: 13px;
+      backdrop-filter: blur(8px);
+      animation: slideIn 0.3s ease;
+    }
+    .toast.success { background: rgba(0,255,136,0.15); color: var(--color-success); border: 1px solid rgba(0,255,136,0.3); }
+    .toast.error { background: rgba(255,68,102,0.15); color: var(--color-danger); border: 1px solid rgba(255,68,102,0.3); }
+    @keyframes slideIn { from {transform: translateX(100%); opacity: 0;} to {transform: translateX(0); opacity: 1;} }
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: var(--bg-base); }
+    ::-webkit-scrollbar-thumb { background: var(--bg-hover); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--border-default); }
+  </style>
+</head>
+<body>
+  <div id="app" class="min-h-screen"></div>
+
+  <!-- Paper trading page logic (P3-B) -->
+  <script src="/paper-trading/static/paper_trading.js"></script>
+</body>
+</html>

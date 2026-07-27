@@ -1,0 +1,25 @@
+﻿def register_paper_trading_tools(
+    registry: ToolRegistry,
+    engine: Any,
+    account_id: int,
+    reflection_engine: Optional[Any] = None,
+) -> None:
+    """Register ``paper_trading_*`` tools on the given registry.
+
+    Tools are closures over the TradingEngine + account_id, so each tool
+    call automatically targets the PM agent's account. Re-registering a
+    tool replaces the handler (idempotent).
+
+    Tools registered:
+    - paper_trading_get_account_snapshot
+    - paper_trading_get_positions
+    - paper_trading_get_open_orders
+    - paper_trading_place_order
+    - paper_trading_cancel_order
+    - paper_trading_modify_order
+    - paper_trading_get_recent_reflections (no-op if reflection_engine is None)
+    """
+    from paper_trading.order import OrderRequest, OrderSide, OrderType
+
+    # ---- Account snapshot ----
+    

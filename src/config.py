@@ -284,7 +284,69 @@ class Config:
     
     # Telegram 机器人 - 已有 telegram_bot_token, telegram_chat_id
     telegram_webhook_secret: Optional[str] = None   # Webhook 密钥
-        
+
+    # === 纸面交易（Paper Trading）配置 ===
+    # Master switch for the whole paper-trading subsystem. When False, the
+    # API endpoints still respond but the market listener will not start
+    # automatically and PM/agent review layers stay inert.
+    paper_trading_enabled: bool = False
+    # Default account settings
+    paper_trading_initial_capital: float = 1000.0
+    paper_trading_default_account_name: str = "default"
+    paper_trading_default_account_id: int = 0
+    # Strategy directory for strategies_v2 YAML files. When None, listener
+    # falls back to ./paper_trading/strategies/ (may not exist).
+    paper_trading_strategy_dir: Optional[str] = None
+    # Comma-separated watched codes for the listener. Empty -> use stock_list.
+    paper_trading_watched_codes: List[str] = field(default_factory=list)
+    # Comma-separated market list (cn/hk/us). Default ["cn"].
+    paper_trading_markets: List[str] = field(default_factory=lambda: ["cn"])
+
+    # Market listener tuning
+    paper_trading_listener_tick_interval_seconds: float = 10.0
+    paper_trading_listener_signal_cooldown_seconds: float = 900.0
+    paper_trading_listener_daily_df_cache_seconds: float = 300.0
+    paper_trading_listener_enable_strategies: bool = True
+    paper_trading_listener_enable_daily_reflection: bool = True
+    paper_trading_listener_enable_battle_plan: bool = True
+    paper_trading_listener_pm_decision_interval_seconds: float = 600.0
+
+    # Agent risk-control layer (Phase 4)
+    paper_trading_enable_agent_review: bool = False
+    paper_trading_agent_review_timeout_seconds: float = 180.0
+    paper_trading_agent_review_fallback_on_failure: bool = True
+    paper_trading_agent_review_fallback_decision: bool = True  # True = pass-through on failure
+    paper_trading_agent_review_max_retries: int = 0
+
+    # PM agent & AI battle plan
+    paper_trading_enable_pm_agent: bool = False
+    paper_trading_enable_battle_plan_ai: bool = False
+
+    # Reflection engine (P0-D)
+    paper_trading_reflection_timeout_seconds: float = 180.0
+    paper_trading_reflection_fallback_on_failure: bool = True
+    paper_trading_reflection_max_retries: int = 0
+
+    # Content generator (P2-A)
+    paper_trading_narrative_timeout_seconds: float = 120.0
+    paper_trading_report_output_dir: Optional[str] = None
+
+    # Notification integration (P2-B) — dedicated paper-trading webhooks
+    paper_trading_lark_webhook_url: Optional[str] = None
+    paper_trading_dingtalk_webhook_url: Optional[str] = None
+    paper_trading_dingtalk_secret: Optional[str] = None
+    # When True, also fan-out to the global NotificationService channels.
+    paper_trading_broadcast_enabled: bool = False
+
+    # SL/TP calculator (P1-A)
+    paper_trading_sltp_atr_period: int = 14
+    paper_trading_sltp_use_chip_distribution: bool = False
+    paper_trading_sltp_use_fibonacci: bool = True
+    # Enable automatic SL/TP computation on every BUY fill. When False, the
+    # position keeps whatever stop_loss/take_profit were supplied by the
+    # signal/agent and the SLTP calculator is only available on demand.
+    paper_trading_enable_auto_sltp: bool = True
+
     # 单例实例存储
     _instance: Optional['Config'] = None
     
@@ -593,7 +655,96 @@ class Config:
             # - tushare: Tushare Pro，需要2000积分，数据全面
             realtime_source_priority=cls._resolve_realtime_source_priority(),
             realtime_cache_ttl=int(os.getenv('REALTIME_CACHE_TTL', '600')),
-            circuit_breaker_cooldown=int(os.getenv('CIRCUIT_BREAKER_COOLDOWN', '300'))
+            circuit_breaker_cooldown=int(os.getenv('CIRCUIT_BREAKER_COOLDOWN', '300')),
+            # === 纸面交易（Paper Trading）配置 ===
+            paper_trading_enabled=os.getenv('PAPER_TRADING_ENABLED', 'false').lower() == 'true',
+            paper_trading_initial_capital=float(os.getenv('PAPER_TRADING_INITIAL_CAPITAL', '1000.0')),
+            paper_trading_default_account_name=os.getenv('PAPER_TRADING_DEFAULT_ACCOUNT_NAME', 'default'),
+            paper_trading_default_account_id=int(os.getenv('PAPER_TRADING_DEFAULT_ACCOUNT_ID', '0')),
+            paper_trading_strategy_dir=os.getenv('PAPER_TRADING_STRATEGY_DIR'),
+            paper_trading_watched_codes=[
+                c.strip().upper()
+                for c in os.getenv('PAPER_TRADING_WATCHED_CODES', '').split(',')
+                if c.strip()
+            ],
+            paper_trading_markets=[
+                m.strip().lower()
+                for m in os.getenv('PAPER_TRADING_MARKETS', 'cn').split(',')
+                if m.strip()
+            ] or ['cn'],
+            paper_trading_listener_tick_interval_seconds=float(
+                os.getenv('PAPER_TRADING_LISTENER_TICK_INTERVAL_SECONDS', '10.0')
+            ),
+            paper_trading_listener_signal_cooldown_seconds=float(
+                os.getenv('PAPER_TRADING_LISTENER_SIGNAL_COOLDOWN_SECONDS', '900.0')
+            ),
+            paper_trading_listener_daily_df_cache_seconds=float(
+                os.getenv('PAPER_TRADING_LISTENER_DAILY_DF_CACHE_SECONDS', '300.0')
+            ),
+            paper_trading_listener_enable_strategies=os.getenv(
+                'PAPER_TRADING_LISTENER_ENABLE_STRATEGIES', 'true'
+            ).lower() == 'true',
+            paper_trading_listener_enable_daily_reflection=(
+                os.getenv('PAPER_TRADING_ENABLE_REFLECTION')
+                or os.getenv('PAPER_TRADING_LISTENER_ENABLE_DAILY_REFLECTION', 'true')
+            ).lower() == 'true',
+            paper_trading_listener_enable_battle_plan=(
+                os.getenv('PAPER_TRADING_ENABLE_BATTLE_PLAN')
+                or os.getenv('PAPER_TRADING_LISTENER_ENABLE_BATTLE_PLAN', 'true')
+            ).lower() == 'true',
+            paper_trading_listener_pm_decision_interval_seconds=float(
+                os.getenv('PAPER_TRADING_LISTENER_PM_DECISION_INTERVAL_SECONDS', '600.0')
+            ),
+            paper_trading_enable_agent_review=os.getenv(
+                'PAPER_TRADING_ENABLE_AGENT_REVIEW', 'false'
+            ).lower() == 'true',
+            paper_trading_agent_review_timeout_seconds=float(
+                os.getenv('PAPER_TRADING_AGENT_REVIEW_TIMEOUT_SECONDS', '180.0')
+            ),
+            paper_trading_agent_review_fallback_on_failure=os.getenv(
+                'PAPER_TRADING_AGENT_REVIEW_FALLBACK_ON_FAILURE', 'true'
+            ).lower() == 'true',
+            paper_trading_agent_review_fallback_decision=os.getenv(
+                'PAPER_TRADING_AGENT_REVIEW_FALLBACK_DECISION', 'true'
+            ).lower() == 'true',
+            paper_trading_agent_review_max_retries=int(
+                os.getenv('PAPER_TRADING_AGENT_REVIEW_MAX_RETRIES', '0')
+            ),
+            paper_trading_enable_pm_agent=os.getenv(
+                'PAPER_TRADING_ENABLE_PM_AGENT', 'false'
+            ).lower() == 'true',
+            paper_trading_enable_battle_plan_ai=os.getenv(
+                'PAPER_TRADING_ENABLE_BATTLE_PLAN_AI', 'false'
+            ).lower() == 'true',
+            paper_trading_reflection_timeout_seconds=float(
+                os.getenv('PAPER_TRADING_REFLECTION_TIMEOUT_SECONDS', '180.0')
+            ),
+            paper_trading_reflection_fallback_on_failure=os.getenv(
+                'PAPER_TRADING_REFLECTION_FALLBACK_ON_FAILURE', 'true'
+            ).lower() == 'true',
+            paper_trading_reflection_max_retries=int(
+                os.getenv('PAPER_TRADING_REFLECTION_MAX_RETRIES', '0')
+            ),
+            paper_trading_narrative_timeout_seconds=float(
+                os.getenv('PAPER_TRADING_NARRATIVE_TIMEOUT_SECONDS', '120.0')
+            ),
+            paper_trading_report_output_dir=os.getenv('PAPER_TRADING_REPORT_OUTPUT_DIR'),
+            paper_trading_lark_webhook_url=os.getenv('PAPER_TRADING_LARK_WEBHOOK_URL'),
+            paper_trading_dingtalk_webhook_url=os.getenv('PAPER_TRADING_DINGTALK_WEBHOOK_URL'),
+            paper_trading_dingtalk_secret=os.getenv('PAPER_TRADING_DINGTALK_SECRET'),
+            paper_trading_broadcast_enabled=os.getenv(
+                'PAPER_TRADING_BROADCAST_ENABLED', 'false'
+            ).lower() == 'true',
+            paper_trading_sltp_atr_period=int(os.getenv('PAPER_TRADING_SLTP_ATR_PERIOD', '14')),
+            paper_trading_sltp_use_chip_distribution=os.getenv(
+                'PAPER_TRADING_SLTP_USE_CHIP_DISTRIBUTION', 'false'
+            ).lower() == 'true',
+            paper_trading_sltp_use_fibonacci=os.getenv(
+                'PAPER_TRADING_SLTP_USE_FIBONACCI', 'true'
+            ).lower() == 'true',
+            paper_trading_enable_auto_sltp=os.getenv(
+                'PAPER_TRADING_ENABLE_AUTO_SLTP', 'true'
+            ).lower() == 'true',
         )
     
     @classmethod

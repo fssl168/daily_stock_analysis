@@ -174,14 +174,6 @@ if keyword_loop_start >= 0:
 write_file('D:/leanpython/daily_stock_analysis/src/agent/portfolio_manager_agent.py', pa_content)
 
 # ============================================================
-# FIX TO market_listener.py (P1-A) - Replace with complete version
-# ============================================================
-
-ml_content = read_file('D:/leanpython/daily_stock_analysis/paper_trading/market_listener_v2.py')
-write_file('D:/leanpython/daily_stock_analysis/paper_trading/market_listener.py', ml_content)
-print("[ML] Replaced market_listener.py with P1-A complete version")
-
-# ============================================================
 # Update alignment document summary
 # ============================================================
 

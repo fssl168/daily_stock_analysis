@@ -19,8 +19,8 @@ from typing import Dict, List, Optional, Union
 
 logger = logging.getLogger(__name__)
 
-# Built-in skill YAML directory (project_root/strategies/ kept for compatibility)
-_BUILTIN_SKILLS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "strategies"
+# Built-in skill YAML directory
+_BUILTIN_SKILLS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "paper_trading" / "strategies" / "configs"
 
 
 @dataclass

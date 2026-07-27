@@ -103,7 +103,7 @@ from src.storage import (
     PaperReflection,
     PaperSignal,
 )
-from strategies_v2.rule_engine import Signal
+from paper_trading.strategies import Signal
 
 logger = logging.getLogger(__name__)
 

@@ -1,33 +1,73 @@
 import { defineConfig, devices } from '@playwright/test';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-/**
- * Playwright configuration for dsa-web.
- *
- * The dev server is started automatically for each test run. Set
- * `BASE_URL` and `CI` via environment variables to override the defaults.
- */
+const currentDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(currentDir, '../..');
+const shouldRunWebSmoke = !!process.env.DSA_WEB_SMOKE_PASSWORD;
+
+function resolveBackendCommand() {
+  if (process.env.DSA_WEB_SMOKE_BACKEND_CMD) {
+    return process.env.DSA_WEB_SMOKE_BACKEND_CMD;
+  }
+
+  const unixVenvPython = path.join(repoRoot, '.venv', 'bin', 'python');
+  if (fs.existsSync(unixVenvPython)) {
+    return `${unixVenvPython} main.py --webui-only --host 127.0.0.1 --port 8000`;
+  }
+
+  const windowsVenvPython = path.join(repoRoot, '.venv', 'Scripts', 'python.exe');
+  if (fs.existsSync(windowsVenvPython)) {
+    return `"${windowsVenvPython}" main.py --webui-only --host 127.0.0.1 --port 8000`;
+  }
+
+  return 'python main.py --webui-only --host 127.0.0.1 --port 8000';
+}
+
 export default defineConfig({
   testDir: './e2e',
-  fullyParallel: true,
+  fullyParallel: !shouldRunWebSmoke,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 1 : undefined,
-  reporter: process.env.CI ? 'github' : 'list',
+  reporter: 'list',
   use: {
-    baseURL: process.env.BASE_URL || 'http://localhost:5173',
+    baseURL: shouldRunWebSmoke
+      ? 'http://127.0.0.1:4173'
+      : process.env.BASE_URL || 'http://localhost:5173',
+    locale: 'zh-CN',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
+    video: 'retain-on-failure',
   },
+  webServer: shouldRunWebSmoke
+    ? [
+        {
+          command: resolveBackendCommand(),
+          cwd: repoRoot,
+          url: 'http://127.0.0.1:8000/api/v1/auth/status',
+          reuseExistingServer: !process.env.CI,
+          timeout: 120_000,
+        },
+        {
+          command: 'npm run dev -- --host 127.0.0.1 --port 4173',
+          cwd: currentDir,
+          url: 'http://127.0.0.1:4173',
+          reuseExistingServer: !process.env.CI,
+          timeout: 120_000,
+        },
+      ]
+    : {
+        command: 'npm run dev',
+        url: 'http://localhost:5173',
+        reuseExistingServer: !process.env.CI,
+        timeout: 120_000,
+      },
   projects: [
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
     },
   ],
-  webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:5173',
-    reuseExistingServer: !process.env.CI,
-    timeout: 120 * 1000,
-  },
 });

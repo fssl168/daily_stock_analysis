@@ -88,18 +88,29 @@
    - `GEMINI_MODEL`
    - `REPORT_TYPE`
 
+> 兼容说明：每日分析 workflow 也会绑定名为 `STOCK_LIST` 的 Environment，因此误把 `STOCK_LIST` 填到该 Environment variables 中也能被读取；但推荐位置仍是 Repository variables。除非你希望每日任务等待人工审批，否则不要给该 Environment 配置 required reviewers、wait timer 或部署分支限制。
+
 ---
 
 ### Q6: 修改 .env 文件后配置没有生效？
 
 **解决方案**：
 1. 确保 `.env` 文件位于项目根目录
-2. **Docker 部署**：修改后需重启容器
+2. **Docker 部署 / WebUI 系统设置**：
+   - `--env-file .env` / Compose `env_file` 只会把宿主机 `.env` 作为启动环境变量注入容器，不会自动创建或回写容器内 `/app/.env`
+   - WebUI 设置页会在当前活跃 `.env` 文件缺少某些键时展示启动注入的同名环境变量作为兜底；但“导出 `.env`”仍只导出当前活跃配置文件内容
+   - WebUI 保存后的 `STOCK_LIST`、`SCHEDULE_ENABLED`、`SCHEDULE_TIME`、`SCHEDULE_TIMES`、`SCHEDULE_RUN_IMMEDIATELY`、`RUN_IMMEDIATELY` 会写回容器内的 `.env`
+   - WebUI 保存后会触发当前进程的配置重载；运行中的读取路径会同步使用最新写回的 `.env`，例如定时任务会继续热读取保存后的 `STOCK_LIST`
+   - 如果容器启动命令里传入了这些同名环境变量（如 `--env-file .env`、`docker run -e ...` 或 Compose `environment:`），后续重启时仍可能以启动环境变量为准；要让 WebUI 保存值接管，请同步更新或移除这些同名 override
+   - 如需持久化 WebUI 保存的配置，请将 `ENV_FILE` 指向 `/app/data/runtime.env` 等可写数据卷文件，不要把宿主机 `.env` 单文件挂载到 `/app/.env`
+   - `SCHEDULE_ENABLED`、`SCHEDULE_TIME`、`SCHEDULE_TIMES` 保存后会让 WebUI/API/Desktop 长运行进程按新配置启停或重建 runtime scheduler
+   - `SCHEDULE_RUN_IMMEDIATELY` 与 `RUN_IMMEDIATELY` 仍属于启动期/一次性运行配置，保存后不会立即触发一次分析
+3. **Docker 手工改 `.env` 后**：修改后仍建议重启容器
    ```bash
    docker-compose down && docker-compose up -d
    ```
-3. **GitHub Actions**：`.env` 文件不生效，必须在 Secrets/Variables 中配置
-4. 检查是否有多个 `.env` 文件（如 `.env.local`）导致覆盖
+4. **GitHub Actions**：`.env` 文件不生效，必须在 Secrets/Variables 中配置
+5. 检查是否有多个 `.env` 文件（如 `.env.local`）导致覆盖
 
 ---
 
@@ -115,6 +126,28 @@ PROXY_PORT=10809
 ```
 
 > ⚠️ 注意：代理配置仅对本地运行生效，GitHub Actions 环境无需配置代理。
+
+---
+
+### LLM 配置常见问题
+
+> 完整说明见 [LLM 配置指南](LLM_CONFIG_GUIDE.md)。
+
+**Q: 配置了 GEMINI_API_KEY 和 LLM_CHANNELS，为什么只用渠道？**
+
+系统按优先级只取一种：高级模型路由 YAML（`LITELLM_CONFIG`）> `LLM_CHANNELS` > legacy keys。但 YAML 仅在文件可正常解析且产出了有效 `model_list` 时才生效；如果 YAML 路径无效或内容为空，系统会自动回退到 `LLM_CHANNELS` 或 legacy keys。一旦某一层级实际生效，更低优先级的配置不参与解析。
+
+**Q: check_env 输出“未配置可用 AI 模型”怎么办？**
+
+默认先选一种服务商并填写对应 API Key；如果需要固定主模型，再补 `LITELLM_MODEL=provider/model`；如果要多模型切换，再配置 `LLM_CHANNELS` 或高级模型路由 YAML。运行 `python scripts/check_env.py --config` 校验配置，`python scripts/check_env.py --llm` 实际调用 API 测试。
+
+**Q: 如何同时使用多个模型（如 AIHubmix + DeepSeek + Gemini）？**
+
+使用渠道模式：设置 `LLM_CHANNELS=aihubmix,deepseek,gemini`，并配置各渠道的 `LLM_{NAME}_BASE_URL`、`LLM_{NAME}_API_KEY`、`LLM_{NAME}_MODELS`。也可在 Web 设置页 → AI 模型 → AI 模型接入 中可视化配置。
+
+**Q: 问股/Agent 提示未配置可用 LLM，但我只有旧的 `GEMINI_*` / `OPENAI_*` / `ANTHROPIC_*` 配置，怎么办？**
+
+先确认当前是否启用了 `LITELLM_CONFIG` 或 `LLM_CHANNELS`；如果启用了，上层配置会覆盖 legacy keys。若你没有启用这两层，且 `AGENT_LITELLM_MODEL` 为空，问股 Agent 仍会自动继承 legacy provider 模型：`GEMINI_MODEL`、`OPENAI_MODEL`、`ANTHROPIC_MODEL` 分别映射到对应 provider 前缀的 LiteLLM 模型名。此次修复不会静默迁移或清空旧配置，只是把“真实缺失原因”直接返回到前端，便于你判断到底是缺 key、缺模型名，还是被上层配置覆盖。完整兼容语义见 [LLM 配置指南](LLM_CONFIG_GUIDE.md) 中“问股 Agent / LiteLLM 配置兼容说明”。
 
 ---
 
@@ -185,15 +218,60 @@ PROXY_PORT=10809
 ```bash
 # 不需要配置 GEMINI_API_KEY
 OPENAI_API_KEY=sk-xxxxxxxx
-OPENAI_BASE_URL=https://api.deepseek.com/v1
-OPENAI_MODEL=deepseek-chat
-# 思考模式：deepseek-reasoner、deepseek-r1、qwq 等自动识别；deepseek-chat 系统按模型名自动启用
+OPENAI_BASE_URL=https://api.deepseek.com
+OPENAI_MODEL=deepseek-v4-flash
+# deepseek-chat / deepseek-reasoner 仍兼容，但官方已标记为 2026/07/24 后废弃
 ```
 
 支持的模型服务：
-- DeepSeek: `https://api.deepseek.com/v1`
+- DeepSeek: `https://api.deepseek.com`
 - 通义千问: `https://dashscope.aliyuncs.com/compatible-mode/v1`
 - Moonshot: `https://api.moonshot.cn/v1`
+
+---
+
+### Q12b: 如何使用 Ollama 本地模型？
+
+**配置方法**：使用 `OLLAMA_API_BASE` + `LITELLM_MODEL`，或渠道模式（`LLM_CHANNELS=ollama` + `LLM_OLLAMA_BASE_URL` + `LLM_OLLAMA_MODELS`）。
+
+**避坑**：不要使用 `OPENAI_BASE_URL` 配置 Ollama，否则系统会错误拼接 URL（如 404、`api/generate/api/show`）。详见 [LLM 配置指南](LLM_CONFIG_GUIDE.md) 示例 4 与渠道示例。
+
+---
+
+### Q12c: 运行时报 `OllamaException / APIConnectionError`（All LLM models failed）怎么办？
+
+**症状**：日志出现 `litellm.APIConnectionError: OllamaException` 或 `Analysis failed: All LLM models failed (tried 1 model(s))`。
+
+逐项排查以下 5 个检查点：
+
+1. **Ollama 服务是否已启动**
+   ```bash
+   # 查看进程
+   pgrep -a ollama
+   # 若无输出则先启动
+   ollama serve
+   ```
+   确认服务正在监听：`curl http://localhost:11434`，应返回 `Ollama is running`。
+
+2. **`OLLAMA_API_BASE` 是否配置正确**
+   - ✅ 正确：`OLLAMA_API_BASE=http://localhost:11434`
+   - ❌ 错误：把 Ollama 地址填到 `OPENAI_BASE_URL`，会导致 URL 路径拼错（如 `…/api/generate/api/show`）。
+
+3. **模型名称是否加了 `ollama/` 前缀**
+   - ✅ 正确：`LITELLM_MODEL=ollama/qwen3:8b`
+   - ❌ 错误：`LITELLM_MODEL=qwen3:8b`（缺少前缀，litellm 无法路由到 Ollama）
+
+4. **模型是否已下载到本地**
+   ```bash
+   ollama list          # 查看已有模型
+   ollama pull qwen3:8b # 如无则先拉取
+   ```
+
+5. **远程部署 / Docker 时的网络与防火墙**
+   - 若 Ollama 和程序不在同一主机，需将 `OLLAMA_API_BASE` 改为实际 IP，如 `http://192.168.1.100:11434`。
+   - 确认防火墙已放行 11434 端口，且 Ollama 启动时绑定了正确地址（`OLLAMA_HOST=0.0.0.0:11434`）。
+
+> 完整配置示例见 [LLM 配置指南 → 示例 4（Ollama）](LLM_CONFIG_GUIDE.md#example-4-ollama)。
 
 ---
 
@@ -248,6 +326,25 @@ OPENAI_MODEL=deepseek-chat
 
 ---
 
+### Q14.2: Docker 安装时，软件版本号写在哪个文件里？
+
+**结论**：对 Docker 用户来说，**最权威的版本不是某个 Python 源文件常量，而是你实际使用的镜像 tag**。
+
+**为什么**：
+1. 仓库的 Docker 发布由 `.github/workflows/docker-publish.yml` 触发，只有推送 `v*.*.*` 形式的 Git tag（例如 `v3.12.0`）时才会生成对应发布镜像。
+2. 这意味着 Docker 镜像版本本质上跟随 **GitHub Release / Git tag**，而不是写死在 `main.py`、`server.py` 或其他后端源码里。
+3. `apps/dsa-web/package.json` 里的 `version` 当前是占位值 `0.0.0`，WebUI “版本信息”卡片更适合用来确认静态资源是否已重建，不应当作 Docker 发布版本。
+4. 桌面端版本是单独维护的，写在 `apps/dsa-desktop/package.json` 的 `version` 字段；它只代表 Electron 桌面端，不代表 Docker 镜像版本。
+
+**怎么查当前 Docker 版本**：
+1. **先看部署命令或 Compose 文件里的镜像 tag**：例如 `ghcr.io/zhulinsen/daily_stock_analysis:v3.12.0`，其中 `v3.12.0` 就是当前部署版本。
+2. **如果你拉的是 `latest`**：请回看当时的 `docker pull` / `docker-compose.yml` / 部署脚本，或对照 [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) 确认对应发布记录。
+3. **如果只是想确认前端是否更新到新构建**：可以打开 WebUI 的“系统设置”页查看 `构建标识` / `构建时间`；这能帮助确认静态资源是否刷新，但不等同于 Docker 镜像发布版本。
+
+**建议**：如果你想避免重复更新，部署时尽量固定使用明确的版本 tag（如 `v3.12.0`），不要长期依赖 `latest`。
+
+---
+
 ## 🔧 其他问题
 
 ### Q15: 如何只运行大盘复盘，不分析个股？
@@ -299,4 +396,4 @@ python main.py --market-only
 
 ---
 
-*最后更新：2026-02-28*
+*最后更新：2026-04-20*

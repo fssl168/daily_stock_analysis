@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from strategies_v2.indicators import (
+from paper_trading.strategies import (
     FIB_RATIOS,
     compute_atr,
     compute_fibonacci_retracement,

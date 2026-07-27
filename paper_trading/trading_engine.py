@@ -49,7 +49,7 @@ from src.storage import (
     PaperSignal,
     get_db,
 )
-from strategies_v2.rule_engine import Signal
+from paper_trading.strategies import Signal
 
 logger = logging.getLogger(__name__)
 

@@ -43,7 +43,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from zoneinfo import ZoneInfo
 
 from paper_trading.trading_engine import TradeResult, TradingEngine
-from strategies_v2 import RuleEngine, RuleStrategy, Signal, load_strategies_from_dir
+from paper_trading.strategies import RuleEngine, RuleStrategy, Signal, load_strategies_from_dir
 
 logger = logging.getLogger(__name__)
 
@@ -602,7 +602,7 @@ class MarketListener:
                 continue
             try:
                 account_snap = self.engine.account_mgr.snapshot(account_id)
-                from strategies_v2.rule_engine import Signal as V2Signal
+                from paper_trading.strategies import Signal as V2Signal
                 review_signal = V2Signal(
                     side="hold",
                     code=code,

@@ -3,7 +3,7 @@
 
 Real-time paper trading with:
 - Virtual account (default initial capital 1000 CNY)
-- Programmatic rule strategies (strategies_v2/) as primary signals
+- Programmatic rule strategies (strategies/) as primary signals
 - Agent risk-control layer for secondary confirmation
 - Intraday market listener triggering order matching
 - Order / position / trade / signal / net-value persistence (SQLAlchemy ORM)

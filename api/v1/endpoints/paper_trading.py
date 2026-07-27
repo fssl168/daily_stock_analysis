@@ -35,10 +35,15 @@ from api.v1.schemas.common import ErrorResponse
 from api.v1.schemas.paper_trading import (
     AccountCreateRequest,
     AccountSnapshotResponse,
+    BatchOrderCreateRequest,
+    BatchOrderResponse,
     BattlePlanGenerateRequest,
     BattlePlanItem,
     BattlePlanMarkdownResponse,
+    ConditionalOrderCreateRequest,
+    ConditionalOrderItem,
     DailyReflectionRequest,
+    DrawdownItem,
     HoldingPlanItem,
     ListenerControlResponse,
     ListenerStartRequest,
@@ -48,15 +53,18 @@ from api.v1.schemas.paper_trading import (
     OrderCancelRequest,
     OrderCreateRequest,
     OrderItem,
+    OrderListFilterParams,
     OrderListResponse,
     OrderModifyRequest,
     PMDecisionItem,
     PMDecisionListResponse,
     PMDecisionTriggerRequest,
+    PerformanceMetricsResponse,
     PositionItem,
     PositionListResponse,
     ReflectionListResponse,
     ReflectionNoteItem,
+    RiskMetricsResponse,
     SignalItem,
     SignalListResponse,
     TradeItem,
@@ -70,8 +78,11 @@ from paper_trading import (
     MarketListener,
     MarketListenerConfig,
     OrderManager,
+    OrderRequest,
+    OrderSide,
     OrderType,
     PaperAccountManager,
+    PerformanceAnalyzer,
     PositionManager,
     ReflectionEngine,
     RiskChecker,
@@ -120,6 +131,7 @@ class PaperTradingService:
         self._order_mgr: Optional[OrderManager] = None
         self._position_mgr: Optional[PositionManager] = None
         self._risk_checker: Optional[RiskChecker] = None
+        self._performance_analyzer: Optional[PerformanceAnalyzer] = None
         self._sltp_calculator: Optional[SLTPCalculator] = None
         self._agent_reviewer: Optional[AgentRiskReviewer] = None
         self._reflection_engine: Optional[ReflectionEngine] = None
@@ -149,13 +161,26 @@ class PaperTradingService:
 
     def risk_checker(self) -> RiskChecker:
         if self._risk_checker is None:
+            from paper_trading.risk import RiskConfig
+
+            risk_config = RiskConfig(
+                max_daily_loss_pct=float(
+                    getattr(self.config, "paper_trading_max_daily_loss_pct", 0.05)
+                ),
+            )
             self._risk_checker = RiskChecker(
                 db_manager=self.db,
                 account_manager=self.account_mgr(),
                 position_manager=self.position_mgr(),
                 fee_model=DEFAULT_FEE_MODEL,
+                config=risk_config,
             )
         return self._risk_checker
+
+    def performance_analyzer(self) -> PerformanceAnalyzer:
+        if self._performance_analyzer is None:
+            self._performance_analyzer = PerformanceAnalyzer(db_manager=self.db)
+        return self._performance_analyzer
 
     def sltp_calculator(self) -> Optional[SLTPCalculator]:
         if self._sltp_calculator is None:
@@ -381,6 +406,64 @@ def _parse_iso_date(value: Optional[str]) -> Optional[date]:
             return datetime.fromisoformat(value).date()
         except ValueError:
             return None
+
+
+def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _order_to_item(order: Any) -> OrderItem:
+    """Serialize a PaperOrder ORM row to OrderItem."""
+    return OrderItem(
+        id=int(order.id),
+        account_id=int(order.account_id),
+        code=str(order.code),
+        name=order.name,
+        side=str(order.side),
+        order_type=str(order.order_type),
+        price=order.price,
+        quantity=float(order.quantity or 0.0),
+        filled_quantity=float(order.filled_quantity or 0.0),
+        filled_price_avg=float(order.filled_price_avg or 0.0),
+        status=str(order.status),
+        strategy_name=order.strategy_name,
+        signal_id=order.signal_id,
+        reason=order.reason,
+        reject_reason=order.reject_reason,
+        created_at=order.created_at.isoformat() if order.created_at else None,
+        filled_at=order.filled_at.isoformat() if order.filled_at else None,
+    )
+
+
+def _conditional_order_to_item(order: Any) -> ConditionalOrderItem:
+    """Serialize a PaperOrder ORM row to ConditionalOrderItem."""
+    return ConditionalOrderItem(
+        id=int(order.id),
+        account_id=int(order.account_id),
+        code=str(order.code),
+        name=order.name,
+        side=str(order.side),
+        order_type=str(order.order_type),
+        price=order.price,
+        quantity=float(order.quantity or 0.0),
+        filled_quantity=float(order.filled_quantity or 0.0),
+        filled_price_avg=float(order.filled_price_avg or 0.0),
+        status=str(order.status),
+        strategy_name=order.strategy_name,
+        signal_id=order.signal_id,
+        reason=order.reason,
+        reject_reason=order.reject_reason,
+        created_at=order.created_at.isoformat() if order.created_at else None,
+        filled_at=order.filled_at.isoformat() if order.filled_at else None,
+        trigger_price=order.trigger_price,
+        linked_order_id=order.linked_order_id,
+        triggered_at=order.triggered_at.isoformat() if order.triggered_at else None,
+    )
 
 
 def _row_to_decision_dict(row: PaperDecision) -> Dict[str, Any]:
@@ -630,6 +713,95 @@ def get_net_value_curve(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.get(
+    "/accounts/{account_id}/performance",
+    response_model=PerformanceMetricsResponse,
+    responses={
+        404: {"description": "Account not found", "model": ErrorResponse},
+        500: {"description": "Server error", "model": ErrorResponse},
+    },
+    summary="Get account performance metrics",
+)
+def get_account_performance(
+    account_id: int,
+    start_date: Optional[str] = Query(None, description="ISO date (inclusive)"),
+    end_date: Optional[str] = Query(None, description="ISO date (inclusive)"),
+    service: PaperTradingService = Depends(get_paper_trading_service),
+) -> PerformanceMetricsResponse:
+    try:
+        start = _parse_iso_date(start_date)
+        end = _parse_iso_date(end_date)
+        metrics = service.performance_analyzer().calculate(
+            account_id, start_date=start, end_date=end
+        )
+        return PerformanceMetricsResponse(**metrics.to_dict())
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error("[paper_trading] get_account_performance failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get(
+    "/accounts/{account_id}/drawdown",
+    response_model=List[DrawdownItem],
+    responses={
+        404: {"description": "Account not found", "model": ErrorResponse},
+        500: {"description": "Server error", "model": ErrorResponse},
+    },
+    summary="Get account drawdown curve",
+)
+def get_account_drawdown(
+    account_id: int,
+    start_date: Optional[str] = Query(None, description="ISO date (inclusive)"),
+    end_date: Optional[str] = Query(None, description="ISO date (inclusive)"),
+    service: PaperTradingService = Depends(get_paper_trading_service),
+) -> List[DrawdownItem]:
+    try:
+        start = _parse_iso_date(start_date)
+        end = _parse_iso_date(end_date)
+        records = service.performance_analyzer().get_drawdown_curve(
+            account_id, start_date=start, end_date=end
+        )
+        return [
+            DrawdownItem(
+                date=r.date.isoformat(),
+                net_value=r.net_value,
+                peak_net_value=r.peak_net_value,
+                drawdown_pct=r.drawdown_pct,
+            )
+            for r in records
+        ]
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error("[paper_trading] get_account_drawdown failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get(
+    "/accounts/{account_id}/risk-metrics",
+    response_model=RiskMetricsResponse,
+    responses={
+        404: {"description": "Account not found", "model": ErrorResponse},
+        500: {"description": "Server error", "model": ErrorResponse},
+    },
+    summary="Get current risk metrics",
+)
+def get_account_risk_metrics(
+    account_id: int,
+    service: PaperTradingService = Depends(get_paper_trading_service),
+) -> RiskMetricsResponse:
+    try:
+        snapshot = service.risk_checker().get_risk_snapshot(account_id)
+        return RiskMetricsResponse(**snapshot)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error("[paper_trading] get_account_risk_metrics failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 # ---------------------------------------------------------------------------
 # Order endpoints
 # ---------------------------------------------------------------------------
@@ -812,6 +984,155 @@ def modify_order(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.post(
+    "/orders/batch",
+    response_model=BatchOrderResponse,
+    responses={
+        200: {"description": "Batch orders created"},
+        400: {"description": "Invalid request", "model": ErrorResponse},
+        500: {"description": "Server error", "model": ErrorResponse},
+    },
+    summary="Submit a batch of paper-trading orders",
+    description=(
+        "Creates multiple orders atomically. Market orders are filled "
+        "immediately using ``limit_price`` as the reference fill price. "
+        "Limit orders are left pending for the matcher."
+    ),
+)
+def create_batch_orders(
+    request: BatchOrderCreateRequest,
+    service: PaperTradingService = Depends(get_paper_trading_service),
+) -> BatchOrderResponse:
+    try:
+        engine = service.engine()
+        order_mgr = engine.order_mgr
+
+        # Build OrderRequest objects and validate order types up front.
+        order_requests: List[OrderRequest] = []
+        for item in request.orders:
+            side = str(item.side).lower()
+            if side not in ("buy", "sell"):
+                raise ValueError(f"invalid side: {item.side}")
+
+            order_type_str = str(item.order_type).lower()
+            if order_type_str == "limit":
+                order_type = OrderType.LIMIT
+                if item.limit_price is None or item.limit_price <= 0:
+                    raise ValueError("limit order requires a positive limit_price")
+            elif order_type_str == "market":
+                order_type = OrderType.MARKET
+                if item.limit_price is None or item.limit_price <= 0:
+                    raise ValueError(
+                        "market order in batch requires limit_price as reference fill price"
+                    )
+            else:
+                raise ValueError(f"unsupported batch order_type: {item.order_type}")
+
+            order_requests.append(
+                OrderRequest(
+                    account_id=request.account_id,
+                    code=item.code,
+                    side=OrderSide(side),
+                    quantity=float(item.quantity),
+                    order_type=order_type,
+                    price=item.limit_price,
+                    name=item.name,
+                    strategy_name=item.strategy_name or "manual_batch",
+                    reason=item.reason or "batch order",
+                )
+            )
+
+        # Atomically create all orders.
+        created = order_mgr.create_batch_orders(request.account_id, order_requests)
+
+        # Execute market orders immediately; leave limit orders pending.
+        results: List[TradeResultResponse] = []
+        for order in created:
+            if order.order_type == OrderType.MARKET.value:
+                order_dict = order_mgr._order_to_dict(order)
+                fill_price = float(order.price or 0.0)
+                result = engine._execute_triggered_market_order(
+                    order_dict, fill_price=fill_price
+                )
+                results.append(TradeResultResponse(**result.to_dict()))
+            else:
+                results.append(
+                    TradeResultResponse(
+                        signal_id=order.signal_id or 0,
+                        order_id=order.id,
+                        side=order.side,
+                        code=order.code,
+                        status="pending",
+                        fill_price=None,
+                        fill_quantity=None,
+                        fee=None,
+                        reason="limit order pending",
+                    )
+                )
+
+        return BatchOrderResponse(
+            account_id=request.account_id, total=len(results), results=results
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error("[paper_trading] create_batch_orders failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post(
+    "/orders/conditional",
+    response_model=ConditionalOrderItem,
+    responses={
+        200: {"description": "Conditional order created"},
+        400: {"description": "Invalid request", "model": ErrorResponse},
+        500: {"description": "Server error", "model": ErrorResponse},
+    },
+    summary="Create a conditional order (stop-loss / take-profit / OCO)",
+)
+def create_conditional_order(
+    request: ConditionalOrderCreateRequest,
+    service: PaperTradingService = Depends(get_paper_trading_service),
+) -> ConditionalOrderItem:
+    try:
+        side = str(request.side).lower()
+        if side not in ("buy", "sell"):
+            raise ValueError(f"invalid side: {request.side}")
+
+        order_type_str = str(request.order_type).lower()
+        conditional_types = {
+            "stop_loss": OrderType.STOP_LOSS,
+            "take_profit": OrderType.TAKE_PROFIT,
+            "oco_primary": OrderType.OCO_PRIMARY,
+            "oco_secondary": OrderType.OCO_SECONDARY,
+        }
+        if order_type_str not in conditional_types:
+            raise ValueError(
+                f"invalid conditional order_type: {request.order_type}; "
+                f"expected one of {list(conditional_types.keys())}"
+            )
+
+        order = service.order_mgr().create_conditional_order(
+            account_id=request.account_id,
+            code=request.code,
+            side=OrderSide(side),
+            quantity=float(request.quantity),
+            order_type=conditional_types[order_type_str],
+            trigger_price=float(request.trigger_price),
+            price=request.limit_price,
+            linked_order_id=request.linked_order_id,
+            name=request.name,
+            strategy_name=request.strategy_name or "manual_conditional",
+            reason=request.reason or "conditional order",
+        )
+        return _conditional_order_to_item(order)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error("[paper_trading] create_conditional_order failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.get(
     "/accounts/{account_id}/orders",
     response_model=OrderListResponse,
@@ -822,14 +1143,19 @@ def modify_order(
 )
 def list_orders(
     account_id: int,
-    status: Optional[str] = Query(None, description="Filter by status"),
-    code: Optional[str] = Query(None, description="Filter by stock code"),
-    limit: int = Query(100, ge=1, le=500),
+    filters: OrderListFilterParams = Depends(),
     service: PaperTradingService = Depends(get_paper_trading_service),
 ) -> OrderListResponse:
     try:
         rows = service.order_mgr().list_orders(
-            account_id=account_id, status=status, code=code, limit=limit
+            account_id=account_id,
+            status=filters.status,
+            side=filters.side,
+            code=filters.code,
+            from_date=_parse_iso_datetime(filters.from_date),
+            to_date=_parse_iso_datetime(filters.to_date),
+            limit=filters.limit,
+            offset=filters.offset,
         )
         items = [OrderItem(**row) for row in rows]
         return OrderListResponse(

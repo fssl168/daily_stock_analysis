@@ -37,6 +37,12 @@ from paper_trading.notification_integration import (
     PushResult,
     build_paper_trading_notifier,
 )
+from paper_trading.performance import (
+    DrawdownRecord,
+    PerformanceAnalyzer,
+    PerformanceConfig,
+    PerformanceMetrics,
+)
 from paper_trading.order import (
     OrderSide,
     OrderType,
@@ -125,4 +131,9 @@ __all__ = [
     "PaperTradingNotifier",
     "PushResult",
     "build_paper_trading_notifier",
+    # Performance analytics (Phase 2)
+    "PerformanceAnalyzer",
+    "PerformanceMetrics",
+    "DrawdownRecord",
+    "PerformanceConfig",
 ]

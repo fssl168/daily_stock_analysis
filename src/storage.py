@@ -792,13 +792,15 @@ class PaperOrder(Base):
     order_type = Column(String(8), nullable=False, default='market')
     # Limit price (None for market orders).
     price = Column(Float)
+    # Trigger price for stop-loss / take-profit / OCO conditional orders.
+    trigger_price = Column(Float)
     # Ordered quantity (shares).
     quantity = Column(Float, nullable=False)
     # Filled quantity (shares).
     filled_quantity = Column(Float, nullable=False, default=0.0)
     # Average filled price.
     filled_price_avg = Column(Float, nullable=False, default=0.0)
-    # pending / partially_filled / filled / canceled / rejected
+    # pending / partially_filled / filled / canceled / rejected / conditional
     status = Column(String(16), nullable=False, default='pending', index=True)
     # Strategy that emitted the triggering signal.
     strategy_name = Column(String(64))
@@ -814,11 +816,17 @@ class PaperOrder(Base):
     # of an earlier order; the old order is canceled and this new order is
     # created with parent_order_id pointing to the original).
     parent_order_id = Column(Integer, index=True)
+    # Linked order id (P1: OCO primary/secondary pair, stop-loss/take-profit
+    # sibling). When one linked order is filled/canceled, the other is acted
+    # upon (cancel for OCO, keep for SL/TP siblings).
+    linked_order_id = Column(Integer, index=True)
     created_at = Column(DateTime, default=datetime.now, index=True)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
     # Modification timestamp (P0-C): set when the order is modified.
     modified_at = Column(DateTime)
     filled_at = Column(DateTime)
+    # Trigger timestamp (P1): set when a conditional order is activated.
+    triggered_at = Column(DateTime)
 
     __table_args__ = (
         Index('ix_paper_order_account_status', 'account_id', 'status'),

@@ -22,6 +22,14 @@ Supported indicators:
                  fib_0.618, fib_0.786.
     support      Nearest support levels (fractal method, fixed window=20).
     resistance   Nearest resistance levels (fractal method, fixed window=20).
+    obv          On-Balance Volume (cumulative signed volume).
+    sto          Stochastic oscillator (%K + %D, default 14/3).
+    sto_k        Stochastic %K line.
+    sto_d        Stochastic %D line.
+    cci{N}       Commodity Channel Index (default period 20).
+    wr{N}        Williams %R (default period 14).
+    vma{N}       Volume simple moving average (default period 20).
+    vwap         Volume-Weighted Average Price (anchored from series start).
 """
 
 from __future__ import annotations
@@ -48,10 +56,11 @@ class IndicatorSpec:
     """Declarative spec for an indicator to compute.
 
     `kind` is one of:
-        ma, ema, rsi, macd, boll, pct_chg, atr, fib, fib_level, support, resistance
+        ma, ema, rsi, macd, boll, pct_chg, atr, fib, fib_level, support, resistance,
+        obv, sto, sto_k, sto_d, cci, wr, vma, vwap
         plus raw OHLCV column names: close, open, high, low, volume.
-    `period` is the integer window (ignored for macd / boll which have fixed defaults;
-    for support/resistance the window is fixed at 20).
+    `period` is the integer window (ignored for macd / boll / obv / vwap / sto / sto_k /
+    sto_d which have fixed defaults; for support/resistance the window is fixed at 20).
     """
 
     kind: str
@@ -60,7 +69,13 @@ class IndicatorSpec:
     @property
     def name(self) -> str:
         # Raw price columns and fixed-name indicators return their kind as-is.
-        if self.kind in ("macd", "boll", "support", "resistance") or self.kind in RAW_PRICE_COLUMNS:
+        fixed_names = (
+            "macd", "macd_signal", "macd_hist",
+            "boll", "boll_mid", "boll_upper", "boll_lower",
+            "support", "resistance",
+            "obv", "vwap", "sto", "sto_k", "sto_d",
+        )
+        if self.kind in fixed_names or self.kind in RAW_PRICE_COLUMNS:
             return self.kind
         return f"{self.kind}{self.period or ''}"
 
@@ -79,6 +94,9 @@ class IndicatorSpec:
 
         Raw OHLCV columns (close/open/high/low/volume) are also accepted and
         resolve to IndicatorSpec(kind=<column_name>, period=None).
+
+        Phase 3 additions: ``obv``, ``sto``/``sto_k``/``sto_d``, ``cci{N}``,
+        ``wr{N}``, ``vma{N}``, ``vwap``.
         """
         text = text.strip().lower()
 
@@ -105,11 +123,47 @@ class IndicatorSpec:
             lookback = int(text[3:]) if len(text) > 3 else 60
             return cls(kind="fib", period=lookback)
 
-        # Standard indicators.
-        for kind in ("ma", "ema", "rsi", "pct_chg", "atr", "macd", "boll", "support", "resistance"):
+        # Volume / oscillator indicators (Phase 3).
+        if text == "obv":
+            return cls(kind="obv", period=None)
+        if text == "vwap":
+            return cls(kind="vwap", period=None)
+
+        # Stochastic oscillator family.
+        if text == "sto":
+            return cls(kind="sto", period=14)
+        if text.startswith("sto_"):
+            tail = text[4:]
+            if text.startswith("sto_k"):
+                k_period = int(tail[1:]) if len(tail) > 1 else 14
+                return cls(kind="sto_k", period=k_period)
+            if text.startswith("sto_d"):
+                d_period = int(tail[1:]) if len(tail) > 1 else 3
+                return cls(kind="sto_d", period=d_period)
+            raise ValueError(f"Unknown indicator: {text}")
+        if text.startswith("sto") and text[3:].isdigit():
+            return cls(kind="sto", period=int(text[3:]))
+
+        # Compound Bollinger / MACD output names referenced directly in rules.
+        if text in ("boll_mid", "boll_upper", "boll_lower", "macd_signal", "macd_hist"):
+            return cls(kind=text, period=None)
+
+        # Standard indicators. Some kinds have a default period when omitted.
+        default_periods = {
+            "rsi": 14,
+            "pct_chg": 1,
+            "atr": 14,
+            "cci": 20,
+            "wr": 14,
+            "vma": 20,
+        }
+        for kind in (
+            "ma", "ema", "rsi", "pct_chg", "atr", "macd", "boll",
+            "support", "resistance", "cci", "wr", "vma",
+        ):
             if text.startswith(kind):
                 rest = text[len(kind):]
-                period = int(rest) if rest else None
+                period = int(rest) if rest else default_periods.get(kind)
                 return cls(kind=kind, period=period)
         raise ValueError(f"Unknown indicator: {text}")
 
@@ -128,6 +182,15 @@ def compute_indicators(df: pd.DataFrame, specs: List[IndicatorSpec]) -> Dict[str
     - ``fib_0.618`` (single level): a single Fibonacci level series.
     - ``support`` / ``resistance``: nearest support / resistance price levels
       (fractal method, fixed window=20). Requires high/low.
+
+    New indicators (Phase 3):
+    - ``obv``: On-Balance Volume. Requires close/volume.
+    - ``sto``/``sto_k``/``sto_d``: Stochastic oscillator (default 14/3).
+      Produces ``sto_k`` and ``sto_d`` series. Requires high/low/close.
+    - ``cci{N}``: Commodity Channel Index (default 20). Requires high/low/close.
+    - ``wr{N}``: Williams %R (default 14). Requires high/low/close.
+    - ``vma{N}``: Volume moving average (default 20). Requires volume.
+    - ``vwap``: Volume-Weighted Average Price. Requires high/low/close/volume.
     """
     if "close" not in df.columns:
         raise ValueError("DataFrame must contain a 'close' column")
@@ -193,6 +256,32 @@ def compute_indicators(df: pd.DataFrame, specs: List[IndicatorSpec]) -> Dict[str
             out["support"] = compute_support_resistance(df)["support_series"]
         elif spec.kind == "resistance":
             out["resistance"] = compute_support_resistance(df)["resistance_series"]
+        elif spec.kind == "obv":
+            out["obv"] = compute_obv(df)
+        elif spec.kind == "vwap":
+            out["vwap"] = compute_vwap(df)
+        elif spec.kind == "sto":
+            k_period = spec.period or 14
+            stoch = compute_stochastic(df, k_period=k_period, d_period=3)
+            out["sto_k"] = stoch["k"]
+            out["sto_d"] = stoch["d"]
+        elif spec.kind == "sto_k":
+            k_period = spec.period or 14
+            stoch = compute_stochastic(df, k_period=k_period, d_period=3)
+            out["sto_k"] = stoch["k"]
+        elif spec.kind == "sto_d":
+            k_period = spec.period or 14
+            stoch = compute_stochastic(df, k_period=k_period, d_period=3)
+            out["sto_d"] = stoch["d"]
+        elif spec.kind == "cci":
+            n = spec.period or 20
+            out[name] = compute_cci(df, period=n)
+        elif spec.kind == "wr":
+            n = spec.period or 14
+            out[name] = compute_williams_r(df, period=n)
+        elif spec.kind == "vma":
+            n = spec.period or 20
+            out[name] = compute_volume_ma(df, period=n)
         else:
             logger.warning("Unsupported indicator kind: %s", spec.kind)
 
@@ -512,3 +601,154 @@ def _nearest_level_series(
         idx = np.abs(levels_arr - p).argmin()
         out.append(float(levels_arr[idx]))
     return pd.Series(out, index=prices.index)
+
+
+# ============================================================
+# Phase 3: New indicators — OBV / Stochastic / CCI / WR / VMA / VWAP
+# ============================================================
+
+
+def compute_obv(df: pd.DataFrame, close_col: str = "close", volume_col: str = "volume") -> pd.Series:
+    """On-Balance Volume (OBV) as a cumulative signed volume series.
+
+    OBV_t = OBV_{t-1} +
+        volume_t  if close_t > close_{t-1}
+        -volume_t if close_t < close_{t-1}
+        0         if close_t == close_{t-1}
+
+    The first bar starts at 0 so that the series is anchored and comparisons
+    using cross_up / cross_down remain meaningful.
+    """
+    if close_col not in df.columns or volume_col not in df.columns:
+        raise ValueError(
+            f"DataFrame must contain {close_col}/{volume_col} columns for OBV"
+        )
+    close = df[close_col]
+    volume = df[volume_col]
+    sign = np.sign(close.diff())
+    signed_volume = (sign * volume).fillna(0.0)
+    return signed_volume.cumsum()
+
+
+def compute_stochastic(
+    df: pd.DataFrame,
+    k_period: int = 14,
+    d_period: int = 3,
+    high_col: str = "high",
+    low_col: str = "low",
+    close_col: str = "close",
+) -> Dict[str, pd.Series]:
+    """Stochastic oscillator (%K and %D).
+
+    %K = 100 * (close - lowest_low) / (highest_high - lowest_low)
+    %D = simple moving average of %K over ``d_period`` bars.
+    """
+    required = {high_col, low_col, close_col}
+    if not required.issubset(df.columns):
+        raise ValueError(
+            f"DataFrame must contain {high_col}/{low_col}/{close_col} columns for Stochastic"
+        )
+    high = df[high_col]
+    low = df[low_col]
+    close = df[close_col]
+
+    lowest_low = low.rolling(window=k_period, min_periods=k_period).min()
+    highest_high = high.rolling(window=k_period, min_periods=k_period).max()
+    range_ = highest_high - lowest_low
+
+    # Use NaN while the rolling window is not full (range_ == NaN); use 50.0
+    # only when the window is valid but flat (range_ == 0).
+    pct_k = pd.Series(
+        np.where(range_ > 0, 100.0 * (close - lowest_low) / range_, np.nan),
+        index=df.index,
+    )
+    pct_d = pct_k.rolling(window=d_period, min_periods=d_period).mean()
+    return {"k": pct_k, "d": pct_d}
+
+
+def compute_cci(
+    df: pd.DataFrame,
+    period: int = 20,
+    high_col: str = "high",
+    low_col: str = "low",
+    close_col: str = "close",
+) -> pd.Series:
+    """Commodity Channel Index (CCI).
+
+    Typical Price = (high + low + close) / 3
+    CCI = (TP - SMA(TP)) / (0.015 * Mean Absolute Deviation(TP))
+    """
+    required = {high_col, low_col, close_col}
+    if not required.issubset(df.columns):
+        raise ValueError(
+            f"DataFrame must contain {high_col}/{low_col}/{close_col} columns for CCI"
+        )
+    typical = (df[high_col] + df[low_col] + df[close_col]) / 3.0
+    sma_tp = typical.rolling(window=period, min_periods=period).mean()
+    mad = typical.rolling(window=period, min_periods=period).apply(
+        lambda x: np.mean(np.abs(x - np.mean(x))), raw=True
+    )
+    return (typical - sma_tp) / (0.015 * mad.replace(0.0, float("nan")))
+
+
+def compute_williams_r(
+    df: pd.DataFrame,
+    period: int = 14,
+    high_col: str = "high",
+    low_col: str = "low",
+    close_col: str = "close",
+) -> pd.Series:
+    """Williams %R oscillator.
+
+    %R = -100 * (highest_high - close) / (highest_high - lowest_low)
+    """
+    required = {high_col, low_col, close_col}
+    if not required.issubset(df.columns):
+        raise ValueError(
+            f"DataFrame must contain {high_col}/{low_col}/{close_col} columns for Williams %R"
+        )
+    high = df[high_col]
+    low = df[low_col]
+    close = df[close_col]
+    highest_high = high.rolling(window=period, min_periods=period).max()
+    lowest_low = low.rolling(window=period, min_periods=period).min()
+    range_ = highest_high - lowest_low
+    return pd.Series(
+        np.where(range_ > 0, -100.0 * (highest_high - close) / range_, 0.0),
+        index=df.index,
+    )
+
+
+def compute_volume_ma(
+    df: pd.DataFrame,
+    period: int = 20,
+    volume_col: str = "volume",
+) -> pd.Series:
+    """Simple moving average of volume."""
+    if volume_col not in df.columns:
+        raise ValueError(f"DataFrame must contain {volume_col} column for volume MA")
+    return df[volume_col].rolling(window=period, min_periods=period).mean()
+
+
+def compute_vwap(
+    df: pd.DataFrame,
+    high_col: str = "high",
+    low_col: str = "low",
+    close_col: str = "close",
+    volume_col: str = "volume",
+) -> pd.Series:
+    """Volume-Weighted Average Price anchored from the start of the series.
+
+    VWAP = cumulative(volume * typical_price) / cumulative(volume)
+    typical_price = (high + low + close) / 3
+    """
+    required = {high_col, low_col, close_col, volume_col}
+    if not required.issubset(df.columns):
+        raise ValueError(
+            f"DataFrame must contain {high_col}/{low_col}/{close_col}/{volume_col} columns for VWAP"
+        )
+    typical = (df[high_col] + df[low_col] + df[close_col]) / 3.0
+    volume = df[volume_col]
+    cumulative_tp_volume = (typical * volume).cumsum()
+    cumulative_volume = volume.cumsum()
+    return cumulative_tp_volume / cumulative_volume.replace(0.0, float("nan"))

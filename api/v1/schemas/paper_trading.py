@@ -133,6 +133,75 @@ class OrderListResponse(BaseModel):
     items: List[OrderItem]
 
 
+class BatchOrderItem(BaseModel):
+    """One order inside a batch create request."""
+
+    code: str
+    side: str = Field(..., description="buy | sell")
+    quantity: float = Field(..., gt=0)
+    order_type: str = Field("market", description="market | limit")
+    limit_price: Optional[float] = Field(None, gt=0)
+    name: Optional[str] = None
+    strategy_name: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class BatchOrderCreateRequest(BaseModel):
+    """Create multiple orders atomically."""
+
+    account_id: int
+    orders: List[BatchOrderItem] = Field(..., min_length=1)
+
+
+class BatchOrderResponse(BaseModel):
+    """Result of a batch order submission."""
+
+    account_id: int
+    total: int
+    results: List[TradeResultResponse]
+
+
+class ConditionalOrderCreateRequest(BaseModel):
+    """Create a conditional order (stop-loss / take-profit / OCO)."""
+
+    account_id: int
+    code: str
+    side: str = Field(..., description="buy | sell")
+    quantity: float = Field(..., gt=0)
+    order_type: str = Field(
+        ...,
+        description="stop_loss | take_profit | oco_primary | oco_secondary",
+    )
+    trigger_price: float = Field(..., gt=0)
+    limit_price: Optional[float] = Field(None, gt=0)
+    linked_order_id: Optional[int] = Field(
+        None, description="Sibling order id for OCO linkage"
+    )
+    name: Optional[str] = None
+    strategy_name: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class ConditionalOrderItem(OrderItem):
+    """Conditional order response item (includes trigger metadata)."""
+
+    trigger_price: Optional[float] = None
+    linked_order_id: Optional[int] = None
+    triggered_at: Optional[str] = None
+
+
+class OrderListFilterParams(BaseModel):
+    """Query parameters for order listing."""
+
+    status: Optional[str] = Field(None, description="Filter by order status")
+    side: Optional[str] = Field(None, description="buy | sell")
+    code: Optional[str] = Field(None, description="Filter by stock code")
+    from_date: Optional[str] = Field(None, description="ISO date / datetime")
+    to_date: Optional[str] = Field(None, description="ISO date / datetime")
+    limit: int = Field(100, ge=1, le=500)
+    offset: int = Field(0, ge=0)
+
+
 # ---------------------------------------------------------------------------
 # Positions / Trades / Signals
 # ---------------------------------------------------------------------------
@@ -390,3 +459,53 @@ class ListenerControlResponse(BaseModel):
 
     running: bool
     message: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Performance / Risk metrics (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+class PerformanceMetricsResponse(BaseModel):
+    """Account performance summary."""
+
+    account_id: int
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    total_return_pct: float = 0.0
+    annualized_return_pct: float = 0.0
+    sharpe_ratio: Optional[float] = None
+    max_drawdown_pct: float = 0.0
+    max_drawdown_start_date: Optional[str] = None
+    max_drawdown_end_date: Optional[str] = None
+    volatility_annualized: Optional[float] = None
+    win_rate: float = 0.0
+    profit_factor: Optional[float] = None
+    avg_win: float = 0.0
+    avg_loss: float = 0.0
+    calmar_ratio: Optional[float] = None
+    trade_count: int = 0
+    win_count: int = 0
+    loss_count: int = 0
+
+
+class DrawdownItem(BaseModel):
+    """A single point on the account drawdown curve."""
+
+    date: str
+    net_value: float
+    peak_net_value: float
+    drawdown_pct: float
+
+
+class RiskMetricsResponse(BaseModel):
+    """Current risk snapshot for an account."""
+
+    account_id: int
+    max_single_stock_concentration_pct: float = 0.0
+    max_open_positions_limit: int = 8
+    current_open_positions: int = 0
+    max_pct_per_stock_limit: float = 30.0
+    max_cash_per_buy_limit: float = 50.0
+    max_daily_loss_limit: float = 5.0
+    current_drawdown_pct: float = 0.0

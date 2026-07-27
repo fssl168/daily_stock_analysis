@@ -8,13 +8,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
-- [修复] 修复任务状态接口重建报告动作字段时把合法情绪分 `0` 当成空值的问题，确保低分报告能按评分口径纠正为卖出建议。
-- [修复] 修复 Agent 流式回复在未收到完成事件就断开时被显示为“（无内容）”的问题，改为提示流式响应中断并保留用户消息，避免误判为空回答。
-- [修复] 修复桌面端 `WEBUI_HOST=*` / `WEBUI_HOST=[::]` 会被原样传给端口探测和后端启动导致无法监听的问题，启动前分别规范化为 `0.0.0.0` / `::`。
-- [改进] `STOCK_LIST` 自选股解析支持中文逗号、顿号、分号、空格和换行等常见粘贴分隔符，运行时、定时热刷新、CLI `--stocks`、Web 设置保存和自选 API 统一识别，并在写回时规范为英文逗号。
 
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
+
+## [3.26.0] - 未发布
+
+### 发布亮点
+
+- feat: 模拟交易实现 "AI 自主决策下单 + 撤单改单 + 复盘反思 + 策略迭代" 完整闭环。
+
+### 新功能
+
+- 模拟交易支持批量下单与条件单（OCO/止损/止盈）。
+- 新增 `paper_trading/performance.py` 绩效分析模块（夏普比率、最大回撤、胜率、盈亏比等）。
+- 模拟交易新增风险快照 API（集中度、当前回撤、单日亏损限制），`RiskChecker` 增加单日亏损上限检查。
+- 策略规则引擎新增 OBV/Stochastic/CCI/Williams %R/VWAP 指标与多时间框架支持，并预置 golden_cross / rsi_reversal / boll_breakout / macd_momentum 四个策略模板。
+- WebUI 模拟交易页面接入绩效卡片、条件单下单与订单筛选能力。
+- 模拟交易实现 "AI 自主决策下单 + 撤单改单 + 复盘反思 + 策略迭代" 完整闭环，详见 [docs/paper_trading_ai_pm_plan.md](docs/paper_trading_ai_pm_plan.md)。
+
+### 改进
+
+- `STOCK_LIST` 自选股解析支持中文逗号、顿号、分号、空格和换行等常见粘贴分隔符，运行时、定时热刷新、CLI `--stocks`、Web 设置保存和自选 API 统一识别，并在写回时规范为英文逗号。
+
+### 修复
+
+- 修复任务状态接口重建报告动作字段时把合法情绪分 `0` 当成空值的问题，确保低分报告能按评分口径纠正为卖出建议。
+- 修复 Agent 流式回复在未收到完成事件就断开时被显示为“（无内容）”的问题，改为提示流式响应中断并保留用户消息，避免误判为空回答。
+- 修复桌面端 `WEBUI_HOST=*` / `WEBUI_HOST=[::]` 会被原样传给端口探测和后端启动导致无法监听的问题，启动前分别规范化为 `0.0.0.0` / `::`。
+
+### 文档
+
+- 无
+
+### 测试
+
+- 新增 `tests/test_paper_trading_performance.py` 覆盖绩效指标、回撤曲线、FIFO 盈亏与风控规则。
+- 新增 `tests/test_strategies_v2_phase3.py` 覆盖 Phase 3 指标解析/计算、策略模板、多周期评估与 MarketListener 数据链路。
+- 扩展 `apps/dsa-web/e2e/paper-trading.spec.ts`，覆盖模拟交易绩效卡片、条件单、批量下单与订单筛选。
 
 ## [3.25.0] - 2026-07-03
 

@@ -103,6 +103,19 @@ class RuleStrategy:
     entry_rules: List[Rule] = field(default_factory=list)
     exit_rules: List[Rule] = field(default_factory=list)
     params: Dict[str, Any] = field(default_factory=dict)
+    # Phase 3: multi-timeframe evaluation and template provenance.
+    timeframes: List[str] = field(default_factory=lambda: ["1d"])
+    template: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        # Auto-include indicators referenced by rules so direct construction
+        # (not just YAML loading) always has the data it needs.
+        seen = {s.name for s in self.indicators}
+        for rule in self.entry_rules + self.exit_rules:
+            for ref in (rule.left_ref, rule.right_ref):
+                if ref is not None and ref.name not in seen:
+                    self.indicators.append(ref)
+                    seen.add(ref.name)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -113,6 +126,8 @@ class RuleStrategy:
             "entry_rules": [r.to_dict() for r in self.entry_rules],
             "exit_rules": [r.to_dict() for r in self.exit_rules],
             "params": dict(self.params),
+            "timeframes": list(self.timeframes),
+            "template": self.template,
         }
 
 
@@ -167,6 +182,9 @@ def parse_strategy(data: Dict[str, Any]) -> RuleStrategy:
     if not isinstance(params, dict):
         raise ValueError("Strategy 'params' must be a mapping")
 
+    timeframes_raw = data.get("timeframes") or ["1d"]
+    timeframes = [str(tf).strip().lower() for tf in timeframes_raw]
+
     return RuleStrategy(
         name=str(name),
         display_name=str(display_name),
@@ -175,6 +193,8 @@ def parse_strategy(data: Dict[str, Any]) -> RuleStrategy:
         entry_rules=entry_rules,
         exit_rules=exit_rules,
         params=params,
+        timeframes=timeframes,
+        template=str(data.get("template")) if data.get("template") else None,
     )
 
 

@@ -90,6 +90,58 @@ export interface OrderListResponse {
   items: OrderItem[];
 }
 
+export interface BatchOrderItem {
+  code: string;
+  side: 'buy' | 'sell';
+  quantity: number;
+  orderType?: 'market' | 'limit';
+  limitPrice?: number;
+  name?: string;
+  strategyName?: string;
+  reason?: string;
+}
+
+export interface BatchOrderCreateRequest {
+  accountId: number;
+  orders: BatchOrderItem[];
+}
+
+export interface BatchOrderResponse {
+  accountId: number;
+  total: number;
+  results: TradeResultResponse[];
+}
+
+export interface ConditionalOrderCreateRequest {
+  accountId: number;
+  code: string;
+  side: 'buy' | 'sell';
+  quantity: number;
+  orderType: 'stop_loss' | 'take_profit' | 'oco_primary' | 'oco_secondary';
+  triggerPrice: number;
+  limitPrice?: number;
+  linkedOrderId?: number;
+  name?: string;
+  strategyName?: string;
+  reason?: string;
+}
+
+export interface ConditionalOrderItem extends OrderItem {
+  triggerPrice?: number;
+  linkedOrderId?: number;
+  triggeredAt?: string;
+}
+
+export interface OrderListFilterParams {
+  status?: string;
+  side?: 'buy' | 'sell';
+  code?: string;
+  fromDate?: string;
+  toDate?: string;
+  limit?: number;
+  offset?: number;
+}
+
 // ============ Positions / Trades / Signals ============
 
 export interface PositionItem {
@@ -265,6 +317,47 @@ export interface PMDecisionListResponse {
 export interface PMDecisionTriggerRequest {
   accountId: number;
   extraContext?: Record<string, unknown>;
+}
+
+// ============ Performance / Risk metrics (Phase 2) ============
+
+export interface PerformanceMetricsResponse {
+  accountId: number;
+  startDate?: string;
+  endDate?: string;
+  totalReturnPct: number;
+  annualizedReturnPct: number;
+  sharpeRatio?: number;
+  maxDrawdownPct: number;
+  maxDrawdownStartDate?: string;
+  maxDrawdownEndDate?: string;
+  volatilityAnnualized?: number;
+  winRate: number;
+  profitFactor?: number;
+  avgWin: number;
+  avgLoss: number;
+  calmarRatio?: number;
+  tradeCount: number;
+  winCount: number;
+  lossCount: number;
+}
+
+export interface DrawdownItem {
+  date: string;
+  netValue: number;
+  peakNetValue: number;
+  drawdownPct: number;
+}
+
+export interface RiskMetricsResponse {
+  accountId: number;
+  maxSingleStockConcentrationPct: number;
+  maxOpenPositionsLimit: number;
+  currentOpenPositions: number;
+  maxPctPerStockLimit: number;
+  maxCashPerBuyLimit: number;
+  maxDailyLossLimit: number;
+  currentDrawdownPct: number;
 }
 
 // ============ Net value curve ============

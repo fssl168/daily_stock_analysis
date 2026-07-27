@@ -3,24 +3,32 @@ import { toCamelCase } from './utils';
 import type {
   AccountCreateRequest,
   AccountSnapshotResponse,
+  BatchOrderCreateRequest,
+  BatchOrderResponse,
   BattlePlanGenerateRequest,
   BattlePlanItem,
   BattlePlanMarkdownResponse,
+  ConditionalOrderCreateRequest,
+  ConditionalOrderItem,
   DailyReflectionRequest,
+  DrawdownItem,
   ListenerControlResponse,
   ListenerStartRequest,
   ListenerStatusResponse,
   NetValueCurveResponse,
   OrderCreateRequest,
   OrderItem,
+  OrderListFilterParams,
   OrderListResponse,
   OrderModifyRequest,
+  PerformanceMetricsResponse,
   PMDecisionItem,
   PMDecisionListResponse,
   PMDecisionTriggerRequest,
   PositionListResponse,
   ReflectionListResponse,
   ReflectionNoteItem,
+  RiskMetricsResponse,
   SignalListResponse,
   TradeListResponse,
   TradeResultResponse,
@@ -66,6 +74,44 @@ export const paperTradingApi = {
   },
 
   /**
+   * Get account performance metrics.
+   */
+  getPerformanceMetrics: async (accountId: number, params: {
+    startDate?: string;
+    endDate?: string;
+  } = {}): Promise<PerformanceMetricsResponse> => {
+    const response = await apiClient.get<Record<string, unknown>>(
+      `/api/v1/paper-trading/accounts/${accountId}/performance`,
+      { params: { start_date: params.startDate, end_date: params.endDate } }
+    );
+    return toCamelCase<PerformanceMetricsResponse>(response.data);
+  },
+
+  /**
+   * Get account drawdown curve.
+   */
+  getDrawdownCurve: async (accountId: number, params: {
+    startDate?: string;
+    endDate?: string;
+  } = {}): Promise<DrawdownItem[]> => {
+    const response = await apiClient.get<Record<string, unknown>[]>(
+      `/api/v1/paper-trading/accounts/${accountId}/drawdown`,
+      { params: { start_date: params.startDate, end_date: params.endDate } }
+    );
+    return response.data.map(item => toCamelCase<DrawdownItem>(item));
+  },
+
+  /**
+   * Get current risk metrics.
+   */
+  getRiskMetrics: async (accountId: number): Promise<RiskMetricsResponse> => {
+    const response = await apiClient.get<Record<string, unknown>>(
+      `/api/v1/paper-trading/accounts/${accountId}/risk-metrics`
+    );
+    return toCamelCase<RiskMetricsResponse>(response.data);
+  },
+
+  /**
    * Submit a manual order.
    */
   submitOrder: async (params: OrderCreateRequest): Promise<TradeResultResponse> => {
@@ -84,6 +130,52 @@ export const paperTradingApi = {
       }
     );
     return toCamelCase<TradeResultResponse>(response.data);
+  },
+
+  /**
+   * Submit a batch of orders.
+   */
+  submitBatchOrders: async (params: BatchOrderCreateRequest): Promise<BatchOrderResponse> => {
+    const response = await apiClient.post<Record<string, unknown>>(
+      '/api/v1/paper-trading/orders/batch',
+      {
+        account_id: params.accountId,
+        orders: params.orders.map(order => ({
+          code: order.code,
+          side: order.side,
+          quantity: order.quantity,
+          order_type: order.orderType ?? 'market',
+          limit_price: order.limitPrice,
+          name: order.name,
+          strategy_name: order.strategyName,
+          reason: order.reason,
+        })),
+      }
+    );
+    return toCamelCase<BatchOrderResponse>(response.data);
+  },
+
+  /**
+   * Create a conditional order (stop-loss / take-profit / OCO).
+   */
+  createConditionalOrder: async (params: ConditionalOrderCreateRequest): Promise<ConditionalOrderItem> => {
+    const response = await apiClient.post<Record<string, unknown>>(
+      '/api/v1/paper-trading/orders/conditional',
+      {
+        account_id: params.accountId,
+        code: params.code,
+        side: params.side,
+        quantity: params.quantity,
+        order_type: params.orderType,
+        trigger_price: params.triggerPrice,
+        limit_price: params.limitPrice,
+        linked_order_id: params.linkedOrderId,
+        name: params.name,
+        strategy_name: params.strategyName,
+        reason: params.reason,
+      }
+    );
+    return toCamelCase<ConditionalOrderItem>(response.data);
   },
 
   /**
@@ -143,14 +235,20 @@ export const paperTradingApi = {
   /**
    * List orders for an account.
    */
-  listOrders: async (accountId: number, params: {
-    status?: string;
-    code?: string;
-    limit?: number;
-  } = {}): Promise<OrderListResponse> => {
+  listOrders: async (accountId: number, params: OrderListFilterParams = {}): Promise<OrderListResponse> => {
     const response = await apiClient.get<Record<string, unknown>>(
       `/api/v1/paper-trading/accounts/${accountId}/orders`,
-      { params: { status: params.status, code: params.code, limit: params.limit ?? 100 } }
+      {
+        params: {
+          status: params.status,
+          side: params.side,
+          code: params.code,
+          from_date: params.fromDate,
+          to_date: params.toDate,
+          limit: params.limit ?? 100,
+          offset: params.offset ?? 0,
+        },
+      }
     );
     const data = toCamelCase<OrderListResponse>(response.data);
     return {

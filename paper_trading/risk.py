@@ -20,12 +20,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import date
 from typing import Optional
 
 from sqlalchemy import func, select
 
 from paper_trading.account import PaperAccountManager
 from paper_trading.fees import FeeModel
+from paper_trading.performance import PerformanceAnalyzer
 from paper_trading.position import PositionManager
 from src.storage import DatabaseManager, PaperPosition, get_db
 
@@ -62,6 +64,9 @@ class RiskConfig:
     max_open_positions: int = 8
     # Max fraction of available cash a single buy may consume.
     max_pct_cash_per_buy: float = 0.50  # 50%
+    # Max daily realized loss as a fraction of initial capital.
+    # 0 disables the check.
+    max_daily_loss_pct: float = 0.05  # 5%
 
 
 class RiskChecker:
@@ -108,6 +113,9 @@ class RiskChecker:
         decisions.append(
             self._check_cash_pct_per_buy(account_id, price, quantity)
         )
+        # Sector concentration requires industry tags which are not yet stored
+        # on PaperPosition. Keep a placeholder decision for audit.
+        decisions.append(self._check_sector_concentration(account_id))
 
         return decisions
 
@@ -123,6 +131,9 @@ class RiskChecker:
 
         decisions.append(self._check_account_active(account_id))
         decisions.append(self._check_position_available(account_id, code, quantity))
+        decisions.append(
+            self._check_daily_loss_limit(account_id, code, price, quantity)
+        )
         # Concentration after a sell decreases, so we don't enforce a cap there.
         # But we still record a (passing) decision for audit completeness.
         decisions.append(
@@ -132,6 +143,9 @@ class RiskChecker:
                 reason="sell reduces concentration; skipped",
             )
         )
+        # Sector concentration requires industry tags which are not yet stored
+        # on PaperPosition. Keep a placeholder decision for audit.
+        decisions.append(self._check_sector_concentration(account_id))
 
         return decisions
 
@@ -314,3 +328,95 @@ class RiskChecker:
             check_name="cash_pct_per_buy",
             reason=f"buy cost {pct:.1%} of cash within limit",
         )
+
+    def _check_daily_loss_limit(
+        self, account_id: int, code: str, price: float, quantity: float
+    ) -> RiskDecision:
+        """Ensure today's realized loss plus this sell's estimated loss stays within limit."""
+        if self.config.max_daily_loss_pct <= 0:
+            return RiskDecision(
+                passed=True,
+                check_name="daily_loss_limit",
+                reason="daily loss limit check disabled",
+            )
+
+        snap = self.account_mgr.snapshot(account_id)
+        limit = self.config.max_daily_loss_pct * float(snap.initial_capital or snap.total_assets or 1.0)
+
+        today = date.today()
+        analyzer = PerformanceAnalyzer(db_manager=self.db)
+        metrics = analyzer.calculate(account_id, start_date=today, end_date=today)
+        realized_loss_today = (
+            metrics.avg_loss * metrics.loss_count if metrics.loss_count > 0 else 0.0
+        )
+
+        pos = self.position_mgr.get_position(account_id, code)
+        estimated_additional_loss = 0.0
+        if pos is not None and float(pos.avg_cost or 0.0) > 0:
+            avg_cost = float(pos.avg_cost)
+            estimated_additional_loss = max(0.0, (avg_cost - price) * quantity)
+
+        total_estimated = realized_loss_today + estimated_additional_loss
+        if total_estimated > limit + 1e-9:
+            return RiskDecision(
+                passed=False,
+                check_name="daily_loss_limit",
+                reason=(
+                    f"estimated daily loss {total_estimated:.2f} exceeds limit "
+                    f"{limit:.2f} ({self.config.max_daily_loss_pct:.1%} of capital)"
+                ),
+            )
+        return RiskDecision(
+            passed=True,
+            check_name="daily_loss_limit",
+            reason=f"estimated daily loss {total_estimated:.2f} within limit {limit:.2f}",
+        )
+
+    def _check_sector_concentration(self, account_id: int) -> RiskDecision:
+        """Placeholder: sector concentration requires industry tags on positions."""
+        return RiskDecision(
+            passed=True,
+            check_name="sector_concentration",
+            reason="sector data unavailable; skipped",
+        )
+
+    def get_risk_snapshot(self, account_id: int) -> dict:
+        """Return a read-only snapshot of current risk metrics for the account."""
+        snap = self.account_mgr.snapshot(account_id)
+        total_assets = float(snap.total_assets) or 1.0
+
+        with self.db.session_scope() as session:
+            position_rows = session.execute(
+                select(PaperPosition).where(
+                    PaperPosition.account_id == account_id,
+                    PaperPosition.quantity > 0,
+                )
+            ).scalars().all()
+            positions = [
+                {
+                    "quantity": float(pos.quantity or 0.0),
+                    "last_price": float(pos.last_price or 0.0),
+                }
+                for pos in position_rows
+            ]
+
+        max_stock_pct = 0.0
+        for pos in positions:
+            value = pos["quantity"] * pos["last_price"]
+            pct = value / total_assets if total_assets > 0 else 0.0
+            if pct > max_stock_pct:
+                max_stock_pct = pct
+
+        analyzer = PerformanceAnalyzer(db_manager=self.db)
+        current_dd = analyzer.get_current_drawdown(account_id)
+
+        return {
+            "account_id": account_id,
+            "max_single_stock_concentration_pct": max_stock_pct * 100.0,
+            "max_open_positions_limit": self.config.max_open_positions,
+            "current_open_positions": len(positions),
+            "max_pct_per_stock_limit": self.config.max_pct_per_stock * 100.0,
+            "max_cash_per_buy_limit": self.config.max_pct_cash_per_buy * 100.0,
+            "max_daily_loss_limit": self.config.max_daily_loss_pct * 100.0,
+            "current_drawdown_pct": current_dd,
+        }

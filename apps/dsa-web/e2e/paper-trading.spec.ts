@@ -50,7 +50,7 @@ const mockPositions = {
 
 const mockOrders = {
   account_id: 1,
-  total: 1,
+  total: 2,
   items: [
     {
       id: 1,
@@ -70,6 +70,25 @@ const mockOrders = {
       reject_reason: null,
       created_at: '2026-07-22T10:00:00',
       filled_at: '2026-07-22T10:00:01',
+    },
+    {
+      id: 2,
+      account_id: 1,
+      code: '000002',
+      name: '测试股份',
+      side: 'sell',
+      order_type: 'limit',
+      price: 10.5,
+      quantity: 50,
+      filled_quantity: 0,
+      filled_price_avg: 0,
+      status: 'pending',
+      strategy_name: null,
+      signal_id: 2,
+      reason: 'manual order from WebUI',
+      reject_reason: null,
+      created_at: '2026-07-22T11:00:00',
+      filled_at: null,
     },
   ],
 };
@@ -188,6 +207,38 @@ const mockBattlePlans = [
     created_at: '2026-07-22T15:30:00',
   },
 ];
+
+const mockPerformanceMetrics = {
+  account_id: 1,
+  start_date: '2026-07-20',
+  end_date: '2026-07-22',
+  total_return_pct: 2.5,
+  annualized_return_pct: 15.2,
+  sharpe_ratio: 1.25,
+  max_drawdown_pct: -5.2,
+  max_drawdown_start_date: '2026-07-21',
+  max_drawdown_end_date: '2026-07-22',
+  volatility_annualized: 12.3,
+  win_rate: 55,
+  profit_factor: 1.8,
+  avg_win: 2.1,
+  avg_loss: -1.2,
+  calmar_ratio: 2.92,
+  trade_count: 20,
+  win_count: 11,
+  loss_count: 9,
+};
+
+const mockRiskMetrics = {
+  account_id: 1,
+  max_single_stock_concentration_pct: 14.95,
+  max_open_positions_limit: 8,
+  current_open_positions: 1,
+  max_pct_per_stock_limit: 30,
+  max_cash_per_buy_limit: 50,
+  max_daily_loss_limit: 5,
+  current_drawdown_pct: -0.5,
+};
 
 /**
  * Fulfill a route with JSON and CORS headers so cross-origin axios requests
@@ -343,6 +394,18 @@ async function mockPaperTradingApis(page: import('@playwright/test').Page) {
       return;
     }
 
+    // Performance metrics: GET /api/v1/paper-trading/accounts/{id}/performance
+    if (path.match(/^\/api\/v1\/paper-trading\/accounts\/\d+\/performance$/)) {
+      await fulfillJson(route, mockPerformanceMetrics);
+      return;
+    }
+
+    // Risk metrics: GET /api/v1/paper-trading/accounts/{id}/risk-metrics
+    if (path.match(/^\/api\/v1\/paper-trading\/accounts\/\d+\/risk-metrics$/)) {
+      await fulfillJson(route, mockRiskMetrics);
+      return;
+    }
+
     // Submit order: POST /api/v1/paper-trading/orders
     if (path === '/api/v1/paper-trading/orders' && method === 'POST') {
       await fulfillJson(route, {
@@ -357,6 +420,57 @@ async function mockPaperTradingApis(page: import('@playwright/test').Page) {
         reason: 'manual order from WebUI',
         risk_decisions: [],
         agent_review: null,
+      });
+      return;
+    }
+
+    // Batch orders: POST /api/v1/paper-trading/orders/batch
+    if (path === '/api/v1/paper-trading/orders/batch' && method === 'POST') {
+      const body = await request.postDataJSON();
+      const orders = body?.orders ?? [];
+      await fulfillJson(route, {
+        account_id: 1,
+        total: orders.length,
+        results: orders.map((order: { code: string; side: string; quantity: number }, index: number) => ({
+          signal_id: 10 + index,
+          order_id: 10 + index,
+          side: order.side,
+          code: order.code,
+          status: 'executed',
+          fill_price: 10,
+          fill_quantity: order.quantity,
+          fee: 0.5,
+          reason: 'batch order from WebUI',
+          risk_decisions: [],
+          agent_review: null,
+        })),
+      });
+      return;
+    }
+
+    // Conditional order: POST /api/v1/paper-trading/orders/conditional
+    if (path === '/api/v1/paper-trading/orders/conditional' && method === 'POST') {
+      await fulfillJson(route, {
+        id: 100,
+        account_id: 1,
+        code: '000003',
+        name: null,
+        side: 'sell',
+        order_type: 'stop_loss',
+        price: null,
+        quantity: 100,
+        filled_quantity: 0,
+        filled_price_avg: 0,
+        status: 'conditional',
+        strategy_name: null,
+        signal_id: 20,
+        reason: 'manual conditional order from WebUI',
+        reject_reason: null,
+        created_at: '2026-07-22T10:00:00',
+        filled_at: null,
+        trigger_price: 1.35,
+        linked_order_id: null,
+        triggered_at: null,
       });
       return;
     }
@@ -441,5 +555,70 @@ test.describe('Paper Trading Page', () => {
     await page.getByRole('link', { name: '模拟交易' }).click();
     await expect(page).toHaveURL('/paper-trading');
     await expect(page.getByTestId('paper-trading-title')).toHaveText('Paper Trading');
+  });
+
+  test('displays performance metrics', async ({ page }) => {
+    await expect(page.getByTestId('sharpe-ratio-value')).toHaveText('1.25');
+    await expect(page.getByTestId('max-drawdown-value')).toHaveText('-5.20%');
+    await expect(page.getByTestId('win-rate-value')).toHaveText('55.00%');
+    await expect(page.getByTestId('refresh-performance-button')).toBeVisible();
+  });
+
+  test('submits a conditional stop-loss order', async ({ page }) => {
+    await page.getByTestId('order-mode-conditional').click();
+    await page.getByTestId('conditional-code-input').fill('000003');
+    await page.getByTestId('conditional-quantity-input').fill('100');
+    await page.getByTestId('conditional-side-select').selectOption('sell');
+    await page.getByTestId('conditional-type-select').selectOption('stop_loss');
+    await page.getByTestId('conditional-trigger-price-input').fill('1.35');
+
+    await page.getByTestId('conditional-submit-button').click();
+
+    await expect(page.getByText('CONDITIONAL CREATED')).toBeVisible();
+    await expect(page.getByText('#100')).toBeVisible();
+  });
+
+  test('submits a batch order', async ({ page }) => {
+    await page.getByTestId('order-mode-batch').click();
+
+    await page.getByTestId('batch-code-input-0').fill('000004');
+    await page.getByTestId('batch-side-select-0').selectOption('buy');
+    await page.getByTestId('batch-quantity-input-0').fill('200');
+
+    await page.getByTestId('batch-add-row-button').click();
+    await page.getByTestId('batch-code-input-1').fill('000005');
+    await page.getByTestId('batch-side-select-1').selectOption('sell');
+    await page.getByTestId('batch-quantity-input-1').fill('150');
+
+    await page.getByTestId('batch-submit-button').click();
+
+    await expect(page.getByText('BATCH SUBMITTED (2)')).toBeVisible();
+    await expect(page.getByText('000004: EXECUTED')).toBeVisible();
+    await expect(page.getByText('000005: EXECUTED')).toBeVisible();
+  });
+
+  test('filters orders by status and code', async ({ page }) => {
+    await page.getByTestId('tab-orders').click();
+
+    // Initial state shows both orders.
+    await expect(page.getByTestId('orders-filter-count')).toHaveText('2 / 2');
+
+    // Filter by pending status.
+    await page.getByTestId('orders-filter-status').selectOption('pending');
+    await expect(page.getByTestId('orders-filter-count')).toHaveText('1 / 2');
+    await expect(page.getByTestId('orders-table')).toContainText('000002');
+    await expect(page.getByTestId('orders-table')).not.toContainText('000001');
+
+    // Filter by sell side.
+    await page.getByTestId('orders-filter-side').selectOption('sell');
+    await expect(page.getByTestId('orders-filter-count')).toHaveText('1 / 2');
+
+    // Clear status and filter by code.
+    await page.getByTestId('orders-filter-status').selectOption('');
+    await page.getByTestId('orders-filter-side').selectOption('');
+    await page.getByTestId('orders-filter-code').fill('000001');
+    await expect(page.getByTestId('orders-filter-count')).toHaveText('1 / 2');
+    await expect(page.getByTestId('orders-table')).toContainText('000001');
+    await expect(page.getByTestId('orders-table')).not.toContainText('000002');
   });
 });

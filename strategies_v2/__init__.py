@@ -28,6 +28,7 @@ from strategies_v2.schema import (
     load_strategies_from_dir,
 )
 from strategies_v2.rule_engine import RuleEngine, Signal
+from strategies_v2.templates import TEMPLATES, get_template
 
 __all__ = [
     "compute_indicators",
@@ -43,4 +44,6 @@ __all__ = [
     "load_strategies_from_dir",
     "RuleEngine",
     "Signal",
+    "TEMPLATES",
+    "get_template",
 ]

@@ -1141,6 +1141,8 @@ class Config:
     paper_trading_listener_enable_daily_reflection: bool = True
     paper_trading_listener_enable_battle_plan: bool = True
     paper_trading_listener_pm_decision_interval_seconds: float = 600.0
+    # Phase 3: default timeframes for strategy evaluation when a strategy does not declare its own.
+    paper_trading_strategy_timeframes: List[str] = field(default_factory=lambda: ["1d"])
 
     # Agent risk-control layer (Phase 4)
     paper_trading_enable_agent_review: bool = False
@@ -1177,6 +1179,9 @@ class Config:
     # position keeps whatever stop_loss/take_profit were supplied by the
     # signal/agent and the SLTP calculator is only available on demand.
     paper_trading_enable_auto_sltp: bool = True
+
+    # Risk-control limits (Phase 2)
+    paper_trading_max_daily_loss_pct: float = 0.05  # 0 disables
 
     # === 配置校验模式 ===
     # CONFIG_VALIDATE_MODE=warn (default): log all issues but always continue startup
@@ -2154,6 +2159,11 @@ class Config:
             paper_trading_listener_pm_decision_interval_seconds=float(
                 os.getenv('PAPER_TRADING_LISTENER_PM_DECISION_INTERVAL_SECONDS', '600.0')
             ),
+            paper_trading_strategy_timeframes=[
+                tf.strip().lower()
+                for tf in os.getenv('PAPER_TRADING_STRATEGY_TIMEFRAMES', '1d').split(',')
+                if tf.strip()
+            ] or ['1d'],
             paper_trading_enable_agent_review=os.getenv(
                 'PAPER_TRADING_ENABLE_AGENT_REVIEW', 'false'
             ).lower() == 'true',
@@ -2204,6 +2214,9 @@ class Config:
             paper_trading_enable_auto_sltp=os.getenv(
                 'PAPER_TRADING_ENABLE_AUTO_SLTP', 'true'
             ).lower() == 'true',
+            paper_trading_max_daily_loss_pct=float(
+                os.getenv('PAPER_TRADING_DAILY_LOSS_LIMIT_PCT', '0.05')
+            ),
         )
     
     @classmethod

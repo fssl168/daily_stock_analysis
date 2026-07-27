@@ -4,12 +4,15 @@ import { paperTradingApi } from '../api/paperTrading';
 import { Card, Badge } from '../components/common';
 import type {
   AccountSnapshotResponse,
+  BatchOrderResponse,
   BattlePlanItem,
   NetValuePoint,
   OrderItem,
   PMDecisionItem,
+  PerformanceMetricsResponse,
   PositionItem,
   ReflectionNoteItem,
+  RiskMetricsResponse,
   SignalItem,
   TradeItem,
   ListenerStatusResponse,
@@ -127,23 +130,149 @@ const NetValueSparkline: React.FC<{ data: NetValuePoint[]; width?: number; heigh
   );
 };
 
+// ============ Performance Card ============
+
+const PerformanceCard: React.FC<{ accountId: number }> = ({ accountId }) => {
+  const [metrics, setMetrics] = useState<PerformanceMetricsResponse | null>(null);
+  const [risk, setRisk] = useState<RiskMetricsResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [m, r] = await Promise.all([
+        paperTradingApi.getPerformanceMetrics(accountId),
+        paperTradingApi.getRiskMetrics(accountId),
+      ]);
+      setMetrics(m);
+      setRisk(r);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load performance');
+    } finally {
+      setLoading(false);
+    }
+  }, [accountId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  return (
+    <Card variant="gradient" padding="md">
+      <div className="flex items-center justify-between">
+        <span className="label-uppercase">Performance</span>
+        <button
+          type="button"
+          onClick={load}
+          disabled={loading}
+          className="text-xs text-cyan hover:text-cyan/80 disabled:opacity-50"
+          data-testid="refresh-performance-button"
+        >
+          {loading ? 'Loading...' : 'Refresh'}
+        </button>
+      </div>
+      {metrics ? (
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <div>
+            <p className="text-xxs text-muted uppercase">Total Return</p>
+            <p className={`text-sm font-mono font-semibold ${metrics.totalReturnPct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+              {formatPct(metrics.totalReturnPct)}
+            </p>
+          </div>
+          <div>
+            <p className="text-xxs text-muted uppercase">Sharpe Ratio</p>
+            <p className="text-sm font-mono font-semibold text-white" data-testid="sharpe-ratio-value">
+              {formatNumber(metrics.sharpeRatio ?? 0, 2)}
+            </p>
+          </div>
+          <div>
+            <p className="text-xxs text-muted uppercase">Max Drawdown</p>
+            <p className="text-sm font-mono font-semibold text-red-400" data-testid="max-drawdown-value">
+              {formatPct(metrics.maxDrawdownPct)}
+            </p>
+          </div>
+          <div>
+            <p className="text-xxs text-muted uppercase">Win Rate</p>
+            <p className="text-sm font-mono font-semibold text-white" data-testid="win-rate-value">
+              {metrics.winRate.toFixed(2)}%
+            </p>
+          </div>
+        </div>
+      ) : (
+        <p className="mt-3 text-xs text-muted">Loading performance...</p>
+      )}
+      {risk && (
+        <div className="mt-3 pt-3 border-t border-white/5 grid grid-cols-2 gap-3">
+          <div>
+            <p className="text-xxs text-muted uppercase">Concentration</p>
+            <p className="text-sm font-mono font-semibold text-white">
+              {risk.maxSingleStockConcentrationPct.toFixed(2)}%
+            </p>
+          </div>
+          <div>
+            <p className="text-xxs text-muted uppercase">Drawdown</p>
+            <p className="text-sm font-mono font-semibold text-white">
+              {risk.currentDrawdownPct.toFixed(2)}%
+            </p>
+          </div>
+        </div>
+      )}
+      {error && <p className="mt-2 text-xs text-danger">{error}</p>}
+    </Card>
+  );
+};
+
 // ============ Order Form ============
 
+type OrderMode = 'single' | 'batch' | 'conditional';
+
+interface BatchRow {
+  id: number;
+  code: string;
+  side: 'buy' | 'sell';
+  quantity: string;
+  orderType: 'market' | 'limit';
+  limitPrice: string;
+}
+
 const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ accountId, onSubmitted }) => {
+  const [mode, setMode] = useState<OrderMode>('single');
+
+  // Single order state
   const [code, setCode] = useState('');
   const [side, setSide] = useState<'buy' | 'sell'>('buy');
   const [quantity, setQuantity] = useState('');
   const [orderType, setOrderType] = useState<'market' | 'limit'>('market');
   const [limitPrice, setLimitPrice] = useState('');
+
+  // Conditional order state
+  const [conditionalType, setConditionalType] = useState<'stop_loss' | 'take_profit'>('stop_loss');
+  const [triggerPrice, setTriggerPrice] = useState('');
+
+  // Batch order state
+  const [batchRows, setBatchRows] = useState<BatchRow[]>([
+    { id: 1, code: '', side: 'buy', quantity: '', orderType: 'market', limitPrice: '' },
+  ]);
+
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<TradeResultResponse | null>(null);
+  const [batchResult, setBatchResult] = useState<BatchOrderResponse | null>(null);
+  const [conditionalResult, setConditionalResult] = useState<{ id: number; status: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const resetResults = () => {
+    setResult(null);
+    setBatchResult(null);
+    setConditionalResult(null);
+    setError(null);
+  };
+
+  const handleSingleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    setResult(null);
-    setError(null);
+    resetResults();
     try {
       const qty = parseFloat(quantity);
       if (!code || Number.isNaN(qty) || qty <= 0) {
@@ -167,72 +296,86 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
     }
   };
 
-  return (
-    <Card variant="gradient" padding="md">
-      <span className="label-uppercase">Manual Order</span>
-      <form onSubmit={handleSubmit} className="mt-3 space-y-3">
-        <div className="grid grid-cols-2 gap-3">
-          <input
-            type="text"
-            value={code}
-            onChange={(e) => setCode(e.target.value.toUpperCase())}
-            placeholder="Code"
-            className="input-terminal"
-            data-testid="order-code-input"
-          />
-          <select
-            value={side}
-            onChange={(e) => setSide(e.target.value as 'buy' | 'sell')}
-            className="input-terminal bg-elevated"
-            data-testid="order-side-select"
-          >
-            <option value="buy">Buy</option>
-            <option value="sell">Sell</option>
-          </select>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <input
-            type="number"
-            value={quantity}
-            onChange={(e) => setQuantity(e.target.value)}
-            placeholder="Quantity"
-            min={0.01}
-            step={0.01}
-            className="input-terminal"
-            data-testid="order-quantity-input"
-          />
-          <select
-            value={orderType}
-            onChange={(e) => setOrderType(e.target.value as 'market' | 'limit')}
-            className="input-terminal bg-elevated"
-            data-testid="order-type-select"
-          >
-            <option value="market">Market</option>
-            <option value="limit">Limit</option>
-          </select>
-        </div>
-        {orderType === 'limit' && (
-          <input
-            type="number"
-            value={limitPrice}
-            onChange={(e) => setLimitPrice(e.target.value)}
-            placeholder="Limit price"
-            min={0.01}
-            step={0.01}
-            className="input-terminal"
-            data-testid="order-limit-price-input"
-          />
-        )}
-        <button
-          type="submit"
-          disabled={loading}
-          className="btn-primary w-full flex items-center justify-center gap-2"
-          data-testid="order-submit-button"
-        >
-          {loading ? 'Submitting...' : 'Submit Order'}
-        </button>
-      </form>
-      {result && (
+  const handleConditionalSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    resetResults();
+    try {
+      const qty = parseFloat(quantity);
+      const trigger = parseFloat(triggerPrice);
+      if (!code || Number.isNaN(qty) || qty <= 0 || Number.isNaN(trigger) || trigger <= 0) {
+        throw new Error('Please enter a valid code, quantity and trigger price');
+      }
+      const res = await paperTradingApi.createConditionalOrder({
+        accountId,
+        code: code.toUpperCase(),
+        side,
+        quantity: qty,
+        orderType: conditionalType,
+        triggerPrice: trigger,
+        limitPrice: orderType === 'limit' && limitPrice ? parseFloat(limitPrice) : undefined,
+        reason: 'manual conditional order from WebUI',
+      });
+      setConditionalResult({ id: res.id, status: res.status });
+      onSubmitted();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Conditional order failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleBatchSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    resetResults();
+    try {
+      const orders = batchRows
+        .filter(row => row.code && row.quantity)
+        .map(row => {
+          const qty = parseFloat(row.quantity);
+          if (Number.isNaN(qty) || qty <= 0) {
+            throw new Error(`Invalid quantity for ${row.code}`);
+          }
+          return {
+            code: row.code.toUpperCase(),
+            side: row.side,
+            quantity: qty,
+            orderType: row.orderType,
+            limitPrice: row.orderType === 'limit' && row.limitPrice ? parseFloat(row.limitPrice) : undefined,
+          };
+        });
+      if (orders.length === 0) {
+        throw new Error('Please add at least one valid order');
+      }
+      const res = await paperTradingApi.submitBatchOrders({ accountId, orders });
+      setBatchResult(res);
+      onSubmitted();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Batch order failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const updateBatchRow = (id: number, field: keyof BatchRow, value: string) => {
+    setBatchRows(rows => rows.map(row => row.id === id ? { ...row, [field]: value } : row));
+  };
+
+  const addBatchRow = () => {
+    setBatchRows(rows => [
+      ...rows,
+      { id: Date.now(), code: '', side: 'buy', quantity: '', orderType: 'market', limitPrice: '' },
+    ]);
+  };
+
+  const removeBatchRow = (id: number) => {
+    setBatchRows(rows => rows.filter(row => row.id !== id));
+  };
+
+  const renderResult = () => {
+    if (result) {
+      return (
         <div className="mt-3 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs">
           <span className="text-emerald-400">{result.status.toUpperCase()}</span>
           {' '}
@@ -244,9 +387,299 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
             <span className="text-secondary"> x {formatNumber(result.fillQuantity)}</span>
           )}
         </div>
+      );
+    }
+    if (batchResult) {
+      return (
+        <div className="mt-3 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs space-y-1">
+          <p className="text-emerald-400">BATCH SUBMITTED ({batchResult.total})</p>
+          {batchResult.results.map((r: TradeResultResponse, i: number) => (
+            <p key={i} className="text-secondary">
+              {r.code}: {r.status.toUpperCase()}
+              {r.fillPrice != null && ` @ ${formatNumber(r.fillPrice)}`}
+            </p>
+          ))}
+        </div>
+      );
+    }
+    if (conditionalResult) {
+      return (
+        <div className="mt-3 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs">
+          <span className="text-emerald-400">CONDITIONAL CREATED</span>
+          {' '}
+          <span className="text-secondary">#{conditionalResult.id}</span>
+        </div>
+      );
+    }
+    return null;
+  };
+
+  return (
+    <Card variant="gradient" padding="md">
+      <span className="label-uppercase">Orders</span>
+      <div className="mt-2 flex gap-1 p-1 rounded-lg bg-elevated">
+        {(['single', 'batch', 'conditional'] as OrderMode[]).map(m => (
+          <button
+            key={m}
+            type="button"
+            onClick={() => { setMode(m); resetResults(); }}
+            className={`flex-1 text-xs py-1.5 rounded-md transition-colors ${
+              mode === m ? 'bg-cyan/20 text-cyan' : 'text-muted hover:text-secondary'
+            }`}
+            data-testid={`order-mode-${m}`}
+          >
+            {m === 'single' ? 'Single' : m === 'batch' ? 'Batch' : 'Conditional'}
+          </button>
+        ))}
+      </div>
+
+      {mode === 'single' && (
+        <form onSubmit={handleSingleSubmit} className="mt-3 space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <input
+              type="text"
+              value={code}
+              onChange={(e) => setCode(e.target.value.toUpperCase())}
+              placeholder="Code"
+              className="input-terminal"
+              data-testid="order-code-input"
+            />
+            <select
+              value={side}
+              onChange={(e) => setSide(e.target.value as 'buy' | 'sell')}
+              className="input-terminal bg-elevated"
+              data-testid="order-side-select"
+            >
+              <option value="buy">Buy</option>
+              <option value="sell">Sell</option>
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <input
+              type="number"
+              value={quantity}
+              onChange={(e) => setQuantity(e.target.value)}
+              placeholder="Quantity"
+              min={0.01}
+              step={0.01}
+              className="input-terminal"
+              data-testid="order-quantity-input"
+            />
+            <select
+              value={orderType}
+              onChange={(e) => setOrderType(e.target.value as 'market' | 'limit')}
+              className="input-terminal bg-elevated"
+              data-testid="order-type-select"
+            >
+              <option value="market">Market</option>
+              <option value="limit">Limit</option>
+            </select>
+          </div>
+          {orderType === 'limit' && (
+            <input
+              type="number"
+              value={limitPrice}
+              onChange={(e) => setLimitPrice(e.target.value)}
+              placeholder="Limit price"
+              min={0.01}
+              step={0.01}
+              className="input-terminal"
+              data-testid="order-limit-price-input"
+            />
+          )}
+          <button
+            type="submit"
+            disabled={loading}
+            className="btn-primary w-full flex items-center justify-center gap-2"
+            data-testid="order-submit-button"
+          >
+            {loading ? 'Submitting...' : 'Submit Order'}
+          </button>
+        </form>
       )}
+
+      {mode === 'conditional' && (
+        <form onSubmit={handleConditionalSubmit} className="mt-3 space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <input
+              type="text"
+              value={code}
+              onChange={(e) => setCode(e.target.value.toUpperCase())}
+              placeholder="Code"
+              className="input-terminal"
+              data-testid="conditional-code-input"
+            />
+            <select
+              value={side}
+              onChange={(e) => setSide(e.target.value as 'buy' | 'sell')}
+              className="input-terminal bg-elevated"
+              data-testid="conditional-side-select"
+            >
+              <option value="buy">Buy</option>
+              <option value="sell">Sell</option>
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <input
+              type="number"
+              value={quantity}
+              onChange={(e) => setQuantity(e.target.value)}
+              placeholder="Quantity"
+              min={0.01}
+              step={0.01}
+              className="input-terminal"
+              data-testid="conditional-quantity-input"
+            />
+            <select
+              value={conditionalType}
+              onChange={(e) => setConditionalType(e.target.value as 'stop_loss' | 'take_profit')}
+              className="input-terminal bg-elevated"
+              data-testid="conditional-type-select"
+            >
+              <option value="stop_loss">Stop Loss</option>
+              <option value="take_profit">Take Profit</option>
+            </select>
+          </div>
+          <input
+            type="number"
+            value={triggerPrice}
+            onChange={(e) => setTriggerPrice(e.target.value)}
+            placeholder="Trigger price"
+            min={0.01}
+            step={0.01}
+            className="input-terminal"
+            data-testid="conditional-trigger-price-input"
+          />
+          <div className="grid grid-cols-2 gap-3">
+            <select
+              value={orderType}
+              onChange={(e) => setOrderType(e.target.value as 'market' | 'limit')}
+              className="input-terminal bg-elevated"
+              data-testid="conditional-order-type-select"
+            >
+              <option value="market">Market</option>
+              <option value="limit">Limit</option>
+            </select>
+            {orderType === 'limit' && (
+              <input
+                type="number"
+                value={limitPrice}
+                onChange={(e) => setLimitPrice(e.target.value)}
+                placeholder="Limit price"
+                min={0.01}
+                step={0.01}
+                className="input-terminal"
+                data-testid="conditional-limit-price-input"
+              />
+            )}
+          </div>
+          <button
+            type="submit"
+            disabled={loading}
+            className="btn-primary w-full flex items-center justify-center gap-2"
+            data-testid="conditional-submit-button"
+          >
+            {loading ? 'Submitting...' : 'Create Conditional Order'}
+          </button>
+        </form>
+      )}
+
+      {mode === 'batch' && (
+        <form onSubmit={handleBatchSubmit} className="mt-3 space-y-3">
+          <div className="max-h-64 overflow-y-auto space-y-2">
+            {batchRows.map((row, index) => (
+              <div key={row.id} className="p-2 rounded-lg bg-elevated border border-white/5 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted">#{index + 1}</span>
+                  {batchRows.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => removeBatchRow(row.id)}
+                      className="text-xs text-danger hover:text-red-300"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    value={row.code}
+                    onChange={(e) => updateBatchRow(row.id, 'code', e.target.value.toUpperCase())}
+                    placeholder="Code"
+                    className="input-terminal text-xs py-1.5"
+                    data-testid={`batch-code-input-${index}`}
+                  />
+                  <select
+                    value={row.side}
+                    onChange={(e) => updateBatchRow(row.id, 'side', e.target.value)}
+                    className="input-terminal bg-elevated text-xs py-1.5"
+                    data-testid={`batch-side-select-${index}`}
+                  >
+                    <option value="buy">Buy</option>
+                    <option value="sell">Sell</option>
+                  </select>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="number"
+                    value={row.quantity}
+                    onChange={(e) => updateBatchRow(row.id, 'quantity', e.target.value)}
+                    placeholder="Quantity"
+                    min={0.01}
+                    step={0.01}
+                    className="input-terminal text-xs py-1.5"
+                    data-testid={`batch-quantity-input-${index}`}
+                  />
+                  <select
+                    value={row.orderType}
+                    onChange={(e) => updateBatchRow(row.id, 'orderType', e.target.value)}
+                    className="input-terminal bg-elevated text-xs py-1.5"
+                    data-testid={`batch-type-select-${index}`}
+                  >
+                    <option value="market">Market</option>
+                    <option value="limit">Limit</option>
+                  </select>
+                </div>
+                {row.orderType === 'limit' && (
+                  <input
+                    type="number"
+                    value={row.limitPrice}
+                    onChange={(e) => updateBatchRow(row.id, 'limitPrice', e.target.value)}
+                    placeholder="Limit price"
+                    min={0.01}
+                    step={0.01}
+                    className="input-terminal text-xs py-1.5 w-full"
+                    data-testid={`batch-limit-price-input-${index}`}
+                  />
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={addBatchRow}
+              className="flex-1 btn-secondary text-xs py-2"
+              data-testid="batch-add-row-button"
+            >
+              + Add Row
+            </button>
+            <button
+              type="submit"
+              disabled={loading}
+              className="flex-1 btn-primary text-xs py-2"
+              data-testid="batch-submit-button"
+            >
+              {loading ? 'Submitting...' : 'Submit Batch'}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {renderResult()}
       {error && (
-        <p className="mt-3 text-xs text-danger">{error}</p>
+        <p className="mt-3 text-xs text-danger" data-testid="order-error-message">{error}</p>
       )}
     </Card>
   );
@@ -377,7 +810,12 @@ const PositionsTable: React.FC<{ positions: PositionItem[] }> = ({ positions }) 
   );
 };
 
-const OrdersTable: React.FC<{ orders: OrderItem[]; onRefresh: () => void }> = ({ orders, onRefresh }) => {
+const OrdersTable: React.FC<{
+  orders: OrderItem[];
+  onRefresh: () => void;
+  filters: { status: string; side: string; code: string };
+  onFiltersChange: (filters: { status: string; side: string; code: string }) => void;
+}> = ({ orders, onRefresh, filters, onFiltersChange }) => {
   const [actingId, setActingId] = useState<number | null>(null);
 
   const handleCancel = async (orderId: number) => {
@@ -390,53 +828,101 @@ const OrdersTable: React.FC<{ orders: OrderItem[]; onRefresh: () => void }> = ({
     }
   };
 
-  if (orders.length === 0) {
-    return <EmptyState message="No orders" />;
-  }
+  const filteredOrders = useMemo(() => {
+    return orders.filter(o => {
+      if (filters.status && o.status !== filters.status) return false;
+      if (filters.side && o.side !== filters.side) return false;
+      if (filters.code && !o.code.toLowerCase().includes(filters.code.toLowerCase())) return false;
+      return true;
+    });
+  }, [orders, filters]);
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-white/5" data-testid="orders-table">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="bg-elevated text-left">
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">ID</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Code</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Side</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Type</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">Qty</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">Filled</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Status</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Created</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          {orders.map((o) => (
-            <tr key={o.id} className="border-t border-white/5 hover:bg-hover transition-colors">
-              <td className="px-3 py-2 text-xs text-muted">{o.id}</td>
-              <td className="px-3 py-2 font-mono text-cyan text-xs">{o.code}</td>
-              <td className="px-3 py-2">{sideBadge(o.side)}</td>
-              <td className="px-3 py-2 text-xs text-secondary">{o.orderType}</td>
-              <td className="px-3 py-2 text-xs text-right text-white">{formatNumber(o.quantity)}</td>
-              <td className="px-3 py-2 text-xs text-right text-secondary">{formatNumber(o.filledQuantity)}</td>
-              <td className="px-3 py-2">{statusBadge(o.status)}</td>
-              <td className="px-3 py-2 text-xs text-muted">{formatDateTime(o.createdAt)}</td>
-              <td className="px-3 py-2">
-                {o.status === 'pending' && (
-                  <button
-                    type="button"
-                    onClick={() => handleCancel(o.id)}
-                    disabled={actingId === o.id}
-                    className="text-xs text-danger hover:text-red-300 disabled:opacity-50"
-                  >
-                    {actingId === o.id ? '...' : 'Cancel'}
-                  </button>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2 p-2 rounded-xl bg-elevated border border-white/5" data-testid="orders-filter-bar">
+        <select
+          value={filters.status}
+          onChange={(e) => onFiltersChange({ ...filters, status: e.target.value })}
+          className="input-terminal bg-elevated text-xs py-1.5"
+          data-testid="orders-filter-status"
+        >
+          <option value="">All Status</option>
+          <option value="pending">Pending</option>
+          <option value="filled">Filled</option>
+          <option value="cancelled">Cancelled</option>
+          <option value="rejected">Rejected</option>
+          <option value="conditional">Conditional</option>
+        </select>
+        <select
+          value={filters.side}
+          onChange={(e) => onFiltersChange({ ...filters, side: e.target.value })}
+          className="input-terminal bg-elevated text-xs py-1.5"
+          data-testid="orders-filter-side"
+        >
+          <option value="">All Sides</option>
+          <option value="buy">Buy</option>
+          <option value="sell">Sell</option>
+        </select>
+        <input
+          type="text"
+          value={filters.code}
+          onChange={(e) => onFiltersChange({ ...filters, code: e.target.value.toUpperCase() })}
+          placeholder="Filter code"
+          className="input-terminal text-xs py-1.5 flex-1 min-w-[120px]"
+          data-testid="orders-filter-code"
+        />
+        <span className="text-xs text-muted" data-testid="orders-filter-count">
+          {filteredOrders.length} / {orders.length}
+        </span>
+      </div>
+
+      {filteredOrders.length === 0 ? (
+        <EmptyState message="No orders match the filters" />
+      ) : (
+        <div className="overflow-x-auto rounded-xl border border-white/5" data-testid="orders-table">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-elevated text-left">
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">ID</th>
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Code</th>
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Side</th>
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Type</th>
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">Qty</th>
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">Filled</th>
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Status</th>
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Created</th>
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredOrders.map((o) => (
+                <tr key={o.id} className="border-t border-white/5 hover:bg-hover transition-colors">
+                  <td className="px-3 py-2 text-xs text-muted">{o.id}</td>
+                  <td className="px-3 py-2 font-mono text-cyan text-xs">{o.code}</td>
+                  <td className="px-3 py-2">{sideBadge(o.side)}</td>
+                  <td className="px-3 py-2 text-xs text-secondary">{o.orderType}</td>
+                  <td className="px-3 py-2 text-xs text-right text-white">{formatNumber(o.quantity)}</td>
+                  <td className="px-3 py-2 text-xs text-right text-secondary">{formatNumber(o.filledQuantity)}</td>
+                  <td className="px-3 py-2">{statusBadge(o.status)}</td>
+                  <td className="px-3 py-2 text-xs text-muted">{formatDateTime(o.createdAt)}</td>
+                  <td className="px-3 py-2">
+                    {o.status === 'pending' && (
+                      <button
+                        type="button"
+                        onClick={() => handleCancel(o.id)}
+                        disabled={actingId === o.id}
+                        className="text-xs text-danger hover:text-red-300 disabled:opacity-50"
+                      >
+                        {actingId === o.id ? '...' : 'Cancel'}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 };
@@ -640,6 +1126,7 @@ const PaperTradingPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [triggeringPm, setTriggeringPm] = useState(false);
   const [generatingPlan, setGeneratingPlan] = useState(false);
+  const [orderFilters, setOrderFilters] = useState({ status: '', side: '', code: '' });
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -852,6 +1339,9 @@ const PaperTradingPage: React.FC = () => {
             </div>
           </Card>
 
+          {/* Performance metrics */}
+          <PerformanceCard accountId={accountId} />
+
           {/* Order form */}
           <OrderForm accountId={accountId} onSubmitted={loadAll} />
 
@@ -890,7 +1380,14 @@ const PaperTradingPage: React.FC = () => {
           {/* Tab content */}
           <div className="flex-1 overflow-y-auto pt-3">
             {activeTab === 'positions' && <PositionsTable positions={positions} />}
-            {activeTab === 'orders' && <OrdersTable orders={orders} onRefresh={loadAll} />}
+            {activeTab === 'orders' && (
+              <OrdersTable
+                orders={orders}
+                onRefresh={loadAll}
+                filters={orderFilters}
+                onFiltersChange={setOrderFilters}
+              />
+            )}
             {activeTab === 'trades' && <TradesTable trades={trades} />}
             {activeTab === 'signals' && <SignalsTable signals={signals} />}
             {activeTab === 'decisions' && <DecisionsList decisions={decisions} />}

@@ -452,6 +452,30 @@ class TradingEngine:
     # Limit order matching (driven by market_listener)
     # ------------------------------------------------------------------
 
+    def tick_market_price(
+        self, account_id: int, code: str, price: float
+    ) -> List[TradeResult]:
+        """Drive one price tick through conditional + pending order matchers.
+
+        This is the entry point used by the MarketListener and by tests:
+        it first evaluates conditional orders, executes any that trigger as
+        market orders immediately, then runs the normal limit-order matcher.
+
+        Returns:
+            TradeResult list for any orders filled or rejected this tick.
+        """
+        results: List[TradeResult] = []
+        triggered = self.order_mgr.match_conditional_orders(account_id, code, price)
+
+        for order in triggered:
+            if order.get("order_type") == OrderType.MARKET.value:
+                result = self._execute_triggered_market_order(order, fill_price=price)
+                results.append(result)
+
+        # Run the normal pending limit matcher.
+        results.extend(self.match_pending_orders({code: price}))
+        return results
+
     def match_pending_orders(
         self, latest_prices: Dict[str, float]
     ) -> List[TradeResult]:
@@ -469,6 +493,12 @@ class TradingEngine:
         for order in pending_orders:
             price = latest_prices.get(order["code"])
             if price is None:
+                continue
+
+            # Market orders that are pending (e.g., from a conditional trigger
+            # that has not yet been executed) should not sit here — they are
+            # executed immediately by tick_market_price. Defensive skip.
+            if order.get("order_type") == OrderType.MARKET.value:
                 continue
 
             limit_price = float(order["price"] or 0.0)
@@ -489,6 +519,93 @@ class TradingEngine:
             results.append(result)
 
         return results
+
+    def _execute_triggered_market_order(
+        self, order: Dict[str, Any], fill_price: float
+    ) -> TradeResult:
+        """Fill a pending market order that was activated from a conditional order.
+
+        This path bypasses the signal pipeline (conditional orders do not
+        carry a PaperSignal). It performs minimal settlement and fires the
+        trade-executed callback.
+        """
+        order_id = int(order["id"])
+        account_id = int(order["account_id"])
+        side = order["side"]
+        code = order["code"]
+        name = order.get("name")
+        quantity = float(order["quantity"])
+        fee = self.fee_model.compute_fee(side, fill_price, quantity)
+
+        try:
+            if side == "buy":
+                actual_cost = self.fee_model.estimate_buy_cost(fill_price, quantity)
+                self.account_mgr.settle_buy(account_id, actual_cost, actual_cost)
+                trade = self.order_mgr.fill_order(order_id, fill_price, quantity, fee=fee)
+                self.position_mgr.apply_buy(account_id, code, quantity, fill_price, name=name)
+                self._apply_sltp_to_position(account_id, code, fill_price)
+            else:  # sell
+                pos = self.position_mgr.get_position(account_id, code)
+                if pos is None or float(pos.available_quantity or 0.0) < quantity - 1e-6:
+                    self.order_mgr.reject_order(
+                        order_id, reason="insufficient available quantity at fill time"
+                    )
+                    rejected = TradeResult(
+                        signal_id=order.get("signal_id") or 0,
+                        order_id=order_id,
+                        side=side,
+                        code=code,
+                        status="rejected",
+                        fill_price=None,
+                        fill_quantity=None,
+                        fee=None,
+                        reason="insufficient available quantity at fill time",
+                    )
+                    self._fire_callback(self._on_signal_rejected, rejected)
+                    return rejected
+                realized_pnl = self.position_mgr.apply_sell(account_id, code, quantity, fill_price)
+                trade = self.order_mgr.fill_order(order_id, fill_price, quantity, fee=fee)
+                proceeds = self.fee_model.estimate_sell_proceeds(fill_price, quantity)
+                self.account_mgr.settle_sell(account_id, proceeds)
+                logger.info(
+                    "Triggered market sell executed: code=%s qty=%s price=%.4f pnl=%.2f",
+                    code, quantity, fill_price, realized_pnl,
+                )
+        except Exception as exc:
+            logger.error(
+                "Triggered market order execution failed: order_id=%s err=%s",
+                order_id, exc, exc_info=True,
+            )
+            try:
+                self.order_mgr.reject_order(order_id, reason=f"execution error: {exc}")
+            except Exception:
+                pass
+            return TradeResult(
+                signal_id=order.get("signal_id") or 0,
+                order_id=order_id,
+                side=side,
+                code=code,
+                status="rejected",
+                fill_price=None,
+                fill_quantity=None,
+                fee=None,
+                reason=f"execution error: {exc}",
+            )
+
+        result = TradeResult(
+            signal_id=order.get("signal_id") or 0,
+            order_id=order_id,
+            side=side,
+            code=code,
+            status="executed",
+            fill_price=fill_price,
+            fill_quantity=quantity,
+            fee=fee,
+            reason="conditional order triggered and filled as market",
+        )
+        trade_id = getattr(trade, "id", None) if trade is not None else None
+        self._fire_callback(self._on_trade_executed, result, trade_id=trade_id)
+        return result
 
     def _fill_limit_order(self, order: Dict[str, Any], fill_price: float) -> TradeResult:
         """Fill a pending limit order at the given price (no slippage)."""
@@ -1244,6 +1361,7 @@ class TradingEngine:
             raise ValueError(f"Order id={order_id} not found")
         if order.status not in (
             OrderStatus.PENDING.value,
+            OrderStatus.CONDITIONAL.value,
             OrderStatus.PARTIALLY_FILLED.value,
         ):
             return TradeResult(
@@ -1268,6 +1386,8 @@ class TradingEngine:
         signal_id = int(order.signal_id) if order.signal_id else None
 
         # Unfreeze cash for buy limit orders (only the remaining unfilled portion).
+        # Conditional orders do not freeze cash until they trigger, so this is
+        # a no-op for them.
         if side == "buy" and remaining_qty > 0 and price > 0:
             try:
                 frozen_amount = self.fee_model.estimate_buy_cost(price, remaining_qty)

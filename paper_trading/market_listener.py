@@ -195,6 +195,73 @@ def get_market_close_today(market: str, now: Optional[datetime] = None) -> Optio
 
 
 # ============================================================
+# Timeframe resampling helpers
+# ============================================================
+
+_TIMEFRAME_FREQ: Dict[str, str] = {
+    "1d": "D",
+    "d": "D",
+    "day": "D",
+    "daily": "D",
+    "1w": "W",
+    "w": "W",
+    "week": "W",
+    "weekly": "W",
+    "1m": "M",
+    "m": "M",
+    "month": "M",
+    "monthly": "M",
+}
+
+
+def _resample_to_timeframe(df: Any, timeframe: str) -> Any:
+    """Resample a daily DataFrame to ``timeframe`` (1d/1w/1m/Nd/etc.).
+
+    The input must be indexed by a pandas DatetimeIndex and contain at
+    least a ``close`` column. OHLCV columns are aggregated; other columns
+    take the last value of the period.
+
+    Returns None if the timeframe is unsupported or resampling fails.
+    """
+    import pandas as pd
+
+    tf = timeframe.strip().lower()
+    if tf in ("1d", "d", "day", "daily"):
+        return df
+
+    # Try simple alias first, then numeric prefix (e.g. "5d", "2w").
+    freq = _TIMEFRAME_FREQ.get(tf)
+    if freq is None:
+        for suffix, base_freq in (("d", "D"), ("w", "W"), ("m", "M")):
+            if tf.endswith(suffix):
+                try:
+                    n = int(tf[:-1])
+                    if n > 0:
+                        freq = f"{n}{base_freq}"
+                        break
+                except ValueError:
+                    continue
+    if freq is None:
+        logger.debug("[MarketListener] unsupported timeframe: %s", timeframe)
+        return None
+
+    try:
+        agg: Dict[str, str] = {}
+        for col in df.columns:
+            if col in ("open", "high", "low", "close"):
+                agg[col] = {"open": "first", "high": "max", "low": "min", "close": "last"}[col]
+            elif col == "volume":
+                agg[col] = "sum"
+            else:
+                agg[col] = "last"
+        resampled = df.resample(freq).agg(agg).dropna(subset=["close"])
+        return resampled
+    except Exception as exc:
+        logger.debug("[MarketListener] resample failed for %s: %s", timeframe, exc)
+        return None
+
+
+# ============================================================
 # Listener config
 # ============================================================
 
@@ -230,6 +297,9 @@ class MarketListenerConfig:
         enable_battle_plan: P1-C: If True, generate a next-day battle plan
             after ``daily_settle`` (requires ``battle_plan_generator``).
             Default True.
+        strategy_timeframes: Phase 3: default timeframes to evaluate when a
+            strategy does not declare its own. Default ["1d"]. The listener
+            fetches/resamples data for each timeframe and requires consensus.
     """
 
     account_id: int
@@ -245,6 +315,8 @@ class MarketListenerConfig:
     pm_decision_interval_seconds: float = 600.0
     enable_daily_reflection: bool = True
     enable_battle_plan: bool = True
+    # Phase 3 additions
+    strategy_timeframes: List[str] = field(default_factory=lambda: ["1d"])
 
 
 # ============================================================
@@ -468,14 +540,22 @@ class MarketListener:
             price = latest_prices.get(code)
             if price is None or price <= 0:
                 continue
-            df = self._get_daily_df(code)
-            if df is None or len(df) < 2:
-                continue
+
             for strategy in self.strategies:
+                timeframes = strategy.timeframes or self.config.strategy_timeframes or ["1d"]
+                data = self._get_strategy_data(code, timeframes)
+                if data is None:
+                    continue
+
                 try:
-                    signal = self.rule_engine.evaluate(
-                        strategy=strategy, df=df, code=code,
-                    )
+                    if len(timeframes) == 1:
+                        signal = self.rule_engine.evaluate(
+                            strategy=strategy, df=data[timeframes[0]], code=code,
+                        )
+                    else:
+                        signal = self.rule_engine.evaluate_multi_timeframe(
+                            strategy=strategy, data=data, code=code,
+                        )
                 except Exception as exc:
                     logger.warning(
                         "[MarketListener] evaluate failed: %s/%s: %s",
@@ -503,6 +583,36 @@ class MarketListener:
                         "[MarketListener] submit_signal failed: %s %s: %s",
                         signal.side, code, exc,
                     )
+
+    def _get_strategy_data(
+        self,
+        code: str,
+        timeframes: List[str],
+    ) -> Optional[Dict[str, Any]]:
+        """Return a {timeframe: DataFrame} dict for ``code``.
+
+        Daily bars are fetched once and cached; higher timeframes are
+        resampled from the daily bars. Returns None if any required
+        timeframe cannot be produced.
+        """
+        daily_df = self._get_daily_df(code)
+        if daily_df is None or len(daily_df) < 2:
+            return None
+
+        out: Dict[str, Any] = {}
+        for tf in timeframes:
+            tf_clean = str(tf).strip().lower()
+            if tf_clean in ("1d", "d", "day", "daily"):
+                out[tf] = daily_df
+                continue
+            df_tf = _resample_to_timeframe(daily_df, tf_clean)
+            if df_tf is None or len(df_tf) < 2:
+                logger.debug(
+                    "[MarketListener] %s: timeframe %s unavailable", code, tf
+                )
+                return None
+            out[tf] = df_tf
+        return out
 
     def _should_emit_signal(self, signal: Signal) -> bool:
         """Dedupe: skip if same (code, strategy, side) was emitted recently."""
@@ -832,6 +942,9 @@ def build_default_listener(
         ),
         enable_daily_reflection=enable_daily_reflection,
         enable_battle_plan=enable_battle_plan,
+        strategy_timeframes=list(
+            getattr(config, "paper_trading_strategy_timeframes", ["1d"]) or ["1d"]
+        ),
     )
 
     return MarketListener(

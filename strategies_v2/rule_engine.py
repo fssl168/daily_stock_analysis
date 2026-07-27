@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
@@ -108,6 +108,64 @@ class RuleEngine:
                 )
 
         return self._no_signal(strategy, code, name, reason="no rule matched")
+
+    def evaluate_multi_timeframe(
+        self,
+        strategy: RuleStrategy,
+        data: Dict[str, pd.DataFrame],
+        code: str,
+        name: Optional[str] = None,
+    ) -> Signal:
+        """Evaluate a strategy across multiple timeframes (AND semantics).
+
+        All configured ``strategy.timeframes`` must produce the same non-none
+        side for a signal to be emitted. If any timeframe is missing from
+        ``data``, lacks sufficient history, or returns ``side='none'``, the
+        result is a no-signal. Mixed buy/sell across timeframes also yields
+        no signal (conservative consensus).
+        """
+        timeframes = strategy.timeframes or ["1d"]
+        if not timeframes:
+            return self._no_signal(strategy, code, name, reason="no timeframes configured")
+
+        signals: List[Signal] = []
+        for tf in timeframes:
+            df = data.get(tf)
+            if df is None or len(df) < 2:
+                return self._no_signal(
+                    strategy, code, name, reason=f"timeframe {tf} unavailable"
+                )
+            signal = self.evaluate(strategy, df, code, name)
+            if signal.side == "none":
+                return self._no_signal(
+                    strategy, code, name,
+                    reason=f"timeframe {tf} did not produce a signal",
+                )
+            signals.append(signal)
+
+        # Consensus: all signals must agree on side.
+        sides = {s.side for s in signals}
+        if len(sides) != 1:
+            return self._no_signal(
+                strategy, code, name,
+                reason="mixed signals across timeframes",
+            )
+
+        # Use the first timeframe's signal, annotating it as multi-timeframe.
+        consensus = signals[0]
+        return Signal(
+            side=consensus.side,
+            code=consensus.code,
+            name=consensus.name,
+            strategy_name=consensus.strategy_name,
+            rule_name=consensus.rule_name,
+            trigger_price=consensus.trigger_price,
+            suggested_quantity=consensus.suggested_quantity,
+            reason=(
+                f"Multi-timeframe consensus ({','.join(timeframes)}): "
+                f"{consensus.reason}"
+            ),
+        )
 
     # ------------------------------------------------------------------
     # Rule matching

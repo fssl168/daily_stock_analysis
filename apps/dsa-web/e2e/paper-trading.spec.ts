@@ -265,7 +265,7 @@ const mockDrawdownCurve = [
 
 const mockDailyReport = {
   date: '2026-07-22',
-  markdown: '# Daily Report\n\n## Summary\nNet value: 1000.00\nReturn: 0.00%\n\n## Holdings\n- 000001: 100 shares @ 1.50\n\n## Reflection\nDisciplined execution, watch spreads.',
+  markdown: '# 日报\n\n## 摘要\n净值: 1000.00\n收益: 0.00%\n\n## 持仓\n- 000001: 100 股 @ 1.50\n\n## 复盘\n执行纪律良好，注意价差。',
   report_path: 'data/paper_trading/reports/daily_report_2026-07-22.md',
   voice_path: null,
   used_fallback: false,
@@ -326,6 +326,15 @@ async function mockPaperTradingApis(page: import('@playwright/test').Page) {
     });
   });
 
+  // Watchlist: GET /api/v1/stocks/watchlist (used by listener start).
+  await page.route('**/api/v1/stocks/watchlist', async (route, request) => {
+    if (request.method() === 'OPTIONS') {
+      await fulfillOptions(route);
+      return;
+    }
+    await fulfillJson(route, { stock_codes: ['000001', '000002', '000003'] });
+  });
+
   // Global CORS preflight handler for all paper-trading endpoints.
   await page.route('**/api/v1/paper-trading/**', async (route, request) => {
     if (request.method() === 'OPTIONS') {
@@ -340,6 +349,15 @@ async function mockPaperTradingApis(page: import('@playwright/test').Page) {
     const url = new URL(request.url());
     const path = url.pathname;
     const method = request.method();
+
+    // Account list: GET /api/v1/paper-trading/accounts
+    if (path === '/api/v1/paper-trading/accounts' && method === 'GET') {
+      await fulfillJson(route, {
+        accounts: [mockAccountSnapshot],
+        total: 1,
+      });
+      return;
+    }
 
     // Account snapshot: GET /api/v1/paper-trading/accounts/{id}
     const accountMatch = path.match(/^\/api\/v1\/paper-trading\/accounts\/(\d+)$/);
@@ -401,7 +419,7 @@ async function mockPaperTradingApis(page: import('@playwright/test').Page) {
       await fulfillJson(route, {
         running: listenerRunning,
         account_id: listenerRunning ? 1 : null,
-        watched_codes_count: listenerRunning ? 1 : 0,
+        watched_codes_count: listenerRunning ? 3 : 0,
         strategies_count: listenerRunning ? 1 : 0,
         markets: listenerRunning ? ['CN'] : [],
         last_settle_date: null,
@@ -654,29 +672,29 @@ test.describe('Paper Trading Page', () => {
   });
 
   test('renders header and account summary', async ({ page }) => {
-    await expect(page.getByTestId('paper-trading-title')).toHaveText('Paper Trading');
+    await expect(page.getByTestId('paper-trading-title')).toHaveText('纸面交易');
     await expect(page.getByTestId('account-id-input')).toHaveValue('1');
     // Wait for the initial data load to finish.
-    await expect(page.getByTestId('refresh-button')).not.toHaveText('Loading...');
-    await expect(page.getByText('Net Value', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('refresh-button')).not.toHaveText('加载中...');
+    await expect(page.getByText('净值', { exact: true })).toBeVisible();
     await expect(page.getByText('1000.00')).toBeVisible();
     await expect(page.getByText('+0.00%')).toBeVisible();
   });
 
   test('switches tabs and displays corresponding content', async ({ page }) => {
-    await expect(page.getByTestId('refresh-button')).not.toHaveText('Loading...');
+    await expect(page.getByTestId('refresh-button')).not.toHaveText('加载中...');
     await expect(page.getByTestId('tab-positions')).toHaveAttribute('class', /text-cyan/);
     await expect(page.getByText('000001')).toBeVisible();
 
     await page.getByTestId('tab-orders').click();
-    await expect(page.getByTestId('orders-table')).toContainText('filled');
+    await expect(page.getByTestId('orders-table')).toContainText('已成交');
     await expect(page.getByTestId('orders-table')).toContainText('000001');
 
     await page.getByTestId('tab-trades').click();
     await expect(page.getByTestId('trades-table')).toContainText('1.50');
 
     await page.getByTestId('tab-signals').click();
-    await expect(page.getByTestId('signals-table')).toContainText('executed');
+    await expect(page.getByTestId('signals-table')).toContainText('已执行');
 
     await page.getByTestId('tab-decisions').click();
     await expect(page.getByText('Breakout above resistance')).toBeVisible();
@@ -696,7 +714,7 @@ test.describe('Paper Trading Page', () => {
 
     await page.getByTestId('order-submit-button').click();
 
-    await expect(page.getByText('EXECUTED')).toBeVisible();
+    await expect(page.getByText('已执行')).toBeVisible();
     await expect(page.getByText('000002')).toBeVisible();
   });
 
@@ -709,19 +727,19 @@ test.describe('Paper Trading Page', () => {
   });
 
   test('starts and stops the market listener', async ({ page }) => {
-    await expect(page.getByText('STOPPED')).toBeVisible();
+    await expect(page.getByText('已停止')).toBeVisible();
 
     await page.getByTestId('listener-start-button').click();
-    await expect(page.getByText('RUNNING')).toBeVisible();
+    await expect(page.getByText('运行中')).toBeVisible();
 
     await page.getByTestId('listener-stop-button').click();
-    await expect(page.getByText('STOPPED')).toBeVisible();
+    await expect(page.getByText('已停止')).toBeVisible();
   });
 
   test('navigates via dock link', async ({ page }) => {
     await page.getByRole('link', { name: '模拟交易' }).click();
     await expect(page).toHaveURL('/paper-trading');
-    await expect(page.getByTestId('paper-trading-title')).toHaveText('Paper Trading');
+    await expect(page.getByTestId('paper-trading-title')).toHaveText('纸面交易');
   });
 
   test('displays performance metrics', async ({ page }) => {
@@ -741,7 +759,7 @@ test.describe('Paper Trading Page', () => {
 
     await page.getByTestId('conditional-submit-button').click();
 
-    await expect(page.getByText('CONDITIONAL CREATED')).toBeVisible();
+    await expect(page.getByText('条件单已创建')).toBeVisible();
     await expect(page.getByText('#100')).toBeVisible();
   });
 
@@ -759,9 +777,9 @@ test.describe('Paper Trading Page', () => {
 
     await page.getByTestId('batch-submit-button').click();
 
-    await expect(page.getByText('BATCH SUBMITTED (2)')).toBeVisible();
-    await expect(page.getByText('000004: EXECUTED')).toBeVisible();
-    await expect(page.getByText('000005: EXECUTED')).toBeVisible();
+    await expect(page.getByText('批量提交 (2)')).toBeVisible();
+    await expect(page.getByText('000004: 已执行')).toBeVisible();
+    await expect(page.getByText('000005: 已执行')).toBeVisible();
   });
 
   test('filters orders by status and code', async ({ page }) => {
@@ -849,7 +867,7 @@ test.describe('Paper Trading Page', () => {
   test('displays drawdown curve in performance card', async ({ page }) => {
     // The drawdown chart should be visible in the performance card.
     await expect(page.getByTestId('drawdown-chart')).toBeVisible();
-    await expect(page.getByText('Drawdown Curve')).toBeVisible();
+    await expect(page.getByText('回撤曲线')).toBeVisible();
   });
 
   test('generates a daily report', async ({ page }) => {
@@ -860,8 +878,8 @@ test.describe('Paper Trading Page', () => {
 
     // The report content should appear.
     await expect(page.getByTestId('daily-report-content')).toBeVisible();
-    await expect(page.getByTestId('daily-report-markdown')).toContainText('Daily Report');
-    await expect(page.getByText('saved')).toBeVisible();
+    await expect(page.getByTestId('daily-report-markdown')).toContainText('日报');
+    await expect(page.getByText('已保存')).toBeVisible();
   });
 
   test('loads a daily report by date', async ({ page }) => {
@@ -873,7 +891,7 @@ test.describe('Paper Trading Page', () => {
 
     // The report content should appear.
     await expect(page.getByTestId('daily-report-content')).toBeVisible();
-    await expect(page.getByText('Daily Report - 2026-07-22')).toBeVisible();
+    await expect(page.getByText('日报 - 2026-07-22')).toBeVisible();
   });
 
   test('triggers PM decision', async ({ page }) => {

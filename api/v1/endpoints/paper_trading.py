@@ -34,6 +34,8 @@ from api.deps import get_config_dep, get_database_manager
 from api.v1.schemas.common import ErrorResponse
 from api.v1.schemas.paper_trading import (
     AccountCreateRequest,
+    AccountListItem,
+    AccountListResponse,
     AccountSnapshotResponse,
     BatchOrderCreateRequest,
     BatchOrderResponse,
@@ -595,6 +597,44 @@ def _candidate_dict_to_item(c: Dict[str, Any]) -> Any:
 # ---------------------------------------------------------------------------
 # Account endpoints
 # ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/accounts",
+    response_model=AccountListResponse,
+    responses={
+        500: {"description": "Server error", "model": ErrorResponse},
+    },
+    summary="List paper trading accounts",
+)
+def list_accounts(
+    service: PaperTradingService = Depends(get_paper_trading_service),
+) -> AccountListResponse:
+    try:
+        mgr = service.account_mgr()
+        rows = mgr.list_accounts()
+        accounts: List[AccountListItem] = []
+        for account in rows:
+            snap = mgr.snapshot(account.id)
+            position_count = len(service.position_mgr().list_positions(account.id))
+            accounts.append(
+                AccountListItem(
+                    account_id=snap.id,
+                    name=snap.name,
+                    initial_capital=snap.initial_capital,
+                    cash=snap.cash,
+                    frozen_cash=snap.frozen_cash,
+                    total_market_value=snap.market_value,
+                    net_value=snap.total_assets,
+                    return_pct=snap.pnl_pct,
+                    position_count=position_count,
+                    status=snap.status,
+                )
+            )
+        return AccountListResponse(accounts=accounts, total=len(accounts))
+    except Exception as exc:
+        logger.error("[paper_trading] list_accounts failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"list_accounts failed: {exc}")
 
 
 @router.post(

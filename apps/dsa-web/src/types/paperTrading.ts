@@ -24,6 +24,24 @@ export interface AccountCreateRequest {
   resetIfExists?: boolean;
 }
 
+export interface AccountListItem {
+  accountId: number;
+  name: string;
+  initialCapital: number;
+  cash: number;
+  frozenCash: number;
+  totalMarketValue: number;
+  netValue: number;
+  returnPct: number;
+  positionCount: number;
+  status: string;
+}
+
+export interface AccountListResponse {
+  accounts: AccountListItem[];
+  total: number;
+}
+
 // ============ Orders ============
 
 export interface OrderCreateRequest {

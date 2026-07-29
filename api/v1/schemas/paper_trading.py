@@ -51,6 +51,28 @@ class AccountCreateRequest(BaseModel):
     )
 
 
+class AccountListItem(BaseModel):
+    """Minimal paper trading account item for list views."""
+
+    account_id: int
+    name: str
+    initial_capital: float
+    cash: float
+    frozen_cash: float
+    total_market_value: float = Field(0.0, description="Sum of position market value")
+    net_value: float = Field(0.0, description="Cash + market value")
+    return_pct: float = Field(0.0, description="(net_value/initial_capital - 1) * 100")
+    position_count: int = 0
+    status: str = "active"
+
+
+class AccountListResponse(BaseModel):
+    """List of paper trading accounts."""
+
+    accounts: List[AccountListItem]
+    total: int
+
+
 # ---------------------------------------------------------------------------
 # Orders
 # ---------------------------------------------------------------------------

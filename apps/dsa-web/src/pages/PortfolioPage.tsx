@@ -1,7 +1,9 @@
-import type React from 'react';
+import React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Pie, PieChart, ResponsiveContainer, Tooltip, Legend, Cell } from 'recharts';
 import { decisionSignalsApi } from '../api/decisionSignals';
+import { paperTradingApi } from '../api/paperTrading';
 import { portfolioApi } from '../api/portfolio';
 import type { ParsedApiError } from '../api/error';
 import { getParsedApiError } from '../api/error';
@@ -29,6 +31,9 @@ import {
   getTodayIso,
   hasPositionPrice,
 } from '../utils/portfolioFormat';
+import type {
+  AccountListItem,
+} from '../types/paperTrading';
 import type {
   DecisionSignalItem,
   DecisionSignalMarket,
@@ -97,6 +102,12 @@ const PORTFOLIO_LIMITATION_LABELS: Record<string, Record<PortfolioPageLanguage, 
   },
 };
 
+const PAPER_ACCOUNT_STATUS_LABELS: Record<string, Record<PortfolioPageLanguage, string>> = {
+  active: { zh: '运行中', en: 'Active' },
+  inactive: { zh: '已停用', en: 'Inactive' },
+  closed: { zh: '已关闭', en: 'Closed' },
+};
+
 type PendingDelete =
   | { eventType: 'trade'; id: number; message: string }
   | { eventType: 'cash'; id: number; message: string }
@@ -131,6 +142,10 @@ function isNewerSignal(left: DecisionSignalItem | undefined, right: DecisionSign
 
 function formatPortfolioLimitation(limitation: string, language: PortfolioPageLanguage): string {
   return PORTFOLIO_LIMITATION_LABELS[limitation]?.[language] ?? limitation;
+}
+
+function formatPaperAccountStatus(status: string, language: PortfolioPageLanguage): string {
+  return PAPER_ACCOUNT_STATUS_LABELS[status]?.[language] ?? status;
 }
 
 const DECISION_SIGNAL_MARKETS = new Set<DecisionSignalMarket>(['cn', 'hk', 'us', 'jp', 'kr', 'tw']);
@@ -182,6 +197,7 @@ async function loadPortfolioSignalLookup(lookup: PortfolioSignalLookup): Promise
 const PortfolioPage: React.FC = () => {
   const { language, t } = useUiLanguage();
   const text = PORTFOLIO_TEXT[language];
+  const navigate = useNavigate();
   const decisionActionLabels = useMemo(() => buildDecisionActionLabelMap(t), [t]);
 
   // Set page title
@@ -195,6 +211,9 @@ const PortfolioPage: React.FC = () => {
   const [accountCreating, setAccountCreating] = useState(false);
   const [accountCreateError, setAccountCreateError] = useState<string | null>(null);
   const [accountCreateSuccess, setAccountCreateSuccess] = useState<string | null>(null);
+  const [paperAccounts, setPaperAccounts] = useState<AccountListItem[]>([]);
+  const [paperAccountsLoading, setPaperAccountsLoading] = useState(false);
+  const [paperAccountsError, setPaperAccountsError] = useState<string | null>(null);
   const [accountForm, setAccountForm] = useState({
     name: '',
     broker: 'Demo',
@@ -308,6 +327,20 @@ const PortfolioPage: React.FC = () => {
       if (items.length === 0) setShowCreateAccount(true);
     } catch (err) {
       setError(getParsedApiError(err));
+    }
+  }, []);
+
+  const loadPaperAccounts = useCallback(async () => {
+    setPaperAccountsLoading(true);
+    setPaperAccountsError(null);
+    try {
+      const response = await paperTradingApi.getAccounts();
+      setPaperAccounts(response.accounts || []);
+    } catch (err) {
+      setPaperAccounts([]);
+      setPaperAccountsError(getParsedApiError(err).message);
+    } finally {
+      setPaperAccountsLoading(false);
     }
   }, []);
 
@@ -434,7 +467,8 @@ const PortfolioPage: React.FC = () => {
   useEffect(() => {
     void loadAccounts();
     void loadBrokers();
-  }, [loadAccounts, loadBrokers]);
+    void loadPaperAccounts();
+  }, [loadAccounts, loadBrokers, loadPaperAccounts]);
 
   useEffect(() => {
     void loadSnapshotAndRisk();
@@ -1027,6 +1061,80 @@ const PortfolioPage: React.FC = () => {
             className="inline-block rounded-lg px-3 py-2 text-xs shadow-none"
             message={text.noAccounts}
           />
+        )}
+      </section>
+
+      <section className="space-y-3" data-testid="paper-accounts-section">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <h2 className="text-sm font-semibold text-foreground">{text.paperAccounts}</h2>
+            <p className="text-xs text-secondary">{text.paperAccountHint}</p>
+          </div>
+          {paperAccountsLoading ? (
+            <span className="text-xs text-secondary">{text.refreshing}</span>
+          ) : null}
+        </div>
+
+        {paperAccountsError ? (
+          <InlineAlert
+            variant="warning"
+            className="rounded-xl px-3 py-2 text-xs shadow-none"
+            title={text.operationHint}
+            message={paperAccountsError}
+          />
+        ) : null}
+
+        {paperAccounts.length === 0 && !paperAccountsLoading && !paperAccountsError ? (
+          <EmptyState
+            title={text.noPaperAccountsTitle}
+            description={text.noPaperAccountsDescription}
+            className="border-none bg-transparent px-4 py-6 shadow-none"
+          />
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            {paperAccounts.map((account) => (
+              <button
+                key={account.accountId}
+                type="button"
+                data-testid={`paper-account-card-${account.accountId}`}
+                onClick={() => navigate('/paper-trading')}
+                className="text-left rounded-xl border border-white/10 bg-white/[0.02] p-4 transition-colors hover:border-cyan-400/40 hover:bg-white/[0.04]"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">{account.name}</p>
+                    <p className="text-xs text-secondary">#{account.accountId}</p>
+                  </div>
+                  <Badge variant={account.status === 'active' ? 'success' : 'default'}>
+                    {formatPaperAccountStatus(account.status, language)}
+                  </Badge>
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                  <div>
+                    <p className="text-secondary">{text.paperNetValue}</p>
+                    <p className="font-medium text-foreground">{formatMoney(account.netValue, 'CNY')}</p>
+                  </div>
+                  <div>
+                    <p className="text-secondary">{text.paperReturnPct}</p>
+                    <p className={`font-medium ${account.returnPct >= 0 ? 'text-success' : 'text-danger'}`}>
+                      {formatSignedPct(account.returnPct)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-secondary">{text.paperCash}</p>
+                    <p className="font-medium text-foreground">{formatMoney(account.cash, 'CNY')}</p>
+                  </div>
+                  <div>
+                    <p className="text-secondary">{text.paperPositions}</p>
+                    <p className="font-medium text-foreground">{account.positionCount}</p>
+                  </div>
+                </div>
+                <div className="mt-3 flex items-center justify-end">
+                  <span className="text-xs text-cyan-300">{text.enterPaperTrading}</span>
+                </div>
+              </button>
+            ))}
+          </div>
         )}
       </section>
 

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { paperTradingApi } from '../api/paperTrading';
 import { Card, Badge } from '../components/common';
+import { useWatchlist } from '../hooks/useWatchlist';
 import type {
   AccountSnapshotResponse,
   BatchOrderResponse,
@@ -34,32 +35,76 @@ function formatPct(value?: number | null): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
 }
 
+const STATUS_LABEL_MAP: Record<string, string> = {
+  executed: '已执行',
+  filled: '已成交',
+  completed: '已完成',
+  rejected: '已拒绝',
+  cancelled: '已撤单',
+  pending: '待成交',
+  submitted: '已提交',
+  conditional: '条件单',
+};
+
 function statusBadge(status: string) {
+  const label = STATUS_LABEL_MAP[status] ?? status;
   switch (status) {
     case 'executed':
     case 'filled':
     case 'completed':
-      return <Badge variant="success">{status}</Badge>;
+      return <Badge variant="success">{label}</Badge>;
     case 'rejected':
     case 'cancelled':
-      return <Badge variant="danger">{status}</Badge>;
+      return <Badge variant="danger">{label}</Badge>;
     case 'pending':
     case 'submitted':
-      return <Badge variant="warning">{status}</Badge>;
+      return <Badge variant="warning">{label}</Badge>;
     default:
-      return <Badge variant="default">{status}</Badge>;
+      return <Badge variant="default">{label}</Badge>;
   }
 }
 
 function sideBadge(side: string) {
+  const label = side === 'buy' ? '买入' : side === 'sell' ? '卖出' : side;
   return (
     <Badge
       variant={side === 'buy' ? 'success' : side === 'sell' ? 'danger' : 'default'}
       className="uppercase"
     >
-      {side}
+      {label}
     </Badge>
   );
+}
+
+function orderTypeLabel(type: string) {
+  const map: Record<string, string> = {
+    market: '市价',
+    limit: '限价',
+    conditional: '条件',
+    stop_loss: '止损',
+    take_profit: '止盈',
+  };
+  return map[type] ?? type;
+}
+
+function actionLabel(action: string) {
+  const map: Record<string, string> = {
+    buy: '买入',
+    sell: '卖出',
+    hold: '持有',
+  };
+  return map[action] ?? action;
+}
+
+function moodLabel(mood: string) {
+  const map: Record<string, string> = {
+    good: '良好',
+    bad: '不佳',
+    neutral: '中性',
+    happy: '良好',
+    sad: '不佳',
+  };
+  return map[mood] ?? mood;
 }
 
 function formatDateTime(value?: string | null): string {
@@ -86,7 +131,7 @@ const NetValueSparkline: React.FC<{ data: NetValuePoint[]; width?: number; heigh
   if (data.length < 2) {
     return (
       <div className="flex items-center justify-center h-full text-xs text-muted">
-        No net value data yet
+        暂无净值数据
       </div>
     );
   }
@@ -139,7 +184,7 @@ const DrawdownSparkline: React.FC<{ data: DrawdownItem[]; width?: number; height
   height = 60,
 }) => {
   if (data.length < 2) {
-    return <div className="text-xs text-muted">No drawdown data</div>;
+    return <div className="text-xs text-muted">暂无回撤数据</div>;
   }
 
   const values = data.map(d => d.drawdownPct);
@@ -201,7 +246,7 @@ const PerformanceCard: React.FC<{ accountId: number }> = ({ accountId }) => {
       setRisk(r);
       setDrawdown(dd);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load performance');
+      setError(err instanceof Error ? err.message : '加载绩效失败');
     } finally {
       setLoading(false);
     }
@@ -214,7 +259,7 @@ const PerformanceCard: React.FC<{ accountId: number }> = ({ accountId }) => {
   return (
     <Card variant="gradient" padding="md">
       <div className="flex items-center justify-between">
-        <span className="label-uppercase">Performance</span>
+        <span className="label-uppercase">绩效</span>
         <button
           type="button"
           onClick={load}
@@ -222,55 +267,55 @@ const PerformanceCard: React.FC<{ accountId: number }> = ({ accountId }) => {
           className="text-xs text-cyan hover:text-cyan/80 disabled:opacity-50"
           data-testid="refresh-performance-button"
         >
-          {loading ? 'Loading...' : 'Refresh'}
+          {loading ? '加载中...' : '刷新'}
         </button>
       </div>
       {metrics ? (
         <div className="mt-3 grid grid-cols-2 gap-3">
           <div>
-            <p className="text-xxs text-muted uppercase">Total Return</p>
+            <p className="text-xxs text-muted uppercase">总收益</p>
             <p className={`text-sm font-mono font-semibold ${metrics.totalReturnPct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
               {formatPct(metrics.totalReturnPct)}
             </p>
           </div>
           <div>
-            <p className="text-xxs text-muted uppercase">Sharpe Ratio</p>
+            <p className="text-xxs text-muted uppercase">夏普比率</p>
             <p className="text-sm font-mono font-semibold text-white" data-testid="sharpe-ratio-value">
               {formatNumber(metrics.sharpeRatio ?? 0, 2)}
             </p>
           </div>
           <div>
-            <p className="text-xxs text-muted uppercase">Max Drawdown</p>
+            <p className="text-xxs text-muted uppercase">最大回撤</p>
             <p className="text-sm font-mono font-semibold text-red-400" data-testid="max-drawdown-value">
               {formatPct(metrics.maxDrawdownPct)}
             </p>
           </div>
           <div>
-            <p className="text-xxs text-muted uppercase">Win Rate</p>
+            <p className="text-xxs text-muted uppercase">胜率</p>
             <p className="text-sm font-mono font-semibold text-white" data-testid="win-rate-value">
               {metrics.winRate.toFixed(2)}%
             </p>
           </div>
         </div>
       ) : (
-        <p className="mt-3 text-xs text-muted">Loading performance...</p>
+        <p className="mt-3 text-xs text-muted">绩效加载中...</p>
       )}
       {drawdown.length >= 2 && (
         <div className="mt-3" data-testid="drawdown-chart">
-          <p className="text-xxs text-muted uppercase mb-1">Drawdown Curve</p>
+          <p className="text-xxs text-muted uppercase mb-1">回撤曲线</p>
           <DrawdownSparkline data={drawdown} />
         </div>
       )}
       {risk && (
         <div className="mt-3 pt-3 border-t border-white/5 grid grid-cols-2 gap-3">
           <div>
-            <p className="text-xxs text-muted uppercase">Concentration</p>
+            <p className="text-xxs text-muted uppercase">集中度</p>
             <p className="text-sm font-mono font-semibold text-white">
               {risk.maxSingleStockConcentrationPct.toFixed(2)}%
             </p>
           </div>
           <div>
-            <p className="text-xxs text-muted uppercase">Drawdown</p>
+            <p className="text-xxs text-muted uppercase">回撤</p>
             <p className="text-sm font-mono font-semibold text-white">
               {risk.currentDrawdownPct.toFixed(2)}%
             </p>
@@ -334,7 +379,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
     try {
       const qty = parseFloat(quantity);
       if (!code || Number.isNaN(qty) || qty <= 0) {
-        throw new Error('Please enter a valid code and quantity');
+        throw new Error('请输入有效的代码和数量');
       }
       const res = await paperTradingApi.submitOrder({
         accountId,
@@ -343,12 +388,12 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
         quantity: qty,
         orderType,
         limitPrice: orderType === 'limit' && limitPrice ? parseFloat(limitPrice) : undefined,
-        reason: 'manual order from WebUI',
+        reason: 'WebUI 手动下单',
       });
       setResult(res);
       onSubmitted();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Order failed');
+      setError(err instanceof Error ? err.message : '下单失败');
     } finally {
       setLoading(false);
     }
@@ -362,7 +407,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
       const qty = parseFloat(quantity);
       const trigger = parseFloat(triggerPrice);
       if (!code || Number.isNaN(qty) || qty <= 0 || Number.isNaN(trigger) || trigger <= 0) {
-        throw new Error('Please enter a valid code, quantity and trigger price');
+        throw new Error('请输入有效的代码、数量和触发价');
       }
       const res = await paperTradingApi.createConditionalOrder({
         accountId,
@@ -372,12 +417,12 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
         orderType: conditionalType,
         triggerPrice: trigger,
         limitPrice: orderType === 'limit' && limitPrice ? parseFloat(limitPrice) : undefined,
-        reason: 'manual conditional order from WebUI',
+        reason: 'WebUI 条件单',
       });
       setConditionalResult({ id: res.id, status: res.status });
       onSubmitted();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Conditional order failed');
+      setError(err instanceof Error ? err.message : '条件单创建失败');
     } finally {
       setLoading(false);
     }
@@ -393,7 +438,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
         .map(row => {
           const qty = parseFloat(row.quantity);
           if (Number.isNaN(qty) || qty <= 0) {
-            throw new Error(`Invalid quantity for ${row.code}`);
+            throw new Error(`的数量无效${row.code}`);
           }
           return {
             code: row.code.toUpperCase(),
@@ -404,13 +449,13 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
           };
         });
       if (orders.length === 0) {
-        throw new Error('Please add at least one valid order');
+        throw new Error('请至少添加一笔有效订单');
       }
       const res = await paperTradingApi.submitBatchOrders({ accountId, orders });
       setBatchResult(res);
       onSubmitted();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Batch order failed');
+      setError(err instanceof Error ? err.message : '批量下单失败');
     } finally {
       setLoading(false);
     }
@@ -435,7 +480,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
     if (result) {
       return (
         <div className="mt-3 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs">
-          <span className="text-emerald-400">{result.status.toUpperCase()}</span>
+          <span className="text-emerald-400">{STATUS_LABEL_MAP[result.status] ?? result.status}</span>
           {' '}
           <span className="text-secondary">{result.code}</span>
           {result.fillPrice != null && (
@@ -450,10 +495,10 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
     if (batchResult) {
       return (
         <div className="mt-3 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs space-y-1">
-          <p className="text-emerald-400">BATCH SUBMITTED ({batchResult.total})</p>
+          <p className="text-emerald-400">批量提交 ({batchResult.total})</p>
           {batchResult.results.map((r: TradeResultResponse, i: number) => (
             <p key={i} className="text-secondary">
-              {r.code}: {r.status.toUpperCase()}
+              {r.code}: {STATUS_LABEL_MAP[r.status] ?? r.status}
               {r.fillPrice != null && ` @ ${formatNumber(r.fillPrice)}`}
             </p>
           ))}
@@ -463,7 +508,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
     if (conditionalResult) {
       return (
         <div className="mt-3 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs">
-          <span className="text-emerald-400">CONDITIONAL CREATED</span>
+          <span className="text-emerald-400">条件单已创建</span>
           {' '}
           <span className="text-secondary">#{conditionalResult.id}</span>
         </div>
@@ -474,7 +519,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
 
   return (
     <Card variant="gradient" padding="md">
-      <span className="label-uppercase">Orders</span>
+      <span className="label-uppercase">订单</span>
       <div className="mt-2 flex gap-1 p-1 rounded-lg bg-elevated">
         {(['single', 'batch', 'conditional'] as OrderMode[]).map(m => (
           <button
@@ -486,7 +531,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
             }`}
             data-testid={`order-mode-${m}`}
           >
-            {m === 'single' ? 'Single' : m === 'batch' ? 'Batch' : 'Conditional'}
+            {m === 'single' ? '单笔' : m === 'batch' ? '批量' : '条件'}
           </button>
         ))}
       </div>
@@ -498,7 +543,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               type="text"
               value={code}
               onChange={(e) => setCode(e.target.value.toUpperCase())}
-              placeholder="Code"
+              placeholder="代码"
               className="input-terminal"
               data-testid="order-code-input"
             />
@@ -508,8 +553,8 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               className="input-terminal bg-elevated"
               data-testid="order-side-select"
             >
-              <option value="buy">Buy</option>
-              <option value="sell">Sell</option>
+              <option value="buy">买入</option>
+              <option value="sell">卖出</option>
             </select>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -517,7 +562,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               type="number"
               value={quantity}
               onChange={(e) => setQuantity(e.target.value)}
-              placeholder="Quantity"
+              placeholder="数量"
               min={0.01}
               step={0.01}
               className="input-terminal"
@@ -529,8 +574,8 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               className="input-terminal bg-elevated"
               data-testid="order-type-select"
             >
-              <option value="market">Market</option>
-              <option value="limit">Limit</option>
+              <option value="market">市价</option>
+              <option value="limit">限价</option>
             </select>
           </div>
           {orderType === 'limit' && (
@@ -538,7 +583,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               type="number"
               value={limitPrice}
               onChange={(e) => setLimitPrice(e.target.value)}
-              placeholder="Limit price"
+              placeholder="限价"
               min={0.01}
               step={0.01}
               className="input-terminal"
@@ -551,7 +596,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
             className="btn-primary w-full flex items-center justify-center gap-2"
             data-testid="order-submit-button"
           >
-            {loading ? 'Submitting...' : 'Submit Order'}
+            {loading ? '提交中...' : '提交订单'}
           </button>
         </form>
       )}
@@ -563,7 +608,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               type="text"
               value={code}
               onChange={(e) => setCode(e.target.value.toUpperCase())}
-              placeholder="Code"
+              placeholder="代码"
               className="input-terminal"
               data-testid="conditional-code-input"
             />
@@ -573,8 +618,8 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               className="input-terminal bg-elevated"
               data-testid="conditional-side-select"
             >
-              <option value="buy">Buy</option>
-              <option value="sell">Sell</option>
+              <option value="buy">买入</option>
+              <option value="sell">卖出</option>
             </select>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -582,7 +627,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               type="number"
               value={quantity}
               onChange={(e) => setQuantity(e.target.value)}
-              placeholder="Quantity"
+              placeholder="数量"
               min={0.01}
               step={0.01}
               className="input-terminal"
@@ -594,15 +639,15 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               className="input-terminal bg-elevated"
               data-testid="conditional-type-select"
             >
-              <option value="stop_loss">Stop Loss</option>
-              <option value="take_profit">Take Profit</option>
+              <option value="stop_loss">止损</option>
+              <option value="take_profit">止盈</option>
             </select>
           </div>
           <input
             type="number"
             value={triggerPrice}
             onChange={(e) => setTriggerPrice(e.target.value)}
-            placeholder="Trigger price"
+            placeholder="触发价"
             min={0.01}
             step={0.01}
             className="input-terminal"
@@ -615,15 +660,15 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               className="input-terminal bg-elevated"
               data-testid="conditional-order-type-select"
             >
-              <option value="market">Market</option>
-              <option value="limit">Limit</option>
+              <option value="market">市价</option>
+              <option value="limit">限价</option>
             </select>
             {orderType === 'limit' && (
               <input
                 type="number"
                 value={limitPrice}
                 onChange={(e) => setLimitPrice(e.target.value)}
-                placeholder="Limit price"
+                placeholder="限价"
                 min={0.01}
                 step={0.01}
                 className="input-terminal"
@@ -637,7 +682,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
             className="btn-primary w-full flex items-center justify-center gap-2"
             data-testid="conditional-submit-button"
           >
-            {loading ? 'Submitting...' : 'Create Conditional Order'}
+            {loading ? '提交中...' : '创建条件单'}
           </button>
         </form>
       )}
@@ -655,7 +700,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
                       onClick={() => removeBatchRow(row.id)}
                       className="text-xs text-danger hover:text-red-300"
                     >
-                      Remove
+                      删除
                     </button>
                   )}
                 </div>
@@ -664,7 +709,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
                     type="text"
                     value={row.code}
                     onChange={(e) => updateBatchRow(row.id, 'code', e.target.value.toUpperCase())}
-                    placeholder="Code"
+                    placeholder="代码"
                     className="input-terminal text-xs py-1.5"
                     data-testid={`batch-code-input-${index}`}
                   />
@@ -674,8 +719,8 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
                     className="input-terminal bg-elevated text-xs py-1.5"
                     data-testid={`batch-side-select-${index}`}
                   >
-                    <option value="buy">Buy</option>
-                    <option value="sell">Sell</option>
+                    <option value="buy">买入</option>
+                    <option value="sell">卖出</option>
                   </select>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
@@ -683,7 +728,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
                     type="number"
                     value={row.quantity}
                     onChange={(e) => updateBatchRow(row.id, 'quantity', e.target.value)}
-                    placeholder="Quantity"
+                    placeholder="数量"
                     min={0.01}
                     step={0.01}
                     className="input-terminal text-xs py-1.5"
@@ -695,8 +740,8 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
                     className="input-terminal bg-elevated text-xs py-1.5"
                     data-testid={`batch-type-select-${index}`}
                   >
-                    <option value="market">Market</option>
-                    <option value="limit">Limit</option>
+                    <option value="market">市价</option>
+                    <option value="limit">限价</option>
                   </select>
                 </div>
                 {row.orderType === 'limit' && (
@@ -704,7 +749,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
                     type="number"
                     value={row.limitPrice}
                     onChange={(e) => updateBatchRow(row.id, 'limitPrice', e.target.value)}
-                    placeholder="Limit price"
+                    placeholder="限价"
                     min={0.01}
                     step={0.01}
                     className="input-terminal text-xs py-1.5 w-full"
@@ -721,7 +766,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               className="flex-1 btn-secondary text-xs py-2"
               data-testid="batch-add-row-button"
             >
-              + Add Row
+              + 添加行
             </button>
             <button
               type="submit"
@@ -729,7 +774,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               className="flex-1 btn-primary text-xs py-2"
               data-testid="batch-submit-button"
             >
-              {loading ? 'Submitting...' : 'Submit Batch'}
+              {loading ? '提交中...' : '批量提交'}
             </button>
           </div>
         </form>
@@ -748,6 +793,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
 const ListenerControl: React.FC<{ onStatusChange: () => void }> = ({ onStatusChange }) => {
   const [status, setStatus] = useState<ListenerStatusResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const { watchlistCodes, isLoading: watchlistLoading } = useWatchlist();
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -767,7 +813,10 @@ const ListenerControl: React.FC<{ onStatusChange: () => void }> = ({ onStatusCha
   const handleStart = async () => {
     setLoading(true);
     try {
-      await paperTradingApi.startListener({ accountId: 1 });
+      await paperTradingApi.startListener({
+        accountId: 1,
+        watchedCodes: watchlistCodes,
+      });
       await fetchStatus();
       onStatusChange();
     } finally {
@@ -789,15 +838,15 @@ const ListenerControl: React.FC<{ onStatusChange: () => void }> = ({ onStatusCha
   return (
     <Card variant="gradient" padding="md" className="mt-3">
       <div className="flex items-center justify-between">
-        <span className="label-uppercase">Market Listener</span>
+        <span className="label-uppercase">行情监听</span>
         <Badge variant={status?.running ? 'success' : 'default'}>
-          {status?.running ? 'RUNNING' : 'STOPPED'}
+          {status?.running ? '运行中' : '已停止'}
         </Badge>
       </div>
       <div className="mt-2 text-xs text-secondary space-y-1">
-        <p>Account: {status?.accountId ?? '--'}</p>
-        <p>Watched: {status?.watchedCodesCount ?? 0} codes</p>
-        <p>Markets: {status?.markets?.join(', ') || '--'}</p>
+        <p>账户：{status?.accountId ?? '--'}</p>
+        <p>监控：{status?.watchedCodesCount ?? 0} 只代码{watchlistLoading ? '（加载自选股...）' : null}</p>
+        <p>市场：{status?.markets?.join(', ') || '--'}</p>
       </div>
       <div className="mt-3 flex gap-2">
         {status?.running ? (
@@ -808,17 +857,17 @@ const ListenerControl: React.FC<{ onStatusChange: () => void }> = ({ onStatusCha
             className="btn-secondary flex-1 text-xs py-2"
             data-testid="listener-stop-button"
           >
-            Stop
+            停止
           </button>
         ) : (
           <button
             type="button"
             onClick={handleStart}
-            disabled={loading}
+            disabled={loading || watchlistLoading || watchlistCodes.length === 0}
             className="btn-primary flex-1 text-xs py-2"
             data-testid="listener-start-button"
           >
-            Start
+            启动
           </button>
         )}
       </div>
@@ -830,19 +879,19 @@ const ListenerControl: React.FC<{ onStatusChange: () => void }> = ({ onStatusCha
 
 const PositionsTable: React.FC<{ positions: PositionItem[] }> = ({ positions }) => {
   if (positions.length === 0) {
-    return <EmptyState message="No open positions" />;
+    return <EmptyState message="暂无持仓" />;
   }
   return (
     <div className="overflow-x-auto rounded-xl border border-white/5">
       <table className="w-full text-sm">
         <thead>
           <tr className="bg-elevated text-left">
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Code</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">Quantity</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">Avg Cost</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">Last Price</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">SL / TP1 / TP2</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">PnL</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">代码</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">数量</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">持仓成本</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">最新价</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">止损/止盈1/止盈2</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">盈亏</th>
           </tr>
         </thead>
         <tbody>
@@ -883,7 +932,7 @@ const OrdersTable: React.FC<{
   const handleCancel = async (orderId: number) => {
     setActingId(orderId);
     try {
-      await paperTradingApi.cancelOrder(orderId, 'cancelled from WebUI');
+      await paperTradingApi.cancelOrder(orderId, 'WebUI 撤单');
       onRefresh();
     } finally {
       setActingId(null);
@@ -895,24 +944,24 @@ const OrdersTable: React.FC<{
     setModifyError(null);
     try {
       const params: { newLimitPrice?: number; newQuantity?: number; reason: string } = {
-        reason: 'modified from WebUI',
+        reason: 'WebUI 改单',
       };
       if (modifyPrice) {
         const price = parseFloat(modifyPrice);
         if (Number.isNaN(price) || price <= 0) {
-          throw new Error('Invalid limit price');
+          throw new Error('限价无效');
         }
         params.newLimitPrice = price;
       }
       if (modifyQty) {
         const qty = parseFloat(modifyQty);
         if (Number.isNaN(qty) || qty <= 0) {
-          throw new Error('Invalid quantity');
+          throw new Error('数量无效');
         }
         params.newQuantity = qty;
       }
       if (!params.newLimitPrice && !params.newQuantity) {
-        throw new Error('Enter a new price or quantity to modify');
+        throw new Error('请输入新的限价或数量');
       }
       await paperTradingApi.modifyOrder(orderId, params);
       setModifyId(null);
@@ -920,7 +969,7 @@ const OrdersTable: React.FC<{
       setModifyQty('');
       onRefresh();
     } catch (err) {
-      setModifyError(err instanceof Error ? err.message : 'Modify failed');
+      setModifyError(err instanceof Error ? err.message : '改单失败');
     } finally {
       setActingId(null);
     }
@@ -951,12 +1000,12 @@ const OrdersTable: React.FC<{
           className="input-terminal bg-elevated text-xs py-1.5"
           data-testid="orders-filter-status"
         >
-          <option value="">All Status</option>
-          <option value="pending">Pending</option>
-          <option value="filled">Filled</option>
-          <option value="cancelled">Cancelled</option>
-          <option value="rejected">Rejected</option>
-          <option value="conditional">Conditional</option>
+          <option value="">全部状态</option>
+          <option value="pending">待成交</option>
+          <option value="filled">已成交</option>
+          <option value="cancelled">已撤单</option>
+          <option value="rejected">已拒绝</option>
+          <option value="conditional">条件单</option>
         </select>
         <select
           value={filters.side}
@@ -964,15 +1013,15 @@ const OrdersTable: React.FC<{
           className="input-terminal bg-elevated text-xs py-1.5"
           data-testid="orders-filter-side"
         >
-          <option value="">All Sides</option>
-          <option value="buy">Buy</option>
-          <option value="sell">Sell</option>
+          <option value="">全部方向</option>
+          <option value="buy">买入</option>
+          <option value="sell">卖出</option>
         </select>
         <input
           type="text"
           value={filters.code}
           onChange={(e) => onFiltersChange({ ...filters, code: e.target.value.toUpperCase() })}
-          placeholder="Filter code"
+          placeholder="筛选代码"
           className="input-terminal text-xs py-1.5 flex-1 min-w-[120px]"
           data-testid="orders-filter-code"
         />
@@ -982,21 +1031,21 @@ const OrdersTable: React.FC<{
       </div>
 
       {filteredOrders.length === 0 ? (
-        <EmptyState message="No orders match the filters" />
+        <EmptyState message="没有符合筛选条件的订单" />
       ) : (
         <div className="overflow-x-auto rounded-xl border border-white/5" data-testid="orders-table">
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-elevated text-left">
-                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">ID</th>
-                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Code</th>
-                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Side</th>
-                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Type</th>
-                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">Qty</th>
-                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">Filled</th>
-                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Status</th>
-                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Created</th>
-                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Action</th>
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">编号</th>
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">代码</th>
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">方向</th>
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">类型</th>
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">数量</th>
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">已成交</th>
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">状态</th>
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">创建时间</th>
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -1006,7 +1055,7 @@ const OrdersTable: React.FC<{
                     <td className="px-3 py-2 text-xs text-muted">{o.id}</td>
                     <td className="px-3 py-2 font-mono text-cyan text-xs">{o.code}</td>
                     <td className="px-3 py-2">{sideBadge(o.side)}</td>
-                    <td className="px-3 py-2 text-xs text-secondary">{o.orderType}</td>
+                    <td className="px-3 py-2 text-xs text-secondary">{orderTypeLabel(o.orderType)}</td>
                     <td className="px-3 py-2 text-xs text-right text-white">{formatNumber(o.quantity)}</td>
                     <td className="px-3 py-2 text-xs text-right text-secondary">{formatNumber(o.filledQuantity)}</td>
                     <td className="px-3 py-2">{statusBadge(o.status)}</td>
@@ -1021,7 +1070,7 @@ const OrdersTable: React.FC<{
                             className="text-xs text-danger hover:text-red-300 disabled:opacity-50"
                             data-testid={`order-cancel-${o.id}`}
                           >
-                            {actingId === o.id && modifyId !== o.id ? '...' : 'Cancel'}
+                            {actingId === o.id && modifyId !== o.id ? '...' : '撤单'}
                           </button>
                           {o.orderType === 'limit' && (
                             <button
@@ -1031,7 +1080,7 @@ const OrdersTable: React.FC<{
                               className="text-xs text-cyan hover:text-cyan/80 disabled:opacity-50"
                               data-testid={`order-modify-${o.id}`}
                             >
-                              Modify
+                              改单
                             </button>
                           )}
                         </div>
@@ -1042,12 +1091,12 @@ const OrdersTable: React.FC<{
                     <tr className="border-t border-white/5 bg-elevated/50">
                       <td colSpan={9} className="px-3 py-3">
                         <div className="flex flex-wrap items-center gap-3" data-testid={`order-modify-form-${o.id}`}>
-                          <span className="text-xs text-muted">Modify {o.code}:</span>
+                          <span className="text-xs text-muted">改单 {o.code}:</span>
                           <input
                             type="number"
                             value={modifyPrice}
                             onChange={(e) => setModifyPrice(e.target.value)}
-                            placeholder="New limit price"
+                            placeholder="新限价"
                             min={0.01}
                             step={0.01}
                             className="input-terminal text-xs py-1.5 w-36"
@@ -1057,7 +1106,7 @@ const OrdersTable: React.FC<{
                             type="number"
                             value={modifyQty}
                             onChange={(e) => setModifyQty(e.target.value)}
-                            placeholder="New quantity"
+                            placeholder="新数量"
                             min={0.01}
                             step={0.01}
                             className="input-terminal text-xs py-1.5 w-32"
@@ -1070,7 +1119,7 @@ const OrdersTable: React.FC<{
                             className="btn-primary text-xs py-1.5 px-3"
                             data-testid="order-modify-submit"
                           >
-                            {actingId === o.id ? 'Saving...' : 'Save'}
+                            {actingId === o.id ? '保存中...' : '保存'}
                           </button>
                           <button
                             type="button"
@@ -1078,7 +1127,7 @@ const OrdersTable: React.FC<{
                             className="btn-secondary text-xs py-1.5 px-3"
                             data-testid="order-modify-cancel"
                           >
-                            Cancel
+                            取消
                           </button>
                           {modifyError && (
                             <span className="text-xs text-danger">{modifyError}</span>
@@ -1099,19 +1148,19 @@ const OrdersTable: React.FC<{
 
 const TradesTable: React.FC<{ trades: TradeItem[] }> = ({ trades }) => {
   if (trades.length === 0) {
-    return <EmptyState message="No filled trades" />;
+    return <EmptyState message="暂无成交" />;
   }
   return (
     <div className="overflow-x-auto rounded-xl border border-white/5" data-testid="trades-table">
       <table className="w-full text-sm">
         <thead>
           <tr className="bg-elevated text-left">
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Code</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Side</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">Fill Price</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">Quantity</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">Fee</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Traded At</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">代码</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">方向</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">成交价</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">数量</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">手续费</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">成交时间</th>
           </tr>
         </thead>
         <tbody>
@@ -1139,13 +1188,13 @@ const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> =
   const [modifyError, setModifyError] = useState<string | null>(null);
 
   if (signals.length === 0) {
-    return <EmptyState message="No signals" />;
+    return <EmptyState message="暂无信号" />;
   }
 
   const handleCancel = async (signalId: number) => {
     setActingId(signalId);
     try {
-      await paperTradingApi.cancelSignal(signalId, 'cancelled from WebUI');
+      await paperTradingApi.cancelSignal(signalId, 'WebUI 撤单');
       onRefresh();
     } finally {
       setActingId(null);
@@ -1157,24 +1206,24 @@ const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> =
     setModifyError(null);
     try {
       const params: { newLimitPrice?: number; newQuantity?: number; reason: string } = {
-        reason: 'modified from WebUI',
+        reason: 'WebUI 改单',
       };
       if (modifyPrice) {
         const price = parseFloat(modifyPrice);
         if (Number.isNaN(price) || price <= 0) {
-          throw new Error('Invalid limit price');
+          throw new Error('限价无效');
         }
         params.newLimitPrice = price;
       }
       if (modifyQty) {
         const qty = parseFloat(modifyQty);
         if (Number.isNaN(qty) || qty <= 0) {
-          throw new Error('Invalid quantity');
+          throw new Error('数量无效');
         }
         params.newQuantity = qty;
       }
       if (!params.newLimitPrice && !params.newQuantity) {
-        throw new Error('Enter a new price or quantity to modify');
+        throw new Error('请输入新的限价或数量');
       }
       await paperTradingApi.modifySignal(signalId, params);
       setModifyId(null);
@@ -1182,7 +1231,7 @@ const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> =
       setModifyQty('');
       onRefresh();
     } catch (err) {
-      setModifyError(err instanceof Error ? err.message : 'Modify failed');
+      setModifyError(err instanceof Error ? err.message : '改单失败');
     } finally {
       setActingId(null);
     }
@@ -1200,14 +1249,14 @@ const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> =
       <table className="w-full text-sm">
         <thead>
           <tr className="bg-elevated text-left">
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Code</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Side</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">Trigger</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Strategy</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Status</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Agent</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Created</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">Action</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">代码</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">方向</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">触发价</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">策略</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">状态</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">智能体</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">创建时间</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -1220,7 +1269,7 @@ const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> =
                 <td className="px-3 py-2 text-xs text-secondary">{s.strategyName || '--'}</td>
                 <td className="px-3 py-2">{statusBadge(s.status)}</td>
                 <td className="px-3 py-2 text-xs text-secondary">
-                  {s.agentConfirmed == null ? '--' : s.agentConfirmed ? 'Confirmed' : 'Vetoed'}
+                  {s.agentConfirmed == null ? '--' : s.agentConfirmed ? '已确认' : '已否决'}
                 </td>
                 <td className="px-3 py-2 text-xs text-muted">{formatDateTime(s.createdAt)}</td>
                 <td className="px-3 py-2">
@@ -1233,7 +1282,7 @@ const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> =
                         className="text-xs text-danger hover:text-red-300 disabled:opacity-50"
                         data-testid={`signal-cancel-${s.id}`}
                       >
-                        {actingId === s.id && modifyId !== s.id ? '...' : 'Cancel'}
+                        {actingId === s.id && modifyId !== s.id ? '...' : '撤单'}
                       </button>
                       <button
                         type="button"
@@ -1242,7 +1291,7 @@ const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> =
                         className="text-xs text-cyan hover:text-cyan/80 disabled:opacity-50"
                         data-testid={`signal-modify-${s.id}`}
                       >
-                        Modify
+                        改单
                       </button>
                     </div>
                   )}
@@ -1252,12 +1301,12 @@ const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> =
                 <tr className="border-t border-white/5 bg-elevated/50">
                   <td colSpan={8} className="px-3 py-3">
                     <div className="flex flex-wrap items-center gap-3" data-testid={`signal-modify-form-${s.id}`}>
-                      <span className="text-xs text-muted">Modify {s.code}:</span>
+                      <span className="text-xs text-muted">改单 {s.code}:</span>
                       <input
                         type="number"
                         value={modifyPrice}
                         onChange={(e) => setModifyPrice(e.target.value)}
-                        placeholder="New limit price"
+                        placeholder="新限价"
                         min={0.01}
                         step={0.01}
                         className="input-terminal text-xs py-1.5 w-36"
@@ -1267,7 +1316,7 @@ const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> =
                         type="number"
                         value={modifyQty}
                         onChange={(e) => setModifyQty(e.target.value)}
-                        placeholder="New quantity"
+                        placeholder="新数量"
                         min={0.01}
                         step={0.01}
                         className="input-terminal text-xs py-1.5 w-32"
@@ -1280,7 +1329,7 @@ const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> =
                         className="btn-primary text-xs py-1.5 px-3"
                         data-testid="signal-modify-submit"
                       >
-                        {actingId === s.id ? 'Saving...' : 'Save'}
+                        {actingId === s.id ? '保存中...' : '保存'}
                       </button>
                       <button
                         type="button"
@@ -1288,7 +1337,7 @@ const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> =
                         className="btn-secondary text-xs py-1.5 px-3"
                         data-testid="signal-modify-cancel"
                       >
-                        Cancel
+                        取消
                       </button>
                       {modifyError && (
                         <span className="text-xs text-danger">{modifyError}</span>
@@ -1307,7 +1356,7 @@ const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> =
 
 const DecisionsList: React.FC<{ decisions: PMDecisionItem[] }> = ({ decisions }) => {
   if (decisions.length === 0) {
-    return <EmptyState message="No PM decisions" />;
+    return <EmptyState message="暂无 PM 决策" />;
   }
   return (
     <div className="space-y-2">
@@ -1316,16 +1365,16 @@ const DecisionsList: React.FC<{ decisions: PMDecisionItem[] }> = ({ decisions })
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Badge variant={d.action === 'buy' ? 'success' : d.action === 'sell' ? 'danger' : 'info'}>
-                {d.action.toUpperCase()}
+                {actionLabel(d.action)}
               </Badge>
               {d.code && <span className="font-mono text-cyan text-xs">{d.code}</span>}
             </div>
             <span className="text-xs text-muted">{formatDateTime(d.createdAt)}</span>
           </div>
-          <p className="mt-2 text-xs text-secondary">{d.reason || 'No reason provided'}</p>
+          <p className="mt-2 text-xs text-secondary">{d.reason || '未提供理由'}</p>
           <div className="mt-2 flex items-center gap-3 text-xs text-muted">
-            <span>confidence: {(d.confidence * 100).toFixed(0)}%</span>
-            {d.usedFallback && <Badge variant="warning">fallback</Badge>}
+            <span>置信度：{(d.confidence * 100).toFixed(0)}%</span>
+            {d.usedFallback && <Badge variant="warning">降级</Badge>}
           </div>
         </div>
       ))}
@@ -1335,21 +1384,21 @@ const DecisionsList: React.FC<{ decisions: PMDecisionItem[] }> = ({ decisions })
 
 const ReflectionsList: React.FC<{ reflections: ReflectionNoteItem[] }> = ({ reflections }) => {
   if (reflections.length === 0) {
-    return <EmptyState message="No reflection notes" />;
+    return <EmptyState message="暂无复盘笔记" />;
   }
   return (
     <div className="space-y-3">
       {reflections.map((r) => (
         <div key={r.id} className="p-3 rounded-xl bg-elevated border border-white/5">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-white">{r.subject || 'Reflection'}</span>
+            <span className="text-xs font-medium text-white">{r.subject || '复盘'}</span>
             <Badge variant={r.mood === 'good' ? 'success' : r.mood === 'bad' ? 'danger' : 'default'}>
-              {r.mood}
+              {moodLabel(r.mood)}
             </Badge>
           </div>
           <p className="mt-1 text-xs text-secondary">{r.summary}</p>
           {r.takeaway && (
-            <p className="mt-2 text-xs text-cyan">Takeaway: {r.takeaway}</p>
+            <p className="mt-2 text-xs text-cyan">心得：{r.takeaway}</p>
           )}
           {r.lessons.length > 0 && (
             <ul className="mt-2 space-y-1">
@@ -1359,7 +1408,7 @@ const ReflectionsList: React.FC<{ reflections: ReflectionNoteItem[] }> = ({ refl
             </ul>
           )}
           <div className="mt-2 text-xs text-muted">
-            {r.code && <span className="mr-2">Code: {r.code}</span>}
+            {r.code && <span className="mr-2">代码：{r.code}</span>}
             <span>{formatDateTime(r.createdAt)}</span>
           </div>
         </div>
@@ -1374,7 +1423,7 @@ const BattlePlansList: React.FC<{ plans: BattlePlanItem[] }> = ({ plans }) => {
   const [loadingMd, setLoadingMd] = useState(false);
 
   if (plans.length === 0) {
-    return <EmptyState message="No battle plans" />;
+    return <EmptyState message="暂无作战卡" />;
   }
 
   const toggleMarkdown = async (planId: number) => {
@@ -1390,7 +1439,7 @@ const BattlePlansList: React.FC<{ plans: BattlePlanItem[] }> = ({ plans }) => {
       const res = await paperTradingApi.getBattlePlanMarkdown(planId);
       setMarkdown(res.markdown);
     } catch {
-      setMarkdown('Failed to load markdown');
+      setMarkdown('Markdown 加载失败');
     } finally {
       setLoadingMd(false);
     }
@@ -1401,7 +1450,7 @@ const BattlePlansList: React.FC<{ plans: BattlePlanItem[] }> = ({ plans }) => {
       {plans.map((p) => (
         <div key={p.planId} className="p-3 rounded-xl bg-elevated border border-white/5">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-white">Battle Plan {p.date}</span>
+            <span className="text-xs font-medium text-white">作战卡 {p.date}</span>
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -1409,33 +1458,33 @@ const BattlePlansList: React.FC<{ plans: BattlePlanItem[] }> = ({ plans }) => {
                 className="text-xs text-cyan hover:text-cyan/80"
                 data-testid={`battle-plan-md-${p.planId}`}
               >
-                {expandedId === p.planId ? 'Hide MD' : 'View MD'}
+                {expandedId === p.planId ? '隐藏原文' : '查看原文'}
               </button>
               <Badge variant={p.usedFallback ? 'warning' : 'success'}>
-                {p.usedFallback ? 'fallback' : 'AI'}
+                {p.usedFallback ? '降级' : 'AI'}
               </Badge>
             </div>
           </div>
-          <p className="mt-1 text-xs text-secondary">{p.marketReview || 'No market review'}</p>
+          <p className="mt-1 text-xs text-secondary">{p.marketReview || '无市场回顾'}</p>
           {p.mainTheme && (
-            <p className="mt-1 text-xs text-cyan">Theme: {p.mainTheme}</p>
+            <p className="mt-1 text-xs text-cyan">主题：{p.mainTheme}</p>
           )}
           <div className="mt-2 grid grid-cols-2 gap-2">
             <div>
-              <span className="text-xxs text-muted uppercase">Holdings</span>
+              <span className="text-xxs text-muted uppercase">持仓计划</span>
               <p className="text-xs text-secondary">{p.holdingsPlans.map(h => h.code).join(', ') || '--'}</p>
             </div>
             <div>
-              <span className="text-xxs text-muted uppercase">Candidates</span>
+              <span className="text-xxs text-muted uppercase">候选标的</span>
               <p className="text-xs text-secondary">{p.candidates.map(c => c.code).join(', ') || '--'}</p>
             </div>
           </div>
           {expandedId === p.planId && (
             <div className="mt-3 pt-3 border-t border-white/5" data-testid={`battle-plan-md-content-${p.planId}`}>
               {loadingMd ? (
-                <p className="text-xs text-muted">Loading markdown...</p>
+                <p className="text-xs text-muted">Markdown 加载中...</p>
               ) : (
-                <pre className="text-xs text-secondary whitespace-pre-wrap font-mono max-h-96 overflow-y-auto">{markdown || 'No markdown available'}</pre>
+                <pre className="text-xs text-secondary whitespace-pre-wrap font-mono max-h-96 overflow-y-auto">{markdown || '暂无 Markdown'}</pre>
               )}
             </div>
           )}
@@ -1471,7 +1520,7 @@ const DailyReportTab: React.FC<{ accountId: number }> = ({ accountId }) => {
       const res = await paperTradingApi.generateDailyReport(accountId, true);
       setReport(res);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to generate report');
+      setError(err instanceof Error ? err.message : '生成日报失败');
     } finally {
       setLoading(false);
     }
@@ -1487,7 +1536,7 @@ const DailyReportTab: React.FC<{ accountId: number }> = ({ accountId }) => {
         setError(res.error);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load report');
+      setError(err instanceof Error ? err.message : '加载日报失败');
     } finally {
       setLoading(false);
     }
@@ -1510,7 +1559,7 @@ const DailyReportTab: React.FC<{ accountId: number }> = ({ accountId }) => {
           className="btn-secondary text-xs py-1.5 px-3"
           data-testid="daily-report-fetch-button"
         >
-          {loading ? 'Loading...' : 'Load Report'}
+          {loading ? '加载中...' : '加载日报'}
         </button>
         <button
           type="button"
@@ -1519,7 +1568,7 @@ const DailyReportTab: React.FC<{ accountId: number }> = ({ accountId }) => {
           className="btn-primary text-xs py-1.5 px-3"
           data-testid="daily-report-generate-button"
         >
-          {loading ? 'Generating...' : 'Generate Today'}
+          {loading ? '生成中...' : '生成今日日报'}
         </button>
       </div>
 
@@ -1530,11 +1579,11 @@ const DailyReportTab: React.FC<{ accountId: number }> = ({ accountId }) => {
       {report && (
         <div className="p-3 rounded-xl bg-elevated border border-white/5" data-testid="daily-report-content">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-white">Daily Report - {report.date}</span>
+            <span className="text-xs font-medium text-white">日报 - {report.date}</span>
             <div className="flex items-center gap-2">
-              {report.usedFallback && <Badge variant="warning">fallback</Badge>}
+              {report.usedFallback && <Badge variant="warning">降级</Badge>}
               {report.reportPath && (
-                <Badge variant="info">saved</Badge>
+                <Badge variant="info">已保存</Badge>
               )}
             </div>
           </div>
@@ -1543,13 +1592,13 @@ const DailyReportTab: React.FC<{ accountId: number }> = ({ accountId }) => {
               {report.markdown}
             </pre>
           ) : (
-            <p className="text-xs text-muted">No markdown content available</p>
+            <p className="text-xs text-muted">暂无 Markdown 内容</p>
           )}
         </div>
       )}
 
       {!report && !error && !loading && (
-        <EmptyState message="No daily report loaded. Generate or load a report." />
+        <EmptyState message="尚未加载日报，请生成或加载。" />
       )}
     </div>
   );
@@ -1612,7 +1661,7 @@ const PaperTradingPage: React.FC = () => {
       setReflections(ref.items || []);
       setBattlePlans(plans);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load paper trading data');
+      setError(err instanceof Error ? err.message : '加载纸面交易数据失败');
     } finally {
       setLoading(false);
     }
@@ -1640,7 +1689,7 @@ const PaperTradingPage: React.FC = () => {
       setAccountInput(String(snap.accountId));
       loadAll();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create account');
+      setError(err instanceof Error ? err.message : '创建账户失败');
     }
   };
 
@@ -1650,7 +1699,7 @@ const PaperTradingPage: React.FC = () => {
       await paperTradingApi.triggerPMDecision({ accountId });
       await loadAll();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'PM decision failed');
+      setError(err instanceof Error ? err.message : 'PM 决策失败');
     } finally {
       setTriggeringPm(false);
     }
@@ -1662,7 +1711,7 @@ const PaperTradingPage: React.FC = () => {
       await paperTradingApi.generateBattlePlan({ accountId });
       await loadAll();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Battle plan generation failed');
+      setError(err instanceof Error ? err.message : '生成作战卡失败');
     } finally {
       setGeneratingPlan(false);
     }
@@ -1674,21 +1723,21 @@ const PaperTradingPage: React.FC = () => {
       await paperTradingApi.triggerDailyReflection({ accountId });
       await loadAll();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Daily reflection failed');
+      setError(err instanceof Error ? err.message : '触发复盘失败');
     } finally {
       setTriggeringReflection(false);
     }
   };
 
   const tabs: { key: TabKey; label: string; count?: number }[] = useMemo(() => [
-    { key: 'positions', label: 'Positions', count: positions.length },
-    { key: 'orders', label: 'Orders', count: orders.length },
-    { key: 'trades', label: 'Trades', count: trades.length },
-    { key: 'signals', label: 'Signals', count: signals.length },
-    { key: 'decisions', label: 'Decisions', count: decisions.length },
-    { key: 'reflections', label: 'Reflections', count: reflections.length },
-    { key: 'battle-plans', label: 'Battle Plans', count: battlePlans.length },
-    { key: 'daily-report', label: 'Daily Report' },
+    { key: 'positions', label: '持仓', count: positions.length },
+    { key: 'orders', label: '订单', count: orders.length },
+    { key: 'trades', label: '成交', count: trades.length },
+    { key: 'signals', label: '信号', count: signals.length },
+    { key: 'decisions', label: 'PM 决策', count: decisions.length },
+    { key: 'reflections', label: '复盘', count: reflections.length },
+    { key: 'battle-plans', label: '作战卡', count: battlePlans.length },
+    { key: 'daily-report', label: '日报' },
   ], [positions.length, orders.length, trades.length, signals.length, decisions.length, reflections.length, battlePlans.length]);
 
   return (
@@ -1697,13 +1746,13 @@ const PaperTradingPage: React.FC = () => {
       <header className="flex-shrink-0 px-4 py-3 border-b border-white/5" data-testid="paper-trading-header">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <h1 className="text-lg font-semibold text-white" data-testid="paper-trading-title">Paper Trading</h1>
+            <h1 className="text-lg font-semibold text-white" data-testid="paper-trading-title">纸面交易</h1>
             <div className="flex items-center gap-2">
               <input
                 type="number"
                 value={accountInput}
                 onChange={(e) => setAccountInput(e.target.value)}
-                placeholder="Account ID"
+                placeholder="账户 ID"
                 className="input-terminal w-24 text-xs py-2"
                 data-testid="account-id-input"
               />
@@ -1713,7 +1762,7 @@ const PaperTradingPage: React.FC = () => {
                 className="btn-secondary text-xs py-2 px-3"
                 data-testid="account-switch-button"
               >
-                Switch
+                切换
               </button>
               <button
                 type="button"
@@ -1721,7 +1770,7 @@ const PaperTradingPage: React.FC = () => {
                 className="btn-secondary text-xs py-2 px-3"
                 data-testid="account-reset-button"
               >
-                Reset Default
+                重置默认
               </button>
             </div>
           </div>
@@ -1733,7 +1782,7 @@ const PaperTradingPage: React.FC = () => {
               className="btn-secondary text-xs py-2 px-3"
               data-testid="trigger-pm-button"
             >
-              {triggeringPm ? 'PM Thinking...' : 'Trigger PM'}
+              {triggeringPm ? 'PM 思考中...' : '触发 PM'}
             </button>
             <button
               type="button"
@@ -1742,7 +1791,7 @@ const PaperTradingPage: React.FC = () => {
               className="btn-secondary text-xs py-2 px-3"
               data-testid="trigger-reflection-button"
             >
-              {triggeringReflection ? 'Reflecting...' : 'Trigger Reflection'}
+              {triggeringReflection ? '复盘中...' : '触发复盘'}
             </button>
             <button
               type="button"
@@ -1751,7 +1800,7 @@ const PaperTradingPage: React.FC = () => {
               className="btn-secondary text-xs py-2 px-3"
               data-testid="generate-plan-button"
             >
-              {generatingPlan ? 'Generating...' : 'Generate Plan'}
+              {generatingPlan ? '生成中...' : '生成作战卡'}
             </button>
             <button
               type="button"
@@ -1760,7 +1809,7 @@ const PaperTradingPage: React.FC = () => {
               className="btn-primary text-xs py-2 px-3"
               data-testid="refresh-button"
             >
-              {loading ? 'Loading...' : 'Refresh'}
+              {loading ? '加载中...' : '刷新'}
             </button>
           </div>
         </div>
@@ -1775,36 +1824,36 @@ const PaperTradingPage: React.FC = () => {
         <div className="flex flex-col gap-3 w-80 flex-shrink-0 overflow-y-auto">
           {/* Account summary */}
           <Card variant="gradient" padding="md">
-            <span className="label-uppercase">Account #{accountId}</span>
+            <span className="label-uppercase">账户 #{accountId}</span>
             {snapshot ? (
               <div className="mt-3 grid grid-cols-2 gap-3">
                 <div>
-                  <p className="text-xxs text-muted uppercase">Net Value</p>
+                  <p className="text-xxs text-muted uppercase">净值</p>
                   <p className="text-lg font-mono font-semibold text-white">{formatNumber(snapshot.netValue)}</p>
                 </div>
                 <div>
-                  <p className="text-xxs text-muted uppercase">Return</p>
+                  <p className="text-xxs text-muted uppercase">收益</p>
                   <p className={`text-lg font-mono font-semibold ${snapshot.returnPct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                     {formatPct(snapshot.returnPct)}
                   </p>
                 </div>
                 <div>
-                  <p className="text-xxs text-muted uppercase">Cash</p>
+                  <p className="text-xxs text-muted uppercase">现金</p>
                   <p className="text-sm font-mono text-secondary">{formatNumber(snapshot.cash)}</p>
                 </div>
                 <div>
-                  <p className="text-xxs text-muted uppercase">Positions</p>
+                  <p className="text-xxs text-muted uppercase">持仓</p>
                   <p className="text-sm font-mono text-secondary">{snapshot.positionCount}</p>
                 </div>
               </div>
             ) : (
-              <p className="mt-3 text-xs text-muted">Loading account...</p>
+              <p className="mt-3 text-xs text-muted">账户加载中...</p>
             )}
           </Card>
 
           {/* Net value curve */}
           <Card variant="gradient" padding="md">
-            <span className="label-uppercase">Net Value Curve</span>
+            <span className="label-uppercase">净值曲线</span>
             <div className="mt-3">
               <NetValueSparkline data={netValue} />
             </div>

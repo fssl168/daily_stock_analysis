@@ -2,6 +2,7 @@ import apiClient from './index';
 import { toCamelCase } from './utils';
 import type {
   AccountCreateRequest,
+  AccountListResponse,
   AccountSnapshotResponse,
   BatchOrderCreateRequest,
   BatchOrderResponse,
@@ -38,6 +39,14 @@ import type {
 // ============ API ============
 
 export const paperTradingApi = {
+  /**
+   * List all paper trading accounts with snapshot summaries.
+   */
+  getAccounts: async (): Promise<AccountListResponse> => {
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/paper-trading/accounts');
+    return toCamelCase<AccountListResponse>(response.data);
+  },
+
   /**
    * Create or reset a paper trading account.
    */

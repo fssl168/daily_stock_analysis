@@ -52,6 +52,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if not path.startswith("/api/v1/"):
             return await call_next(request)
 
+        # Let CORS preflight requests through so the CORS middleware can respond.
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
         cookie_val = request.cookies.get(COOKIE_NAME)
         if not cookie_val or not verify_session(cookie_val):
             return JSONResponse(

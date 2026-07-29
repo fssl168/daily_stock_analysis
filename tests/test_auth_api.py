@@ -273,6 +273,30 @@ class AuthApiTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         call_next.assert_awaited_once()
 
+    def test_cors_preflight_allowed_without_session(self) -> None:
+        """OPTIONS requests must reach the CORS middleware even when auth is enabled."""
+        scope = {
+            "type": "http",
+            "method": "OPTIONS",
+            "path": "/api/v1/paper-trading/accounts/1",
+            "headers": [],
+            "query_string": b"",
+            "scheme": "http",
+            "client": ("127.0.0.1", 1234),
+            "server": ("testserver", 80),
+            "root_path": "",
+        }
+        request = Request(scope)
+        middleware = AuthMiddleware(app=MagicMock())
+        next_response = Response(status_code=200)
+        call_next = AsyncMock(return_value=next_response)
+
+        with patch("api.middlewares.auth.is_auth_enabled", return_value=True):
+            response = asyncio.run(middleware.dispatch(request, call_next))
+
+        self.assertEqual(response.status_code, 200)
+        call_next.assert_awaited_once()
+
     def test_auth_settings_requires_session_when_auth_enabled(self) -> None:
         scope = {
             "type": "http",

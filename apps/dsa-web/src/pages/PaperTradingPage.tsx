@@ -1,9 +1,12 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { paperTradingApi } from '../api/paperTrading';
 import { Card, Badge } from '../components/common';
-import { useWatchlist } from '../hooks/useWatchlist';
+import { useUiLanguage } from '../contexts/UiLanguageContext';
+import { formatUiText } from '../i18n/uiText';
 import type {
+  AccountListItem,
   AccountSnapshotResponse,
+  AccountUpdateRequest,
   BatchOrderResponse,
   BattlePlanItem,
   DailyReportResponse,
@@ -35,19 +38,8 @@ function formatPct(value?: number | null): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
 }
 
-const STATUS_LABEL_MAP: Record<string, string> = {
-  executed: '已执行',
-  filled: '已成交',
-  completed: '已完成',
-  rejected: '已拒绝',
-  cancelled: '已撤单',
-  pending: '待成交',
-  submitted: '已提交',
-  conditional: '条件单',
-};
-
-function statusBadge(status: string) {
-  const label = STATUS_LABEL_MAP[status] ?? status;
+function statusBadge(status: string, t: (key: import('../i18n/uiText').UiTextKey) => string) {
+  const label = t(`paperTrading.status.${status}` as import('../i18n/uiText').UiTextKey) || status;
   switch (status) {
     case 'executed':
     case 'filled':
@@ -64,53 +56,25 @@ function statusBadge(status: string) {
   }
 }
 
-function sideBadge(side: string) {
-  const label = side === 'buy' ? '买入' : side === 'sell' ? '卖出' : side;
+function sideBadge(side: string, t: (key: import('../i18n/uiText').UiTextKey) => string) {
+  const label = side === 'buy'
+    ? t('paperTrading.order.side.buy')
+    : side === 'sell'
+      ? t('paperTrading.order.side.sell')
+      : side;
   return (
     <Badge
       variant={side === 'buy' ? 'success' : side === 'sell' ? 'danger' : 'default'}
-      className="uppercase"
     >
       {label}
     </Badge>
   );
 }
 
-function orderTypeLabel(type: string) {
-  const map: Record<string, string> = {
-    market: '市价',
-    limit: '限价',
-    conditional: '条件',
-    stop_loss: '止损',
-    take_profit: '止盈',
-  };
-  return map[type] ?? type;
-}
-
-function actionLabel(action: string) {
-  const map: Record<string, string> = {
-    buy: '买入',
-    sell: '卖出',
-    hold: '持有',
-  };
-  return map[action] ?? action;
-}
-
-function moodLabel(mood: string) {
-  const map: Record<string, string> = {
-    good: '良好',
-    bad: '不佳',
-    neutral: '中性',
-    happy: '良好',
-    sad: '不佳',
-  };
-  return map[mood] ?? mood;
-}
-
-function formatDateTime(value?: string | null): string {
+function formatDateTime(value?: string | null, language?: string): string {
   if (!value) return '--';
   try {
-    return new Date(value).toLocaleString('zh-CN', {
+    return new Date(value).toLocaleString(language === 'en' ? 'en-US' : 'zh-CN', {
       month: 'short',
       day: 'numeric',
       hour: '2-digit',
@@ -128,10 +92,11 @@ const NetValueSparkline: React.FC<{ data: NetValuePoint[]; width?: number; heigh
   width = 320,
   height = 120,
 }) => {
+  const { t } = useUiLanguage();
   if (data.length < 2) {
     return (
       <div className="flex items-center justify-center h-full text-xs text-muted">
-        暂无净值数据
+        {t('paperTrading.noNetValueData')}
       </div>
     );
   }
@@ -184,7 +149,7 @@ const DrawdownSparkline: React.FC<{ data: DrawdownItem[]; width?: number; height
   height = 60,
 }) => {
   if (data.length < 2) {
-    return <div className="text-xs text-muted">暂无回撤数据</div>;
+    return <div className="text-xs text-muted">--</div>;
   }
 
   const values = data.map(d => d.drawdownPct);
@@ -227,6 +192,7 @@ const DrawdownSparkline: React.FC<{ data: DrawdownItem[]; width?: number; height
 // ============ Performance Card ============
 
 const PerformanceCard: React.FC<{ accountId: number }> = ({ accountId }) => {
+  const { t } = useUiLanguage();
   const [metrics, setMetrics] = useState<PerformanceMetricsResponse | null>(null);
   const [risk, setRisk] = useState<RiskMetricsResponse | null>(null);
   const [drawdown, setDrawdown] = useState<DrawdownItem[]>([]);
@@ -246,11 +212,11 @@ const PerformanceCard: React.FC<{ accountId: number }> = ({ accountId }) => {
       setRisk(r);
       setDrawdown(dd);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '加载绩效失败');
+      setError(err instanceof Error ? err.message : t('paperTrading.performance.loadError'));
     } finally {
       setLoading(false);
     }
-  }, [accountId]);
+  }, [accountId, t]);
 
   useEffect(() => {
     load();
@@ -259,7 +225,7 @@ const PerformanceCard: React.FC<{ accountId: number }> = ({ accountId }) => {
   return (
     <Card variant="gradient" padding="md">
       <div className="flex items-center justify-between">
-        <span className="label-uppercase">绩效</span>
+        <span className="label-uppercase">{t('paperTrading.performance.metrics')}</span>
         <button
           type="button"
           onClick={load}
@@ -267,55 +233,55 @@ const PerformanceCard: React.FC<{ accountId: number }> = ({ accountId }) => {
           className="text-xs text-cyan hover:text-cyan/80 disabled:opacity-50"
           data-testid="refresh-performance-button"
         >
-          {loading ? '加载中...' : '刷新'}
+          {loading ? t('paperTrading.performance.loading') : t('paperTrading.performance.refresh')}
         </button>
       </div>
       {metrics ? (
         <div className="mt-3 grid grid-cols-2 gap-3">
           <div>
-            <p className="text-xxs text-muted uppercase">总收益</p>
+            <p className="text-xxs text-muted uppercase">{t('paperTrading.performance.totalReturnPct')}</p>
             <p className={`text-sm font-mono font-semibold ${metrics.totalReturnPct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
               {formatPct(metrics.totalReturnPct)}
             </p>
           </div>
           <div>
-            <p className="text-xxs text-muted uppercase">夏普比率</p>
+            <p className="text-xxs text-muted uppercase">{t('paperTrading.performance.sharpeRatio')}</p>
             <p className="text-sm font-mono font-semibold text-white" data-testid="sharpe-ratio-value">
               {formatNumber(metrics.sharpeRatio ?? 0, 2)}
             </p>
           </div>
           <div>
-            <p className="text-xxs text-muted uppercase">最大回撤</p>
+            <p className="text-xxs text-muted uppercase">{t('paperTrading.performance.maxDrawdownPct')}</p>
             <p className="text-sm font-mono font-semibold text-red-400" data-testid="max-drawdown-value">
               {formatPct(metrics.maxDrawdownPct)}
             </p>
           </div>
           <div>
-            <p className="text-xxs text-muted uppercase">胜率</p>
+            <p className="text-xxs text-muted uppercase">{t('paperTrading.performance.winRate')}</p>
             <p className="text-sm font-mono font-semibold text-white" data-testid="win-rate-value">
               {metrics.winRate.toFixed(2)}%
             </p>
           </div>
         </div>
       ) : (
-        <p className="mt-3 text-xs text-muted">绩效加载中...</p>
+        <p className="mt-3 text-xs text-muted">{t('paperTrading.performance.loadingData')}</p>
       )}
       {drawdown.length >= 2 && (
         <div className="mt-3" data-testid="drawdown-chart">
-          <p className="text-xxs text-muted uppercase mb-1">回撤曲线</p>
+          <p className="text-xxs text-muted uppercase mb-1">{t('paperTrading.performance.drawdownCurve')}</p>
           <DrawdownSparkline data={drawdown} />
         </div>
       )}
       {risk && (
         <div className="mt-3 pt-3 border-t border-white/5 grid grid-cols-2 gap-3">
           <div>
-            <p className="text-xxs text-muted uppercase">集中度</p>
+            <p className="text-xxs text-muted uppercase">{t('paperTrading.performance.concentration')}</p>
             <p className="text-sm font-mono font-semibold text-white">
               {risk.maxSingleStockConcentrationPct.toFixed(2)}%
             </p>
           </div>
           <div>
-            <p className="text-xxs text-muted uppercase">回撤</p>
+            <p className="text-xxs text-muted uppercase">{t('paperTrading.performance.currentDrawdown')}</p>
             <p className="text-sm font-mono font-semibold text-white">
               {risk.currentDrawdownPct.toFixed(2)}%
             </p>
@@ -341,6 +307,7 @@ interface BatchRow {
 }
 
 const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ accountId, onSubmitted }) => {
+  const { t } = useUiLanguage();
   const [mode, setMode] = useState<OrderMode>('single');
 
   // Single order state
@@ -379,7 +346,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
     try {
       const qty = parseFloat(quantity);
       if (!code || Number.isNaN(qty) || qty <= 0) {
-        throw new Error('请输入有效的代码和数量');
+        throw new Error(t('paperTrading.order.error.invalidSingle'));
       }
       const res = await paperTradingApi.submitOrder({
         accountId,
@@ -388,12 +355,12 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
         quantity: qty,
         orderType,
         limitPrice: orderType === 'limit' && limitPrice ? parseFloat(limitPrice) : undefined,
-        reason: 'WebUI 手动下单',
+        reason: 'manual order from WebUI',
       });
       setResult(res);
       onSubmitted();
     } catch (err) {
-      setError(err instanceof Error ? err.message : '下单失败');
+      setError(err instanceof Error ? err.message : t('paperTrading.order.error.singleFailed'));
     } finally {
       setLoading(false);
     }
@@ -407,7 +374,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
       const qty = parseFloat(quantity);
       const trigger = parseFloat(triggerPrice);
       if (!code || Number.isNaN(qty) || qty <= 0 || Number.isNaN(trigger) || trigger <= 0) {
-        throw new Error('请输入有效的代码、数量和触发价');
+        throw new Error(t('paperTrading.order.error.invalidConditional'));
       }
       const res = await paperTradingApi.createConditionalOrder({
         accountId,
@@ -417,12 +384,12 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
         orderType: conditionalType,
         triggerPrice: trigger,
         limitPrice: orderType === 'limit' && limitPrice ? parseFloat(limitPrice) : undefined,
-        reason: 'WebUI 条件单',
+        reason: 'manual conditional order from WebUI',
       });
       setConditionalResult({ id: res.id, status: res.status });
       onSubmitted();
     } catch (err) {
-      setError(err instanceof Error ? err.message : '条件单创建失败');
+      setError(err instanceof Error ? err.message : t('paperTrading.order.error.conditionalFailed'));
     } finally {
       setLoading(false);
     }
@@ -438,7 +405,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
         .map(row => {
           const qty = parseFloat(row.quantity);
           if (Number.isNaN(qty) || qty <= 0) {
-            throw new Error(`的数量无效${row.code}`);
+            throw new Error(formatUiText(t('paperTrading.order.error.invalidQuantity'), { code: row.code }));
           }
           return {
             code: row.code.toUpperCase(),
@@ -449,13 +416,13 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
           };
         });
       if (orders.length === 0) {
-        throw new Error('请至少添加一笔有效订单');
+        throw new Error(t('paperTrading.order.error.noOrders'));
       }
       const res = await paperTradingApi.submitBatchOrders({ accountId, orders });
       setBatchResult(res);
       onSubmitted();
     } catch (err) {
-      setError(err instanceof Error ? err.message : '批量下单失败');
+      setError(err instanceof Error ? err.message : t('paperTrading.order.error.batchFailed'));
     } finally {
       setLoading(false);
     }
@@ -480,7 +447,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
     if (result) {
       return (
         <div className="mt-3 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs">
-          <span className="text-emerald-400">{STATUS_LABEL_MAP[result.status] ?? result.status}</span>
+          <span className="text-emerald-400">{result.status.toUpperCase()}</span>
           {' '}
           <span className="text-secondary">{result.code}</span>
           {result.fillPrice != null && (
@@ -495,10 +462,10 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
     if (batchResult) {
       return (
         <div className="mt-3 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs space-y-1">
-          <p className="text-emerald-400">批量提交 ({batchResult.total})</p>
+          <p className="text-emerald-400">{formatUiText(t('paperTrading.order.result.batchSubmitted'), { total: batchResult.total })}</p>
           {batchResult.results.map((r: TradeResultResponse, i: number) => (
             <p key={i} className="text-secondary">
-              {r.code}: {STATUS_LABEL_MAP[r.status] ?? r.status}
+              {r.code}: {r.status.toUpperCase()}
               {r.fillPrice != null && ` @ ${formatNumber(r.fillPrice)}`}
             </p>
           ))}
@@ -508,7 +475,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
     if (conditionalResult) {
       return (
         <div className="mt-3 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs">
-          <span className="text-emerald-400">条件单已创建</span>
+          <span className="text-emerald-400">{t('paperTrading.order.result.conditionalCreated')}</span>
           {' '}
           <span className="text-secondary">#{conditionalResult.id}</span>
         </div>
@@ -519,7 +486,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
 
   return (
     <Card variant="gradient" padding="md">
-      <span className="label-uppercase">订单</span>
+      <span className="label-uppercase">{t('paperTrading.order.title')}</span>
       <div className="mt-2 flex gap-1 p-1 rounded-lg bg-elevated">
         {(['single', 'batch', 'conditional'] as OrderMode[]).map(m => (
           <button
@@ -531,7 +498,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
             }`}
             data-testid={`order-mode-${m}`}
           >
-            {m === 'single' ? '单笔' : m === 'batch' ? '批量' : '条件'}
+            {t(`paperTrading.order.mode.${m}`)}
           </button>
         ))}
       </div>
@@ -543,7 +510,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               type="text"
               value={code}
               onChange={(e) => setCode(e.target.value.toUpperCase())}
-              placeholder="代码"
+              placeholder={t('paperTrading.order.placeholder.code')}
               className="input-terminal"
               data-testid="order-code-input"
             />
@@ -553,8 +520,8 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               className="input-terminal bg-elevated"
               data-testid="order-side-select"
             >
-              <option value="buy">买入</option>
-              <option value="sell">卖出</option>
+              <option value="buy">{t('paperTrading.order.side.buy')}</option>
+              <option value="sell">{t('paperTrading.order.side.sell')}</option>
             </select>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -562,7 +529,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               type="number"
               value={quantity}
               onChange={(e) => setQuantity(e.target.value)}
-              placeholder="数量"
+              placeholder={t('paperTrading.order.placeholder.quantity')}
               min={0.01}
               step={0.01}
               className="input-terminal"
@@ -574,8 +541,8 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               className="input-terminal bg-elevated"
               data-testid="order-type-select"
             >
-              <option value="market">市价</option>
-              <option value="limit">限价</option>
+              <option value="market">{t('paperTrading.order.type.market')}</option>
+              <option value="limit">{t('paperTrading.order.type.limit')}</option>
             </select>
           </div>
           {orderType === 'limit' && (
@@ -583,7 +550,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               type="number"
               value={limitPrice}
               onChange={(e) => setLimitPrice(e.target.value)}
-              placeholder="限价"
+              placeholder={t('paperTrading.order.placeholder.limitPrice')}
               min={0.01}
               step={0.01}
               className="input-terminal"
@@ -596,7 +563,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
             className="btn-primary w-full flex items-center justify-center gap-2"
             data-testid="order-submit-button"
           >
-            {loading ? '提交中...' : '提交订单'}
+            {loading ? t('common.processing') : t('paperTrading.order.submit')}
           </button>
         </form>
       )}
@@ -608,7 +575,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               type="text"
               value={code}
               onChange={(e) => setCode(e.target.value.toUpperCase())}
-              placeholder="代码"
+              placeholder={t('paperTrading.order.placeholder.code')}
               className="input-terminal"
               data-testid="conditional-code-input"
             />
@@ -618,8 +585,8 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               className="input-terminal bg-elevated"
               data-testid="conditional-side-select"
             >
-              <option value="buy">买入</option>
-              <option value="sell">卖出</option>
+              <option value="buy">{t('paperTrading.order.side.buy')}</option>
+              <option value="sell">{t('paperTrading.order.side.sell')}</option>
             </select>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -627,7 +594,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               type="number"
               value={quantity}
               onChange={(e) => setQuantity(e.target.value)}
-              placeholder="数量"
+              placeholder={t('paperTrading.order.placeholder.quantity')}
               min={0.01}
               step={0.01}
               className="input-terminal"
@@ -639,15 +606,15 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               className="input-terminal bg-elevated"
               data-testid="conditional-type-select"
             >
-              <option value="stop_loss">止损</option>
-              <option value="take_profit">止盈</option>
+              <option value="stop_loss">{t('paperTrading.order.conditionalType.stopLoss')}</option>
+              <option value="take_profit">{t('paperTrading.order.conditionalType.takeProfit')}</option>
             </select>
           </div>
           <input
             type="number"
             value={triggerPrice}
             onChange={(e) => setTriggerPrice(e.target.value)}
-            placeholder="触发价"
+            placeholder={t('paperTrading.order.placeholder.triggerPrice')}
             min={0.01}
             step={0.01}
             className="input-terminal"
@@ -660,15 +627,15 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               className="input-terminal bg-elevated"
               data-testid="conditional-order-type-select"
             >
-              <option value="market">市价</option>
-              <option value="limit">限价</option>
+              <option value="market">{t('paperTrading.order.type.market')}</option>
+              <option value="limit">{t('paperTrading.order.type.limit')}</option>
             </select>
             {orderType === 'limit' && (
               <input
                 type="number"
                 value={limitPrice}
                 onChange={(e) => setLimitPrice(e.target.value)}
-                placeholder="限价"
+                placeholder={t('paperTrading.order.placeholder.limitPrice')}
                 min={0.01}
                 step={0.01}
                 className="input-terminal"
@@ -682,7 +649,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
             className="btn-primary w-full flex items-center justify-center gap-2"
             data-testid="conditional-submit-button"
           >
-            {loading ? '提交中...' : '创建条件单'}
+            {loading ? t('common.processing') : t('paperTrading.order.createConditional')}
           </button>
         </form>
       )}
@@ -700,7 +667,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
                       onClick={() => removeBatchRow(row.id)}
                       className="text-xs text-danger hover:text-red-300"
                     >
-                      删除
+                      {t('paperTrading.order.removeRow')}
                     </button>
                   )}
                 </div>
@@ -709,7 +676,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
                     type="text"
                     value={row.code}
                     onChange={(e) => updateBatchRow(row.id, 'code', e.target.value.toUpperCase())}
-                    placeholder="代码"
+                    placeholder={t('paperTrading.order.placeholder.code')}
                     className="input-terminal text-xs py-1.5"
                     data-testid={`batch-code-input-${index}`}
                   />
@@ -719,8 +686,8 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
                     className="input-terminal bg-elevated text-xs py-1.5"
                     data-testid={`batch-side-select-${index}`}
                   >
-                    <option value="buy">买入</option>
-                    <option value="sell">卖出</option>
+                    <option value="buy">{t('paperTrading.order.side.buy')}</option>
+                    <option value="sell">{t('paperTrading.order.side.sell')}</option>
                   </select>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
@@ -728,7 +695,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
                     type="number"
                     value={row.quantity}
                     onChange={(e) => updateBatchRow(row.id, 'quantity', e.target.value)}
-                    placeholder="数量"
+                    placeholder={t('paperTrading.order.placeholder.quantity')}
                     min={0.01}
                     step={0.01}
                     className="input-terminal text-xs py-1.5"
@@ -740,8 +707,8 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
                     className="input-terminal bg-elevated text-xs py-1.5"
                     data-testid={`batch-type-select-${index}`}
                   >
-                    <option value="market">市价</option>
-                    <option value="limit">限价</option>
+                    <option value="market">{t('paperTrading.order.type.market')}</option>
+                    <option value="limit">{t('paperTrading.order.type.limit')}</option>
                   </select>
                 </div>
                 {row.orderType === 'limit' && (
@@ -749,7 +716,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
                     type="number"
                     value={row.limitPrice}
                     onChange={(e) => updateBatchRow(row.id, 'limitPrice', e.target.value)}
-                    placeholder="限价"
+                    placeholder={t('paperTrading.order.placeholder.limitPrice')}
                     min={0.01}
                     step={0.01}
                     className="input-terminal text-xs py-1.5 w-full"
@@ -766,7 +733,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               className="flex-1 btn-secondary text-xs py-2"
               data-testid="batch-add-row-button"
             >
-              + 添加行
+              {t('paperTrading.order.addRow')}
             </button>
             <button
               type="submit"
@@ -774,7 +741,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               className="flex-1 btn-primary text-xs py-2"
               data-testid="batch-submit-button"
             >
-              {loading ? '提交中...' : '批量提交'}
+              {loading ? t('common.processing') : t('paperTrading.order.batchSubmit')}
             </button>
           </div>
         </form>
@@ -791,9 +758,9 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
 // ============ Listener Control ============
 
 const ListenerControl: React.FC<{ onStatusChange: () => void }> = ({ onStatusChange }) => {
+  const { t } = useUiLanguage();
   const [status, setStatus] = useState<ListenerStatusResponse | null>(null);
   const [loading, setLoading] = useState(false);
-  const { watchlistCodes, isLoading: watchlistLoading } = useWatchlist();
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -813,10 +780,7 @@ const ListenerControl: React.FC<{ onStatusChange: () => void }> = ({ onStatusCha
   const handleStart = async () => {
     setLoading(true);
     try {
-      await paperTradingApi.startListener({
-        accountId: 1,
-        watchedCodes: watchlistCodes,
-      });
+      await paperTradingApi.startListener({ accountId: 1 });
       await fetchStatus();
       onStatusChange();
     } finally {
@@ -838,15 +802,15 @@ const ListenerControl: React.FC<{ onStatusChange: () => void }> = ({ onStatusCha
   return (
     <Card variant="gradient" padding="md" className="mt-3">
       <div className="flex items-center justify-between">
-        <span className="label-uppercase">行情监听</span>
+        <span className="label-uppercase">{t('paperTrading.listener.title')}</span>
         <Badge variant={status?.running ? 'success' : 'default'}>
-          {status?.running ? '运行中' : '已停止'}
+          {status?.running ? t('paperTrading.listener.status.running') : t('paperTrading.listener.status.stopped')}
         </Badge>
       </div>
       <div className="mt-2 text-xs text-secondary space-y-1">
-        <p>账户：{status?.accountId ?? '--'}</p>
-        <p>监控：{status?.watchedCodesCount ?? 0} 只代码{watchlistLoading ? '（加载自选股...）' : null}</p>
-        <p>市场：{status?.markets?.join(', ') || '--'}</p>
+        <p>{t('paperTrading.listener.account')}: {status?.accountId ?? '--'}</p>
+        <p>{t('paperTrading.listener.watched')}: {status?.watchedCodesCount ?? 0} {t('paperTrading.listener.codes')}</p>
+        <p>{t('paperTrading.listener.markets')}: {status?.markets?.join(', ') || '--'}</p>
       </div>
       <div className="mt-3 flex gap-2">
         {status?.running ? (
@@ -857,17 +821,17 @@ const ListenerControl: React.FC<{ onStatusChange: () => void }> = ({ onStatusCha
             className="btn-secondary flex-1 text-xs py-2"
             data-testid="listener-stop-button"
           >
-            停止
+            {t('paperTrading.listener.stop')}
           </button>
         ) : (
           <button
             type="button"
             onClick={handleStart}
-            disabled={loading || watchlistLoading || watchlistCodes.length === 0}
+            disabled={loading}
             className="btn-primary flex-1 text-xs py-2"
             data-testid="listener-start-button"
           >
-            启动
+            {t('paperTrading.listener.start')}
           </button>
         )}
       </div>
@@ -878,20 +842,21 @@ const ListenerControl: React.FC<{ onStatusChange: () => void }> = ({ onStatusCha
 // ============ Data Table Components ============
 
 const PositionsTable: React.FC<{ positions: PositionItem[] }> = ({ positions }) => {
+  const { t } = useUiLanguage();
   if (positions.length === 0) {
-    return <EmptyState message="暂无持仓" />;
+    return <EmptyState message={t('paperTrading.positions.empty')} />;
   }
   return (
     <div className="overflow-x-auto rounded-xl border border-white/5">
       <table className="w-full text-sm">
         <thead>
           <tr className="bg-elevated text-left">
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">代码</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">数量</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">持仓成本</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">最新价</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">止损/止盈1/止盈2</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">盈亏</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">{t('paperTrading.positions.code')}</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">{t('paperTrading.positions.quantity')}</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">{t('paperTrading.positions.avgCost')}</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">{t('paperTrading.positions.lastPrice')}</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">{t('paperTrading.positions.slTp')}</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">{t('paperTrading.positions.pnl')}</th>
           </tr>
         </thead>
         <tbody>
@@ -923,6 +888,7 @@ const OrdersTable: React.FC<{
   filters: { status: string; side: string; code: string };
   onFiltersChange: (filters: { status: string; side: string; code: string }) => void;
 }> = ({ orders, onRefresh, filters, onFiltersChange }) => {
+  const { t } = useUiLanguage();
   const [actingId, setActingId] = useState<number | null>(null);
   const [modifyId, setModifyId] = useState<number | null>(null);
   const [modifyPrice, setModifyPrice] = useState('');
@@ -932,7 +898,7 @@ const OrdersTable: React.FC<{
   const handleCancel = async (orderId: number) => {
     setActingId(orderId);
     try {
-      await paperTradingApi.cancelOrder(orderId, 'WebUI 撤单');
+      await paperTradingApi.cancelOrder(orderId, 'cancelled from WebUI');
       onRefresh();
     } finally {
       setActingId(null);
@@ -944,24 +910,24 @@ const OrdersTable: React.FC<{
     setModifyError(null);
     try {
       const params: { newLimitPrice?: number; newQuantity?: number; reason: string } = {
-        reason: 'WebUI 改单',
+        reason: 'modified from WebUI',
       };
       if (modifyPrice) {
         const price = parseFloat(modifyPrice);
         if (Number.isNaN(price) || price <= 0) {
-          throw new Error('限价无效');
+          throw new Error(t('paperTrading.orders.modifyError.invalidPrice'));
         }
         params.newLimitPrice = price;
       }
       if (modifyQty) {
         const qty = parseFloat(modifyQty);
         if (Number.isNaN(qty) || qty <= 0) {
-          throw new Error('数量无效');
+          throw new Error(t('paperTrading.orders.modifyError.invalidQuantity'));
         }
         params.newQuantity = qty;
       }
       if (!params.newLimitPrice && !params.newQuantity) {
-        throw new Error('请输入新的限价或数量');
+        throw new Error(t('paperTrading.orders.modifyError.empty'));
       }
       await paperTradingApi.modifyOrder(orderId, params);
       setModifyId(null);
@@ -969,7 +935,7 @@ const OrdersTable: React.FC<{
       setModifyQty('');
       onRefresh();
     } catch (err) {
-      setModifyError(err instanceof Error ? err.message : '改单失败');
+      setModifyError(err instanceof Error ? err.message : t('paperTrading.orders.modifyError.failed'));
     } finally {
       setActingId(null);
     }
@@ -1000,12 +966,12 @@ const OrdersTable: React.FC<{
           className="input-terminal bg-elevated text-xs py-1.5"
           data-testid="orders-filter-status"
         >
-          <option value="">全部状态</option>
-          <option value="pending">待成交</option>
-          <option value="filled">已成交</option>
-          <option value="cancelled">已撤单</option>
-          <option value="rejected">已拒绝</option>
-          <option value="conditional">条件单</option>
+          <option value="">{t('paperTrading.orders.filter.allStatus')}</option>
+          <option value="pending">{t('paperTrading.orders.filter.pending')}</option>
+          <option value="filled">{t('paperTrading.orders.filter.filled')}</option>
+          <option value="cancelled">{t('paperTrading.orders.filter.cancelled')}</option>
+          <option value="rejected">{t('paperTrading.orders.filter.rejected')}</option>
+          <option value="conditional">{t('paperTrading.orders.filter.conditional')}</option>
         </select>
         <select
           value={filters.side}
@@ -1013,15 +979,15 @@ const OrdersTable: React.FC<{
           className="input-terminal bg-elevated text-xs py-1.5"
           data-testid="orders-filter-side"
         >
-          <option value="">全部方向</option>
-          <option value="buy">买入</option>
-          <option value="sell">卖出</option>
+          <option value="">{t('paperTrading.orders.filter.allSides')}</option>
+          <option value="buy">{t('paperTrading.orders.filter.buy')}</option>
+          <option value="sell">{t('paperTrading.orders.filter.sell')}</option>
         </select>
         <input
           type="text"
           value={filters.code}
           onChange={(e) => onFiltersChange({ ...filters, code: e.target.value.toUpperCase() })}
-          placeholder="筛选代码"
+          placeholder={t('paperTrading.orders.filter.placeholder')}
           className="input-terminal text-xs py-1.5 flex-1 min-w-[120px]"
           data-testid="orders-filter-code"
         />
@@ -1031,21 +997,21 @@ const OrdersTable: React.FC<{
       </div>
 
       {filteredOrders.length === 0 ? (
-        <EmptyState message="没有符合筛选条件的订单" />
+        <EmptyState message={t('paperTrading.orders.empty')} />
       ) : (
         <div className="overflow-x-auto rounded-xl border border-white/5" data-testid="orders-table">
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-elevated text-left">
-                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">编号</th>
-                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">代码</th>
-                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">方向</th>
-                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">类型</th>
-                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">数量</th>
-                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">已成交</th>
-                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">状态</th>
-                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">创建时间</th>
-                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">操作</th>
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">{t('paperTrading.orders.id')}</th>
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">{t('paperTrading.orders.code')}</th>
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">{t('paperTrading.orders.side')}</th>
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">{t('paperTrading.orders.type')}</th>
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">{t('paperTrading.orders.quantity')}</th>
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">{t('paperTrading.orders.filled')}</th>
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">{t('paperTrading.orders.status')}</th>
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">{t('paperTrading.orders.createdAt')}</th>
+                <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">{t('paperTrading.orders.action')}</th>
               </tr>
             </thead>
             <tbody>
@@ -1054,11 +1020,11 @@ const OrdersTable: React.FC<{
                   <tr className="border-t border-white/5 hover:bg-hover transition-colors">
                     <td className="px-3 py-2 text-xs text-muted">{o.id}</td>
                     <td className="px-3 py-2 font-mono text-cyan text-xs">{o.code}</td>
-                    <td className="px-3 py-2">{sideBadge(o.side)}</td>
-                    <td className="px-3 py-2 text-xs text-secondary">{orderTypeLabel(o.orderType)}</td>
+                    <td className="px-3 py-2">{sideBadge(o.side, t)}</td>
+                    <td className="px-3 py-2 text-xs text-secondary">{t(`paperTrading.order.type.${o.orderType}` as import('../i18n/uiText').UiTextKey) || o.orderType}</td>
                     <td className="px-3 py-2 text-xs text-right text-white">{formatNumber(o.quantity)}</td>
                     <td className="px-3 py-2 text-xs text-right text-secondary">{formatNumber(o.filledQuantity)}</td>
-                    <td className="px-3 py-2">{statusBadge(o.status)}</td>
+                    <td className="px-3 py-2">{statusBadge(o.status, t)}</td>
                     <td className="px-3 py-2 text-xs text-muted">{formatDateTime(o.createdAt)}</td>
                     <td className="px-3 py-2">
                       {o.status === 'pending' && (
@@ -1070,7 +1036,7 @@ const OrdersTable: React.FC<{
                             className="text-xs text-danger hover:text-red-300 disabled:opacity-50"
                             data-testid={`order-cancel-${o.id}`}
                           >
-                            {actingId === o.id && modifyId !== o.id ? '...' : '撤单'}
+                            {actingId === o.id && modifyId !== o.id ? '...' : t('paperTrading.orders.cancel')}
                           </button>
                           {o.orderType === 'limit' && (
                             <button
@@ -1080,7 +1046,7 @@ const OrdersTable: React.FC<{
                               className="text-xs text-cyan hover:text-cyan/80 disabled:opacity-50"
                               data-testid={`order-modify-${o.id}`}
                             >
-                              改单
+                              {t('paperTrading.orders.modify')}
                             </button>
                           )}
                         </div>
@@ -1091,12 +1057,12 @@ const OrdersTable: React.FC<{
                     <tr className="border-t border-white/5 bg-elevated/50">
                       <td colSpan={9} className="px-3 py-3">
                         <div className="flex flex-wrap items-center gap-3" data-testid={`order-modify-form-${o.id}`}>
-                          <span className="text-xs text-muted">改单 {o.code}:</span>
+                          <span className="text-xs text-muted">{formatUiText(t('paperTrading.orders.modifyLabel'), { code: o.code })}</span>
                           <input
                             type="number"
                             value={modifyPrice}
                             onChange={(e) => setModifyPrice(e.target.value)}
-                            placeholder="新限价"
+                            placeholder={t('paperTrading.orders.newLimitPrice')}
                             min={0.01}
                             step={0.01}
                             className="input-terminal text-xs py-1.5 w-36"
@@ -1106,7 +1072,7 @@ const OrdersTable: React.FC<{
                             type="number"
                             value={modifyQty}
                             onChange={(e) => setModifyQty(e.target.value)}
-                            placeholder="新数量"
+                            placeholder={t('paperTrading.orders.newQuantity')}
                             min={0.01}
                             step={0.01}
                             className="input-terminal text-xs py-1.5 w-32"
@@ -1119,7 +1085,7 @@ const OrdersTable: React.FC<{
                             className="btn-primary text-xs py-1.5 px-3"
                             data-testid="order-modify-submit"
                           >
-                            {actingId === o.id ? '保存中...' : '保存'}
+                            {actingId === o.id ? t('paperTrading.orders.saving') : t('paperTrading.orders.save')}
                           </button>
                           <button
                             type="button"
@@ -1127,7 +1093,7 @@ const OrdersTable: React.FC<{
                             className="btn-secondary text-xs py-1.5 px-3"
                             data-testid="order-modify-cancel"
                           >
-                            取消
+                            {t('common.cancel')}
                           </button>
                           {modifyError && (
                             <span className="text-xs text-danger">{modifyError}</span>
@@ -1147,31 +1113,32 @@ const OrdersTable: React.FC<{
 };
 
 const TradesTable: React.FC<{ trades: TradeItem[] }> = ({ trades }) => {
+  const { t } = useUiLanguage();
   if (trades.length === 0) {
-    return <EmptyState message="暂无成交" />;
+    return <EmptyState message={t('paperTrading.trades.empty')} />;
   }
   return (
     <div className="overflow-x-auto rounded-xl border border-white/5" data-testid="trades-table">
       <table className="w-full text-sm">
         <thead>
           <tr className="bg-elevated text-left">
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">代码</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">方向</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">成交价</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">数量</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">手续费</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">成交时间</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">{t('paperTrading.trades.code')}</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">{t('paperTrading.trades.side')}</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">{t('paperTrading.trades.fillPrice')}</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">{t('paperTrading.trades.quantity')}</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">{t('paperTrading.trades.fee')}</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">{t('paperTrading.trades.tradedAt')}</th>
           </tr>
         </thead>
         <tbody>
-          {trades.map((t) => (
-            <tr key={t.id} className="border-t border-white/5 hover:bg-hover transition-colors">
-              <td className="px-3 py-2 font-mono text-cyan text-xs">{t.code}</td>
-              <td className="px-3 py-2">{sideBadge(t.side)}</td>
-              <td className="px-3 py-2 text-xs text-right text-white">{formatNumber(t.fillPrice)}</td>
-              <td className="px-3 py-2 text-xs text-right text-secondary">{formatNumber(t.fillQuantity)}</td>
-              <td className="px-3 py-2 text-xs text-right text-secondary">{formatNumber(t.fee)}</td>
-              <td className="px-3 py-2 text-xs text-muted">{formatDateTime(t.tradedAt)}</td>
+          {trades.map((trade) => (
+            <tr key={trade.id} className="border-t border-white/5 hover:bg-hover transition-colors">
+              <td className="px-3 py-2 font-mono text-cyan text-xs">{trade.code}</td>
+              <td className="px-3 py-2">{sideBadge(trade.side, t)}</td>
+              <td className="px-3 py-2 text-xs text-right text-white">{formatNumber(trade.fillPrice)}</td>
+              <td className="px-3 py-2 text-xs text-right text-secondary">{formatNumber(trade.fillQuantity)}</td>
+              <td className="px-3 py-2 text-xs text-right text-secondary">{formatNumber(trade.fee)}</td>
+              <td className="px-3 py-2 text-xs text-muted">{formatDateTime(trade.tradedAt)}</td>
             </tr>
           ))}
         </tbody>
@@ -1181,6 +1148,7 @@ const TradesTable: React.FC<{ trades: TradeItem[] }> = ({ trades }) => {
 };
 
 const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> = ({ signals, onRefresh }) => {
+  const { t } = useUiLanguage();
   const [actingId, setActingId] = useState<number | null>(null);
   const [modifyId, setModifyId] = useState<number | null>(null);
   const [modifyPrice, setModifyPrice] = useState('');
@@ -1188,13 +1156,13 @@ const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> =
   const [modifyError, setModifyError] = useState<string | null>(null);
 
   if (signals.length === 0) {
-    return <EmptyState message="暂无信号" />;
+    return <EmptyState message={t('paperTrading.signals.empty')} />;
   }
 
   const handleCancel = async (signalId: number) => {
     setActingId(signalId);
     try {
-      await paperTradingApi.cancelSignal(signalId, 'WebUI 撤单');
+      await paperTradingApi.cancelSignal(signalId, 'cancelled from WebUI');
       onRefresh();
     } finally {
       setActingId(null);
@@ -1206,24 +1174,24 @@ const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> =
     setModifyError(null);
     try {
       const params: { newLimitPrice?: number; newQuantity?: number; reason: string } = {
-        reason: 'WebUI 改单',
+        reason: 'modified from WebUI',
       };
       if (modifyPrice) {
         const price = parseFloat(modifyPrice);
         if (Number.isNaN(price) || price <= 0) {
-          throw new Error('限价无效');
+          throw new Error(t('paperTrading.orders.modifyError.invalidPrice'));
         }
         params.newLimitPrice = price;
       }
       if (modifyQty) {
         const qty = parseFloat(modifyQty);
         if (Number.isNaN(qty) || qty <= 0) {
-          throw new Error('数量无效');
+          throw new Error(t('paperTrading.orders.modifyError.invalidQuantity'));
         }
         params.newQuantity = qty;
       }
       if (!params.newLimitPrice && !params.newQuantity) {
-        throw new Error('请输入新的限价或数量');
+        throw new Error(t('paperTrading.orders.modifyError.empty'));
       }
       await paperTradingApi.modifySignal(signalId, params);
       setModifyId(null);
@@ -1231,7 +1199,7 @@ const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> =
       setModifyQty('');
       onRefresh();
     } catch (err) {
-      setModifyError(err instanceof Error ? err.message : '改单失败');
+      setModifyError(err instanceof Error ? err.message : t('paperTrading.orders.modifyError.failed'));
     } finally {
       setActingId(null);
     }
@@ -1249,14 +1217,14 @@ const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> =
       <table className="w-full text-sm">
         <thead>
           <tr className="bg-elevated text-left">
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">代码</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">方向</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">触发价</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">策略</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">状态</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">智能体</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">创建时间</th>
-            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">操作</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">{t('paperTrading.signals.code')}</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">{t('paperTrading.signals.side')}</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase text-right">{t('paperTrading.signals.triggerPrice')}</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">{t('paperTrading.signals.strategy')}</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">{t('paperTrading.signals.status')}</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">{t('paperTrading.signals.agent')}</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">{t('paperTrading.signals.createdAt')}</th>
+            <th className="px-3 py-2.5 text-xs font-medium text-secondary uppercase">{t('paperTrading.signals.action')}</th>
           </tr>
         </thead>
         <tbody>
@@ -1264,12 +1232,12 @@ const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> =
             <React.Fragment key={s.id}>
               <tr className="border-t border-white/5 hover:bg-hover transition-colors">
                 <td className="px-3 py-2 font-mono text-cyan text-xs">{s.code}</td>
-                <td className="px-3 py-2">{sideBadge(s.side)}</td>
+                <td className="px-3 py-2">{sideBadge(s.side, t)}</td>
                 <td className="px-3 py-2 text-xs text-right text-white">{formatNumber(s.triggerPrice)}</td>
                 <td className="px-3 py-2 text-xs text-secondary">{s.strategyName || '--'}</td>
-                <td className="px-3 py-2">{statusBadge(s.status)}</td>
+                <td className="px-3 py-2">{statusBadge(s.status, t)}</td>
                 <td className="px-3 py-2 text-xs text-secondary">
-                  {s.agentConfirmed == null ? '--' : s.agentConfirmed ? '已确认' : '已否决'}
+                  {s.agentConfirmed == null ? '--' : s.agentConfirmed ? t('paperTrading.signals.agentConfirmed') : t('paperTrading.signals.agentVetoed')}
                 </td>
                 <td className="px-3 py-2 text-xs text-muted">{formatDateTime(s.createdAt)}</td>
                 <td className="px-3 py-2">
@@ -1282,7 +1250,7 @@ const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> =
                         className="text-xs text-danger hover:text-red-300 disabled:opacity-50"
                         data-testid={`signal-cancel-${s.id}`}
                       >
-                        {actingId === s.id && modifyId !== s.id ? '...' : '撤单'}
+                        {actingId === s.id && modifyId !== s.id ? '...' : t('paperTrading.orders.cancel')}
                       </button>
                       <button
                         type="button"
@@ -1291,7 +1259,7 @@ const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> =
                         className="text-xs text-cyan hover:text-cyan/80 disabled:opacity-50"
                         data-testid={`signal-modify-${s.id}`}
                       >
-                        改单
+                        {t('paperTrading.orders.modify')}
                       </button>
                     </div>
                   )}
@@ -1301,12 +1269,12 @@ const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> =
                 <tr className="border-t border-white/5 bg-elevated/50">
                   <td colSpan={8} className="px-3 py-3">
                     <div className="flex flex-wrap items-center gap-3" data-testid={`signal-modify-form-${s.id}`}>
-                      <span className="text-xs text-muted">改单 {s.code}:</span>
+                      <span className="text-xs text-muted">{formatUiText(t('paperTrading.orders.modifyLabel'), { code: s.code })}</span>
                       <input
                         type="number"
                         value={modifyPrice}
                         onChange={(e) => setModifyPrice(e.target.value)}
-                        placeholder="新限价"
+                        placeholder={t('paperTrading.orders.newLimitPrice')}
                         min={0.01}
                         step={0.01}
                         className="input-terminal text-xs py-1.5 w-36"
@@ -1316,7 +1284,7 @@ const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> =
                         type="number"
                         value={modifyQty}
                         onChange={(e) => setModifyQty(e.target.value)}
-                        placeholder="新数量"
+                        placeholder={t('paperTrading.orders.newQuantity')}
                         min={0.01}
                         step={0.01}
                         className="input-terminal text-xs py-1.5 w-32"
@@ -1329,7 +1297,7 @@ const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> =
                         className="btn-primary text-xs py-1.5 px-3"
                         data-testid="signal-modify-submit"
                       >
-                        {actingId === s.id ? '保存中...' : '保存'}
+                        {actingId === s.id ? t('paperTrading.orders.saving') : t('paperTrading.orders.save')}
                       </button>
                       <button
                         type="button"
@@ -1337,7 +1305,7 @@ const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> =
                         className="btn-secondary text-xs py-1.5 px-3"
                         data-testid="signal-modify-cancel"
                       >
-                        取消
+                        {t('common.cancel')}
                       </button>
                       {modifyError && (
                         <span className="text-xs text-danger">{modifyError}</span>
@@ -1354,51 +1322,149 @@ const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> =
   );
 };
 
-const DecisionsList: React.FC<{ decisions: PMDecisionItem[] }> = ({ decisions }) => {
+const DecisionsList: React.FC<{
+  decisions: PMDecisionItem[];
+  accountId: number;
+  onRefresh: () => void;
+}> = ({ decisions, accountId, onRefresh }) => {
+  const { t } = useUiLanguage();
+  const [executingId, setExecutingId] = useState<number | null>(null);
+  const [ignoringId, setIgnoringId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleExecute = async (decisionId: number) => {
+    setExecutingId(decisionId);
+    setError(null);
+    try {
+      await paperTradingApi.executePMDecision(accountId, decisionId);
+      onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('paperTrading.decisions.executeFailed'));
+    } finally {
+      setExecutingId(null);
+    }
+  };
+
+  const handleIgnore = async (decisionId: number) => {
+    if (!window.confirm(t('paperTrading.decisions.ignoreConfirm'))) return;
+    setIgnoringId(decisionId);
+    setError(null);
+    try {
+      await paperTradingApi.ignorePMDecision(accountId, decisionId);
+      onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('paperTrading.decisions.ignoreFailed'));
+    } finally {
+      setIgnoringId(null);
+    }
+  };
+
   if (decisions.length === 0) {
-    return <EmptyState message="暂无 PM 决策" />;
+    return <EmptyState message={t('paperTrading.decisions.empty')} />;
   }
+
   return (
     <div className="space-y-2">
-      {decisions.map((d) => (
-        <div key={d.id} className="p-3 rounded-xl bg-elevated border border-white/5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Badge variant={d.action === 'buy' ? 'success' : d.action === 'sell' ? 'danger' : 'info'}>
-                {actionLabel(d.action)}
-              </Badge>
-              {d.code && <span className="font-mono text-cyan text-xs">{d.code}</span>}
-            </div>
-            <span className="text-xs text-muted">{formatDateTime(d.createdAt)}</span>
-          </div>
-          <p className="mt-2 text-xs text-secondary">{d.reason || '未提供理由'}</p>
-          <div className="mt-2 flex items-center gap-3 text-xs text-muted">
-            <span>置信度：{(d.confidence * 100).toFixed(0)}%</span>
-            {d.usedFallback && <Badge variant="warning">降级</Badge>}
-          </div>
+      {error && (
+        <div className="rounded-lg bg-red-500/10 border border-red-500/20 p-2 text-xs text-red-400">
+          {error}
         </div>
-      ))}
+      )}
+      {decisions.map((d) => {
+        const isPending = d.status === 'pending';
+        const isExecuting = executingId === d.id;
+        const isIgnoring = ignoringId === d.id;
+        return (
+          <div key={d.id} className="p-3 rounded-xl bg-elevated border border-white/5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Badge variant={d.action === 'buy' ? 'success' : d.action === 'sell' ? 'danger' : 'info'}>
+                  {sideBadge(d.action, t)}
+                </Badge>
+                {d.code && <span className="font-mono text-cyan text-xs">{d.code}</span>}
+                <Badge
+                  variant={
+                    d.status === 'executed'
+                      ? 'success'
+                      : d.status === 'skipped' || d.status === 'rejected'
+                        ? 'default'
+                        : 'warning'
+                  }
+                >
+                  {d.status === 'pending'
+                    ? t('paperTrading.decisions.status.pending')
+                    : d.status === 'executed'
+                      ? t('paperTrading.decisions.status.executed')
+                      : d.status === 'skipped'
+                        ? t('paperTrading.decisions.status.skipped')
+                        : d.status === 'rejected'
+                          ? t('paperTrading.decisions.status.rejected')
+                          : d.status}
+                </Badge>
+                {d.usedFallback && <Badge variant="warning">{t('paperTrading.battlePlans.fallback')}</Badge>}
+              </div>
+              <span className="text-xs text-muted">{formatDateTime(d.createdAt)}</span>
+            </div>
+            <p className="mt-2 text-xs text-secondary">{d.reason || t('paperTrading.decisions.noReason')}</p>
+            <div className="mt-2 flex items-center justify-between">
+              <div className="flex items-center gap-3 text-xs text-muted">
+                <span>{t('paperTrading.decisions.confidence')}: {(d.confidence * 100).toFixed(0)}%</span>
+                {Boolean(d.params?.quantity) && (
+                  <span>{t('paperTrading.decisions.quantity')}: {String(d.params!.quantity)}</span>
+                )}
+                {Boolean(d.params?.limitPrice) && (
+                  <span>{t('paperTrading.decisions.limitPrice')}: {String(d.params!.limitPrice)}</span>
+                )}
+                {d.signalId && (
+                  <span className="text-cyan">{formatUiText(t('paperTrading.decisions.signal'), { id: d.signalId })}</span>
+                )}
+              </div>
+              {isPending && (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleExecute(d.id)}
+                    disabled={isExecuting || isIgnoring}
+                    className="btn-primary text-xs py-1 px-2 disabled:opacity-50"
+                  >
+                    {isExecuting ? t('paperTrading.decisions.executing') : t('paperTrading.decisions.execute')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleIgnore(d.id)}
+                    disabled={isExecuting || isIgnoring}
+                    className="btn-secondary text-xs py-1 px-2 disabled:opacity-50"
+                  >
+                    {isIgnoring ? t('paperTrading.decisions.ignoring') : t('paperTrading.decisions.ignore')}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 };
 
 const ReflectionsList: React.FC<{ reflections: ReflectionNoteItem[] }> = ({ reflections }) => {
+  const { t } = useUiLanguage();
   if (reflections.length === 0) {
-    return <EmptyState message="暂无复盘笔记" />;
+    return <EmptyState message={t('paperTrading.reflections.empty')} />;
   }
   return (
     <div className="space-y-3">
       {reflections.map((r) => (
         <div key={r.id} className="p-3 rounded-xl bg-elevated border border-white/5">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-white">{r.subject || '复盘'}</span>
+            <span className="text-xs font-medium text-white">{r.subject || t('paperTrading.reflections.noSubject')}</span>
             <Badge variant={r.mood === 'good' ? 'success' : r.mood === 'bad' ? 'danger' : 'default'}>
-              {moodLabel(r.mood)}
+              {t(`paperTrading.reflections.mood.${r.mood}` as import('../i18n/uiText').UiTextKey) || r.mood}
             </Badge>
           </div>
           <p className="mt-1 text-xs text-secondary">{r.summary}</p>
           {r.takeaway && (
-            <p className="mt-2 text-xs text-cyan">心得：{r.takeaway}</p>
+            <p className="mt-2 text-xs text-cyan">{t('paperTrading.reflections.takeaway')}: {r.takeaway}</p>
           )}
           {r.lessons.length > 0 && (
             <ul className="mt-2 space-y-1">
@@ -1408,7 +1474,7 @@ const ReflectionsList: React.FC<{ reflections: ReflectionNoteItem[] }> = ({ refl
             </ul>
           )}
           <div className="mt-2 text-xs text-muted">
-            {r.code && <span className="mr-2">代码：{r.code}</span>}
+            {r.code && <span className="mr-2">{formatUiText(t('paperTrading.reflections.code'), { code: r.code })}</span>}
             <span>{formatDateTime(r.createdAt)}</span>
           </div>
         </div>
@@ -1418,12 +1484,13 @@ const ReflectionsList: React.FC<{ reflections: ReflectionNoteItem[] }> = ({ refl
 };
 
 const BattlePlansList: React.FC<{ plans: BattlePlanItem[] }> = ({ plans }) => {
+  const { t } = useUiLanguage();
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [markdown, setMarkdown] = useState<string | null>(null);
   const [loadingMd, setLoadingMd] = useState(false);
 
   if (plans.length === 0) {
-    return <EmptyState message="暂无作战卡" />;
+    return <EmptyState message={t('paperTrading.battlePlans.empty')} />;
   }
 
   const toggleMarkdown = async (planId: number) => {
@@ -1439,7 +1506,7 @@ const BattlePlansList: React.FC<{ plans: BattlePlanItem[] }> = ({ plans }) => {
       const res = await paperTradingApi.getBattlePlanMarkdown(planId);
       setMarkdown(res.markdown);
     } catch {
-      setMarkdown('Markdown 加载失败');
+      setMarkdown(t('paperTrading.battlePlans.loadingMd'));
     } finally {
       setLoadingMd(false);
     }
@@ -1450,7 +1517,7 @@ const BattlePlansList: React.FC<{ plans: BattlePlanItem[] }> = ({ plans }) => {
       {plans.map((p) => (
         <div key={p.planId} className="p-3 rounded-xl bg-elevated border border-white/5">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-white">作战卡 {p.date}</span>
+            <span className="text-xs font-medium text-white">{formatUiText(t('paperTrading.battlePlans.title'), { date: p.date })}</span>
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -1458,33 +1525,33 @@ const BattlePlansList: React.FC<{ plans: BattlePlanItem[] }> = ({ plans }) => {
                 className="text-xs text-cyan hover:text-cyan/80"
                 data-testid={`battle-plan-md-${p.planId}`}
               >
-                {expandedId === p.planId ? '隐藏原文' : '查看原文'}
+                {expandedId === p.planId ? t('paperTrading.battlePlans.hideMd') : t('paperTrading.battlePlans.viewMd')}
               </button>
               <Badge variant={p.usedFallback ? 'warning' : 'success'}>
-                {p.usedFallback ? '降级' : 'AI'}
+                {p.usedFallback ? t('paperTrading.battlePlans.fallback') : t('paperTrading.battlePlans.ai')}
               </Badge>
             </div>
           </div>
-          <p className="mt-1 text-xs text-secondary">{p.marketReview || '无市场回顾'}</p>
+          <p className="mt-1 text-xs text-secondary">{p.marketReview || t('paperTrading.battlePlans.noReview')}</p>
           {p.mainTheme && (
-            <p className="mt-1 text-xs text-cyan">主题：{p.mainTheme}</p>
+            <p className="mt-1 text-xs text-cyan">{formatUiText(t('paperTrading.battlePlans.theme'), { theme: p.mainTheme })}</p>
           )}
           <div className="mt-2 grid grid-cols-2 gap-2">
             <div>
-              <span className="text-xxs text-muted uppercase">持仓计划</span>
+              <span className="text-xxs text-muted uppercase">{t('paperTrading.battlePlans.holdings')}</span>
               <p className="text-xs text-secondary">{p.holdingsPlans.map(h => h.code).join(', ') || '--'}</p>
             </div>
             <div>
-              <span className="text-xxs text-muted uppercase">候选标的</span>
+              <span className="text-xxs text-muted uppercase">{t('paperTrading.battlePlans.candidates')}</span>
               <p className="text-xs text-secondary">{p.candidates.map(c => c.code).join(', ') || '--'}</p>
             </div>
           </div>
           {expandedId === p.planId && (
             <div className="mt-3 pt-3 border-t border-white/5" data-testid={`battle-plan-md-content-${p.planId}`}>
               {loadingMd ? (
-                <p className="text-xs text-muted">Markdown 加载中...</p>
+                <p className="text-xs text-muted">{t('paperTrading.battlePlans.loadingMd')}</p>
               ) : (
-                <pre className="text-xs text-secondary whitespace-pre-wrap font-mono max-h-96 overflow-y-auto">{markdown || '暂无 Markdown'}</pre>
+                <pre className="text-xs text-secondary whitespace-pre-wrap font-mono max-h-96 overflow-y-auto">{markdown || t('paperTrading.battlePlans.noMd')}</pre>
               )}
             </div>
           )}
@@ -1505,9 +1572,317 @@ const EmptyState: React.FC<{ message: string }> = ({ message }) => (
   </div>
 );
 
+// ============ Account Manager ============
+
+type AccountManagerProps = {
+  accounts: AccountListItem[];
+  currentAccountId: number;
+  onSwitch: (accountId: number) => void;
+  onRefresh: () => void;
+};
+
+const AccountManager: React.FC<AccountManagerProps> = ({
+  accounts,
+  currentAccountId,
+  onSwitch,
+  onRefresh,
+}) => {
+  const { t } = useUiLanguage();
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editCapital, setEditCapital] = useState('');
+  const [createName, setCreateName] = useState('');
+  const [createCapital, setCreateCapital] = useState('1000');
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+
+  const currentAccount = accounts.find((a) => a.accountId === currentAccountId);
+
+  const handleCreate = async () => {
+    const name = createName.trim() || `paper-${Date.now()}`;
+    const capital = parseFloat(createCapital);
+    if (Number.isNaN(capital) || capital <= 0) {
+      setError(t('paperTrading.accountManager.createError.invalidCapital'));
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const snap = await paperTradingApi.createAccount({
+        name,
+        initialCapital: capital,
+        resetIfExists: false,
+      });
+      setCreateName('');
+      setCreateCapital('1000');
+      onSwitch(snap.accountId);
+      onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('paperTrading.accountManager.createError.failed'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleUpdate = async (accountId: number) => {
+    const params: AccountUpdateRequest = {};
+    const name = editName.trim();
+    if (name) params.name = name;
+    const capital = parseFloat(editCapital);
+    if (!Number.isNaN(capital) && capital > 0) {
+      params.initialCapital = capital;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      await paperTradingApi.updateAccount(accountId, params);
+      setEditingId(null);
+      onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('paperTrading.accountManager.updateError.failed'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleReset = async (accountId: number) => {
+    if (!window.confirm(t('paperTrading.accountManager.resetConfirm'))) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const account = accounts.find((a) => a.accountId === accountId);
+      await paperTradingApi.createAccount({
+        name: account?.name ?? 'default',
+        initialCapital: account?.initialCapital ?? 1000,
+        resetIfExists: true,
+      });
+      onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('paperTrading.accountManager.resetError.failed'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDelete = async (accountId: number) => {
+    setLoading(true);
+    setError(null);
+    try {
+      await paperTradingApi.deleteAccount(accountId);
+      setConfirmDeleteId(null);
+      if (currentAccountId === accountId && accounts.length > 1) {
+        const next = accounts.find((a) => a.accountId !== accountId);
+        if (next) onSwitch(next.accountId);
+      }
+      onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('paperTrading.accountManager.deleteError.failed'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="btn-secondary text-xs py-2 px-3"
+        data-testid="account-manager-button"
+      >
+        {t('paperTrading.accountManager.button')}: {currentAccount?.name ?? `#${currentAccountId}`}
+      </button>
+
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-lg max-h-[80vh] overflow-y-auto rounded-2xl border border-white/10 bg-[#0b0f17] p-4 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-semibold text-white">{t('paperTrading.accountManager.title')}</h2>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="text-xs text-muted hover:text-white"
+              >
+                {t('paperTrading.accountManager.close')}
+              </button>
+            </div>
+
+            {error && <p className="mb-3 text-xs text-danger">{error}</p>}
+
+            <div className="mb-4 p-3 rounded-xl bg-elevated border border-white/5">
+              <h3 className="text-xs font-medium text-white mb-2">{t('paperTrading.accountManager.createTitle')}</h3>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="text"
+                  value={createName}
+                  onChange={(e) => setCreateName(e.target.value)}
+                  placeholder={t('paperTrading.accountManager.namePlaceholder')}
+                  className="input-terminal text-xs py-1.5 px-2 w-36"
+                />
+                <input
+                  type="number"
+                  value={createCapital}
+                  onChange={(e) => setCreateCapital(e.target.value)}
+                  placeholder={t('paperTrading.accountManager.capitalPlaceholder')}
+                  min={1}
+                  step={1}
+                  className="input-terminal text-xs py-1.5 px-2 w-28"
+                />
+                <button
+                  type="button"
+                  onClick={handleCreate}
+                  disabled={loading}
+                  className="btn-primary text-xs py-1.5 px-3"
+                >
+                  {t('paperTrading.accountManager.create')}
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="text-xs font-medium text-white">{t('paperTrading.accountManager.existingTitle')}</h3>
+              {accounts.length === 0 && <EmptyState message={t('paperTrading.accountManager.empty')} />}
+              {accounts.map((a) => (
+                <div
+                  key={a.accountId}
+                  className={`p-3 rounded-xl border ${
+                    a.accountId === currentAccountId
+                      ? 'border-cyan/30 bg-cyan/5'
+                      : 'border-white/5 bg-elevated'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-cyan text-xs">#{a.accountId}</span>
+                      {editingId === a.accountId ? (
+                        <input
+                          type="text"
+                          value={editName}
+                          onChange={(e) => setEditName(e.target.value)}
+                          className="input-terminal text-xs py-1 px-2 w-32"
+                        />
+                      ) : (
+                        <span className="text-sm font-medium text-white">{a.name}</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1">
+                      {a.accountId === currentAccountId ? (
+                        <Badge variant="info">{t('paperTrading.accountManager.current')}</Badge>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onSwitch(a.accountId);
+                            setOpen(false);
+                          }}
+                          className="text-xs text-cyan hover:text-cyan/80 px-2 py-1"
+                        >
+                          {t('paperTrading.accountManager.switch')}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-muted">
+                    <div>{t('paperTrading.accountManager.initialCapital')}: {formatNumber(a.initialCapital)}</div>
+                    <div>{t('paperTrading.accountManager.cash')}: {formatNumber(a.cash)}</div>
+                    <div>{t('paperTrading.accountManager.netValue')}: {formatNumber(a.netValue)}</div>
+                  </div>
+
+                  <div className="mt-2 flex items-center gap-2">
+                    {editingId === a.accountId ? (
+                      <>
+                        <input
+                          type="number"
+                          value={editCapital}
+                          onChange={(e) => setEditCapital(e.target.value)}
+                          placeholder={t('paperTrading.accountManager.capitalPlaceholder')}
+                          className="input-terminal text-xs py-1 px-2 w-28"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleUpdate(a.accountId)}
+                          disabled={loading}
+                          className="text-xs text-cyan hover:text-cyan/80"
+                        >
+                          {t('paperTrading.accountManager.save')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingId(null)}
+                          className="text-xs text-muted hover:text-white"
+                        >
+                          {t('common.cancel')}
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingId(a.accountId);
+                            setEditName(a.name);
+                            setEditCapital(String(a.initialCapital));
+                          }}
+                          className="text-xs text-muted hover:text-white"
+                        >
+                          {t('paperTrading.accountManager.edit')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleReset(a.accountId)}
+                          disabled={loading}
+                          className="text-xs text-muted hover:text-white"
+                        >
+                          {t('paperTrading.accountManager.reset')}
+                        </button>
+                        {confirmDeleteId === a.accountId ? (
+                          <>
+                            <span className="text-xs text-danger">{t('paperTrading.accountManager.deleteConfirm')}</span>
+                            <button
+                              type="button"
+                              onClick={() => handleDelete(a.accountId)}
+                              disabled={loading}
+                              className="text-xs text-danger hover:text-red-300"
+                            >
+                              {t('paperTrading.accountManager.yes')}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteId(null)}
+                              className="text-xs text-muted hover:text-white"
+                            >
+                              {t('paperTrading.accountManager.no')}
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteId(a.accountId)}
+                            className="text-xs text-danger hover:text-red-300"
+                          >
+                            {t('paperTrading.accountManager.delete')}
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+};
+
 // ============ Daily Report Tab (P2-A) ============
 
 const DailyReportTab: React.FC<{ accountId: number }> = ({ accountId }) => {
+  const { t } = useUiLanguage();
   const [report, setReport] = useState<DailyReportResponse | null>(null);
   const [reportDate, setReportDate] = useState(new Date().toISOString().slice(0, 10));
   const [loading, setLoading] = useState(false);
@@ -1520,7 +1895,7 @@ const DailyReportTab: React.FC<{ accountId: number }> = ({ accountId }) => {
       const res = await paperTradingApi.generateDailyReport(accountId, true);
       setReport(res);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '生成日报失败');
+      setError(err instanceof Error ? err.message : t('paperTrading.dailyReport.generateError'));
     } finally {
       setLoading(false);
     }
@@ -1536,7 +1911,7 @@ const DailyReportTab: React.FC<{ accountId: number }> = ({ accountId }) => {
         setError(res.error);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : '加载日报失败');
+      setError(err instanceof Error ? err.message : t('paperTrading.dailyReport.loadError'));
     } finally {
       setLoading(false);
     }
@@ -1559,7 +1934,7 @@ const DailyReportTab: React.FC<{ accountId: number }> = ({ accountId }) => {
           className="btn-secondary text-xs py-1.5 px-3"
           data-testid="daily-report-fetch-button"
         >
-          {loading ? '加载中...' : '加载日报'}
+          {loading ? t('paperTrading.dailyReport.loading') : t('paperTrading.dailyReport.load')}
         </button>
         <button
           type="button"
@@ -1568,7 +1943,7 @@ const DailyReportTab: React.FC<{ accountId: number }> = ({ accountId }) => {
           className="btn-primary text-xs py-1.5 px-3"
           data-testid="daily-report-generate-button"
         >
-          {loading ? '生成中...' : '生成今日日报'}
+          {loading ? t('paperTrading.dailyReport.generating') : t('paperTrading.dailyReport.generate')}
         </button>
       </div>
 
@@ -1579,11 +1954,11 @@ const DailyReportTab: React.FC<{ accountId: number }> = ({ accountId }) => {
       {report && (
         <div className="p-3 rounded-xl bg-elevated border border-white/5" data-testid="daily-report-content">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-white">日报 - {report.date}</span>
+            <span className="text-xs font-medium text-white">{formatUiText(t('paperTrading.dailyReport.title'), { date: report.date })}</span>
             <div className="flex items-center gap-2">
-              {report.usedFallback && <Badge variant="warning">降级</Badge>}
+              {report.usedFallback && <Badge variant="warning">{t('paperTrading.dailyReport.fallback')}</Badge>}
               {report.reportPath && (
-                <Badge variant="info">已保存</Badge>
+                <Badge variant="info">{t('paperTrading.dailyReport.saved')}</Badge>
               )}
             </div>
           </div>
@@ -1592,13 +1967,13 @@ const DailyReportTab: React.FC<{ accountId: number }> = ({ accountId }) => {
               {report.markdown}
             </pre>
           ) : (
-            <p className="text-xs text-muted">暂无 Markdown 内容</p>
+            <p className="text-xs text-muted">{t('paperTrading.dailyReport.noMarkdown')}</p>
           )}
         </div>
       )}
 
       {!report && !error && !loading && (
-        <EmptyState message="尚未加载日报，请生成或加载。" />
+        <EmptyState message={t('paperTrading.dailyReport.empty')} />
       )}
     </div>
   );
@@ -1607,8 +1982,9 @@ const DailyReportTab: React.FC<{ accountId: number }> = ({ accountId }) => {
 // ============ Main Page ============
 
 const PaperTradingPage: React.FC = () => {
+  const { t } = useUiLanguage();
   const [accountId, setAccountId] = useState<number>(1);
-  const [accountInput, setAccountInput] = useState('1');
+  const [accounts, setAccounts] = useState<AccountListItem[]>([]);
   const [snapshot, setSnapshot] = useState<AccountSnapshotResponse | null>(null);
   const [netValue, setNetValue] = useState<NetValuePoint[]>([]);
   const [positions, setPositions] = useState<PositionItem[]>([]);
@@ -1630,17 +2006,8 @@ const PaperTradingPage: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const [
-        snap,
-        nv,
-        pos,
-        ord,
-        trd,
-        sig,
-        dec,
-        ref,
-        plans,
-      ] = await Promise.all([
+      const [accountsRes, snap, nv, pos, ord, trd, sig, dec, ref, plans] = await Promise.all([
+        paperTradingApi.getAccounts(),
         paperTradingApi.getAccountSnapshot(accountId),
         paperTradingApi.getNetValueCurve(accountId, 90),
         paperTradingApi.listPositions(accountId),
@@ -1651,6 +2018,7 @@ const PaperTradingPage: React.FC = () => {
         paperTradingApi.listReflections(accountId, { limit: 50 }),
         paperTradingApi.listBattlePlans(accountId, 10),
       ]);
+      setAccounts(accountsRes.accounts || []);
       setSnapshot(snap);
       setNetValue(nv.points || []);
       setPositions(pos.positions || []);
@@ -1661,35 +2029,19 @@ const PaperTradingPage: React.FC = () => {
       setReflections(ref.items || []);
       setBattlePlans(plans);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '加载纸面交易数据失败');
+      setError(err instanceof Error ? err.message : t('paperTrading.actions.loadError'));
     } finally {
       setLoading(false);
     }
-  }, [accountId]);
+  }, [accountId, t]);
 
   useEffect(() => {
     loadAll();
   }, [loadAll]);
 
-  const handleAccountSwitch = () => {
-    const id = parseInt(accountInput, 10);
-    if (!Number.isNaN(id) && id > 0) {
+  const handleSwitchAccount = (id: number) => {
+    if (id > 0) {
       setAccountId(id);
-    }
-  };
-
-  const handleCreateAccount = async () => {
-    try {
-      const snap = await paperTradingApi.createAccount({
-        name: 'default',
-        initialCapital: 1000,
-        resetIfExists: true,
-      });
-      setAccountId(snap.accountId);
-      setAccountInput(String(snap.accountId));
-      loadAll();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '创建账户失败');
     }
   };
 
@@ -1699,7 +2051,7 @@ const PaperTradingPage: React.FC = () => {
       await paperTradingApi.triggerPMDecision({ accountId });
       await loadAll();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'PM 决策失败');
+      setError(err instanceof Error ? err.message : t('paperTrading.actions.pmError'));
     } finally {
       setTriggeringPm(false);
     }
@@ -1711,7 +2063,7 @@ const PaperTradingPage: React.FC = () => {
       await paperTradingApi.generateBattlePlan({ accountId });
       await loadAll();
     } catch (err) {
-      setError(err instanceof Error ? err.message : '生成作战卡失败');
+      setError(err instanceof Error ? err.message : t('paperTrading.actions.planError'));
     } finally {
       setGeneratingPlan(false);
     }
@@ -1723,22 +2075,22 @@ const PaperTradingPage: React.FC = () => {
       await paperTradingApi.triggerDailyReflection({ accountId });
       await loadAll();
     } catch (err) {
-      setError(err instanceof Error ? err.message : '触发复盘失败');
+      setError(err instanceof Error ? err.message : t('paperTrading.actions.reflectionError'));
     } finally {
       setTriggeringReflection(false);
     }
   };
 
   const tabs: { key: TabKey; label: string; count?: number }[] = useMemo(() => [
-    { key: 'positions', label: '持仓', count: positions.length },
-    { key: 'orders', label: '订单', count: orders.length },
-    { key: 'trades', label: '成交', count: trades.length },
-    { key: 'signals', label: '信号', count: signals.length },
-    { key: 'decisions', label: 'PM 决策', count: decisions.length },
-    { key: 'reflections', label: '复盘', count: reflections.length },
-    { key: 'battle-plans', label: '作战卡', count: battlePlans.length },
-    { key: 'daily-report', label: '日报' },
-  ], [positions.length, orders.length, trades.length, signals.length, decisions.length, reflections.length, battlePlans.length]);
+    { key: 'positions', label: t('paperTrading.tabs.positions'), count: positions.length },
+    { key: 'orders', label: t('paperTrading.tabs.orders'), count: orders.length },
+    { key: 'trades', label: t('paperTrading.tabs.trades'), count: trades.length },
+    { key: 'signals', label: t('paperTrading.tabs.signals'), count: signals.length },
+    { key: 'decisions', label: t('paperTrading.tabs.decisions'), count: decisions.length },
+    { key: 'reflections', label: t('paperTrading.tabs.reflections'), count: reflections.length },
+    { key: 'battle-plans', label: t('paperTrading.tabs.battlePlans'), count: battlePlans.length },
+    { key: 'daily-report', label: t('paperTrading.tabs.dailyReport') },
+  ], [positions.length, orders.length, trades.length, signals.length, decisions.length, reflections.length, battlePlans.length, t]);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -1746,33 +2098,13 @@ const PaperTradingPage: React.FC = () => {
       <header className="flex-shrink-0 px-4 py-3 border-b border-white/5" data-testid="paper-trading-header">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <h1 className="text-lg font-semibold text-white" data-testid="paper-trading-title">纸面交易</h1>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                value={accountInput}
-                onChange={(e) => setAccountInput(e.target.value)}
-                placeholder="账户 ID"
-                className="input-terminal w-24 text-xs py-2"
-                data-testid="account-id-input"
-              />
-              <button
-                type="button"
-                onClick={handleAccountSwitch}
-                className="btn-secondary text-xs py-2 px-3"
-                data-testid="account-switch-button"
-              >
-                切换
-              </button>
-              <button
-                type="button"
-                onClick={handleCreateAccount}
-                className="btn-secondary text-xs py-2 px-3"
-                data-testid="account-reset-button"
-              >
-                重置默认
-              </button>
-            </div>
+            <h1 className="text-lg font-semibold text-white" data-testid="paper-trading-title">{t('paperTrading.title')}</h1>
+            <AccountManager
+              accounts={accounts}
+              currentAccountId={accountId}
+              onSwitch={handleSwitchAccount}
+              onRefresh={loadAll}
+            />
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -1782,7 +2114,7 @@ const PaperTradingPage: React.FC = () => {
               className="btn-secondary text-xs py-2 px-3"
               data-testid="trigger-pm-button"
             >
-              {triggeringPm ? 'PM 思考中...' : '触发 PM'}
+              {triggeringPm ? t('paperTrading.actions.triggeringPm') : t('paperTrading.actions.triggerPm')}
             </button>
             <button
               type="button"
@@ -1791,7 +2123,7 @@ const PaperTradingPage: React.FC = () => {
               className="btn-secondary text-xs py-2 px-3"
               data-testid="trigger-reflection-button"
             >
-              {triggeringReflection ? '复盘中...' : '触发复盘'}
+              {triggeringReflection ? t('paperTrading.actions.reflecting') : t('paperTrading.actions.triggerReflection')}
             </button>
             <button
               type="button"
@@ -1800,7 +2132,7 @@ const PaperTradingPage: React.FC = () => {
               className="btn-secondary text-xs py-2 px-3"
               data-testid="generate-plan-button"
             >
-              {generatingPlan ? '生成中...' : '生成作战卡'}
+              {generatingPlan ? t('paperTrading.actions.generatingPlan') : t('paperTrading.actions.generatePlan')}
             </button>
             <button
               type="button"
@@ -1809,7 +2141,7 @@ const PaperTradingPage: React.FC = () => {
               className="btn-primary text-xs py-2 px-3"
               data-testid="refresh-button"
             >
-              {loading ? '加载中...' : '刷新'}
+              {loading ? t('paperTrading.actions.loading') : t('paperTrading.actions.refresh')}
             </button>
           </div>
         </div>
@@ -1824,36 +2156,38 @@ const PaperTradingPage: React.FC = () => {
         <div className="flex flex-col gap-3 w-80 flex-shrink-0 overflow-y-auto">
           {/* Account summary */}
           <Card variant="gradient" padding="md">
-            <span className="label-uppercase">账户 #{accountId}</span>
+            <span className="label-uppercase">
+              {formatUiText(t('paperTrading.accountSummary'), { accountId, name: snapshot?.name ? `· ${snapshot.name}` : '' })}
+            </span>
             {snapshot ? (
               <div className="mt-3 grid grid-cols-2 gap-3">
                 <div>
-                  <p className="text-xxs text-muted uppercase">净值</p>
+                  <p className="text-xxs text-muted uppercase">{t('paperTrading.netValue')}</p>
                   <p className="text-lg font-mono font-semibold text-white">{formatNumber(snapshot.netValue)}</p>
                 </div>
                 <div>
-                  <p className="text-xxs text-muted uppercase">收益</p>
+                  <p className="text-xxs text-muted uppercase">{t('paperTrading.returnPct')}</p>
                   <p className={`text-lg font-mono font-semibold ${snapshot.returnPct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                     {formatPct(snapshot.returnPct)}
                   </p>
                 </div>
                 <div>
-                  <p className="text-xxs text-muted uppercase">现金</p>
+                  <p className="text-xxs text-muted uppercase">{t('paperTrading.cash')}</p>
                   <p className="text-sm font-mono text-secondary">{formatNumber(snapshot.cash)}</p>
                 </div>
                 <div>
-                  <p className="text-xxs text-muted uppercase">持仓</p>
+                  <p className="text-xxs text-muted uppercase">{t('paperTrading.positionCount')}</p>
                   <p className="text-sm font-mono text-secondary">{snapshot.positionCount}</p>
                 </div>
               </div>
             ) : (
-              <p className="mt-3 text-xs text-muted">账户加载中...</p>
+              <p className="mt-3 text-xs text-muted">{t('paperTrading.loadingAccount')}</p>
             )}
           </Card>
 
           {/* Net value curve */}
           <Card variant="gradient" padding="md">
-            <span className="label-uppercase">净值曲线</span>
+            <span className="label-uppercase">{t('paperTrading.netValueCurve')}</span>
             <div className="mt-3">
               <NetValueSparkline data={netValue} />
             </div>
@@ -1910,7 +2244,7 @@ const PaperTradingPage: React.FC = () => {
             )}
             {activeTab === 'trades' && <TradesTable trades={trades} />}
             {activeTab === 'signals' && <SignalsTable signals={signals} onRefresh={loadAll} />}
-            {activeTab === 'decisions' && <DecisionsList decisions={decisions} />}
+            {activeTab === 'decisions' && <DecisionsList decisions={decisions} accountId={accountId} onRefresh={loadAll} />}
             {activeTab === 'reflections' && <ReflectionsList reflections={reflections} />}
             {activeTab === 'battle-plans' && <BattlePlansList plans={battlePlans} />}
             {activeTab === 'daily-report' && <DailyReportTab accountId={accountId} />}

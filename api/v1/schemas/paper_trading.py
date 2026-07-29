@@ -51,6 +51,15 @@ class AccountCreateRequest(BaseModel):
     )
 
 
+class AccountUpdateRequest(BaseModel):
+    """Update paper trading account metadata."""
+
+    name: Optional[str] = Field(None, description="New account name (unique)")
+    initial_capital: Optional[float] = Field(
+        None, gt=0, description="Initial capital for return calculation"
+    )
+
+
 class AccountListItem(BaseModel):
     """Minimal paper trading account item for list views."""
 
@@ -409,6 +418,9 @@ class PMDecisionItem(BaseModel):
     elapsed_seconds: float = 0.0
     used_fallback: bool = False
     error: Optional[str] = None
+    status: str = Field("pending", description="pending / executed / rejected / skipped")
+    signal_id: Optional[int] = None
+    order_id: Optional[int] = None
     created_at: str
 
 
@@ -423,6 +435,28 @@ class PMDecisionTriggerRequest(BaseModel):
 
     account_id: int
     extra_context: Optional[Dict[str, Any]] = None
+
+
+class PMDecisionExecuteResponse(BaseModel):
+    """Result of executing a pending PM decision."""
+
+    decision_id: int
+    account_id: int
+    signal_id: int
+    order_id: Optional[int] = None
+    side: str
+    code: str
+    status: str = Field(..., description="executed | rejected | pending")
+    fill_price: Optional[float] = None
+    fill_quantity: Optional[float] = None
+    fee: Optional[float] = None
+    reason: str = ""
+
+
+class PMDecisionIgnoreRequest(BaseModel):
+    """Ignore / skip a pending PM decision."""
+
+    reason: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------

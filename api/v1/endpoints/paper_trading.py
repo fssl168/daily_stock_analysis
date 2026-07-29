@@ -37,6 +37,7 @@ from api.v1.schemas.paper_trading import (
     AccountListItem,
     AccountListResponse,
     AccountSnapshotResponse,
+    AccountUpdateRequest,
     BatchOrderCreateRequest,
     BatchOrderResponse,
     BattlePlanGenerateRequest,
@@ -59,6 +60,8 @@ from api.v1.schemas.paper_trading import (
     OrderListFilterParams,
     OrderListResponse,
     OrderModifyRequest,
+    PMDecisionExecuteResponse,
+    PMDecisionIgnoreRequest,
     PMDecisionItem,
     PMDecisionListResponse,
     PMDecisionTriggerRequest,
@@ -492,6 +495,9 @@ def _row_to_decision_dict(row: PaperDecision) -> Dict[str, Any]:
         "elapsed_seconds": 0.0,  # not stored on the row
         "used_fallback": bool(row.status == "skipped" and row.action == "hold"),
         "error": row.reject_reason,
+        "status": row.status or "pending",
+        "signal_id": row.signal_id,
+        "order_id": row.order_id,
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 
@@ -684,6 +690,73 @@ def create_account(
     except Exception as exc:
         logger.error("[paper_trading] create_account failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"create_account failed: {exc}")
+
+
+@router.put(
+    "/accounts/{account_id}",
+    response_model=AccountSnapshotResponse,
+    responses={
+        400: {"description": "Invalid request", "model": ErrorResponse},
+        404: {"description": "Account not found", "model": ErrorResponse},
+        409: {"description": "Name conflict", "model": ErrorResponse},
+        500: {"description": "Server error", "model": ErrorResponse},
+    },
+    summary="Update paper trading account metadata",
+)
+def update_account(
+    account_id: int,
+    request: AccountUpdateRequest,
+    service: PaperTradingService = Depends(get_paper_trading_service),
+) -> AccountSnapshotResponse:
+    try:
+        mgr = service.account_mgr()
+        account = mgr.update_account(
+            account_id,
+            name=request.name,
+            initial_capital=request.initial_capital,
+        )
+        snap = mgr.snapshot(account_id)
+        positions = service.position_mgr().list_positions(account_id)
+        return AccountSnapshotResponse(
+            account_id=snap.id,
+            name=snap.name,
+            initial_capital=snap.initial_capital,
+            cash=snap.cash,
+            frozen_cash=snap.frozen_cash,
+            total_market_value=snap.market_value,
+            net_value=snap.total_assets,
+            return_pct=snap.pnl_pct,
+            position_count=len(positions),
+            status=snap.status,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error("[paper_trading] update_account failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"update_account failed: {exc}")
+
+
+@router.delete(
+    "/accounts/{account_id}",
+    status_code=204,
+    responses={
+        400: {"description": "Invalid request", "model": ErrorResponse},
+        404: {"description": "Account not found", "model": ErrorResponse},
+        500: {"description": "Server error", "model": ErrorResponse},
+    },
+    summary="Delete a paper trading account and all its data",
+)
+def delete_account(
+    account_id: int,
+    service: PaperTradingService = Depends(get_paper_trading_service),
+) -> None:
+    try:
+        service.account_mgr().delete_account(account_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error("[paper_trading] delete_account failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"delete_account failed: {exc}")
 
 
 @router.get(
@@ -1646,6 +1719,71 @@ def list_pm_decisions(
     except Exception as exc:
         logger.error("[paper_trading] list_pm_decisions failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post(
+    "/accounts/{account_id}/pm-decisions/{decision_id}/execute",
+    response_model=PMDecisionExecuteResponse,
+    responses={
+        400: {"description": "Invalid request", "model": ErrorResponse},
+        404: {"description": "Decision not found", "model": ErrorResponse},
+        409: {"description": "Decision not executable", "model": ErrorResponse},
+        500: {"description": "Server error", "model": ErrorResponse},
+    },
+    summary="Execute a pending PM decision",
+)
+def execute_pm_decision(
+    account_id: int,
+    decision_id: int,
+    service: PaperTradingService = Depends(get_paper_trading_service),
+) -> PMDecisionExecuteResponse:
+    try:
+        agent = service.pm_agent()
+        result = agent.execute_decision(decision_id, account_id=account_id)
+        return PMDecisionExecuteResponse(
+            decision_id=decision_id,
+            account_id=account_id,
+            signal_id=int(result.get("signal_id") or 0),
+            order_id=result.get("order_id"),
+            side=str(result.get("side") or ""),
+            code=str(result.get("code") or ""),
+            status=str(result.get("status") or ""),
+            fill_price=result.get("fill_price"),
+            fill_quantity=result.get("fill_quantity"),
+            fee=result.get("fee"),
+            reason=str(result.get("reason") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error("[paper_trading] execute_pm_decision failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"execute_pm_decision failed: {exc}")
+
+
+@router.post(
+    "/accounts/{account_id}/pm-decisions/{decision_id}/ignore",
+    status_code=204,
+    responses={
+        400: {"description": "Invalid request", "model": ErrorResponse},
+        404: {"description": "Decision not found", "model": ErrorResponse},
+        500: {"description": "Server error", "model": ErrorResponse},
+    },
+    summary="Ignore / skip a pending PM decision",
+)
+def ignore_pm_decision(
+    account_id: int,
+    decision_id: int,
+    request: PMDecisionIgnoreRequest,
+    service: PaperTradingService = Depends(get_paper_trading_service),
+) -> None:
+    try:
+        agent = service.pm_agent()
+        agent.ignore_decision(decision_id, account_id=account_id, reason=request.reason)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error("[paper_trading] ignore_pm_decision failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"ignore_pm_decision failed: {exc}")
 
 
 # ---------------------------------------------------------------------------

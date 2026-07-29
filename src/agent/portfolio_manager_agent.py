@@ -640,6 +640,170 @@ class PortfolioManagerAgent:
                 "[PortfolioManagerAgent] Failed to persist decision: %s", exc
             )
 
+    # ------------------------------------------------------------------
+    # Decision execution / ignore (manual human-in-the-loop)
+    # ------------------------------------------------------------------
+
+    def execute_decision(
+        self,
+        decision_id: int,
+        account_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Execute a pending PM decision by id.
+
+        Translates the stored decision into a Signal and submits it through
+        the TradingEngine. After execution the decision row is updated to
+        ``status='executed'`` with the resulting ``signal_id`` / ``order_id``.
+
+        Currently supports ``action`` = ``buy`` / ``sell``. Other actions
+        (cancel/modify/plan/hold) are rejected with a clear reason.
+        """
+        if self.trading_engine is None:
+            raise RuntimeError("trading_engine not configured")
+
+        db: DatabaseManager = getattr(self.trading_engine, "db", None) or get_db()
+        with db.session_scope() as session:
+            row = session.execute(
+                select(PaperDecision).where(PaperDecision.id == decision_id)
+            ).scalar_one_or_none()
+            if row is None:
+                raise ValueError(f"Decision id={decision_id} not found")
+
+            acct_id = int(account_id) if account_id else row.account_id
+            if row.account_id != acct_id:
+                raise ValueError(
+                    f"Decision id={decision_id} belongs to account_id={row.account_id}, "
+                    f"not {acct_id}"
+                )
+            if row.status != "pending":
+                raise ValueError(
+                    f"Decision id={decision_id} status={row.status}, cannot execute"
+                )
+            if row.action not in ("buy", "sell"):
+                raise ValueError(
+                    f"Decision action={row.action} is not executable (buy/sell only)"
+                )
+
+            params: Dict[str, Any] = {}
+            if row.params_json:
+                try:
+                    parsed = json.loads(row.params_json)
+                    if isinstance(parsed, dict):
+                        params = parsed
+                except (ValueError, TypeError):
+                    params = {}
+
+            # Resolve order type and price.
+            order_type_str = str(params.get("order_type") or "limit").strip().lower()
+            order_type = OrderType.LIMIT if order_type_str == "limit" else OrderType.MARKET
+            limit_price = params.get("limit_price")
+            entry_price = params.get("entry_price")
+            trigger_price = params.get("trigger_price")
+
+            if order_type == OrderType.LIMIT:
+                ref_price = float(limit_price or entry_price or trigger_price or 0.0)
+            else:
+                ref_price = float(trigger_price or entry_price or limit_price or 0.0)
+            if ref_price <= 0:
+                raise ValueError("Decision has no positive execution price")
+
+            quantity = float(params.get("quantity") or 0.0)
+            if quantity <= 0:
+                raise ValueError("Decision quantity must be positive")
+
+            from paper_trading.order import OrderSide, OrderType
+            from paper_trading.strategies.engine.rule_engine import Signal
+
+            signal = Signal(
+                side=OrderSide.BUY if row.action == "buy" else OrderSide.SELL,
+                code=row.code or "",
+                name=row.name,
+                strategy_name="pm_agent_manual_execute",
+                rule_name="pm_decision_execute",
+                trigger_price=ref_price,
+                suggested_quantity=quantity,
+                reason=row.reason or f"Manual execution of PM decision {decision_id}",
+            )
+
+            result = self.trading_engine.submit_signal(
+                account_id=acct_id,
+                signal=signal,
+                order_type=order_type,
+                limit_price=float(limit_price) if limit_price and order_type == OrderType.LIMIT else None,
+                quantity_override=quantity,
+            )
+
+            # Update SL/TP on resulting position for buys.
+            stop_loss = params.get("stop_loss")
+            take_profit = params.get("take_profit")
+            if (
+                result.status == "executed"
+                and row.action == "buy"
+                and (stop_loss or take_profit)
+                and row.code
+            ):
+                try:
+                    self.trading_engine.position_mgr.update_stop_loss_take_profit(
+                        account_id=acct_id,
+                        code=row.code,
+                        stop_loss=float(stop_loss) if stop_loss else None,
+                        take_profit=float(take_profit) if take_profit else None,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[PortfolioManagerAgent] SL/TP update failed after decision execution: %s",
+                        exc,
+                    )
+
+            row.status = "executed"
+            row.signal_id = result.signal_id
+            row.order_id = result.order_id
+
+            logger.info(
+                "[PortfolioManagerAgent] Executed decision id=%s action=%s code=%s "
+                "signal_id=%s order_id=%s status=%s",
+                decision_id, row.action, row.code,
+                result.signal_id, result.order_id, result.status,
+            )
+            return result.to_dict()
+
+    def ignore_decision(
+        self,
+        decision_id: int,
+        account_id: Optional[int] = None,
+        reason: Optional[str] = None,
+    ) -> None:
+        """Mark a pending PM decision as skipped (human ignored)."""
+        db: DatabaseManager = (
+            getattr(self.trading_engine, "db", None) or get_db()
+            if self.trading_engine is not None
+            else get_db()
+        )
+        with db.session_scope() as session:
+            row = session.execute(
+                select(PaperDecision).where(PaperDecision.id == decision_id)
+            ).scalar_one_or_none()
+            if row is None:
+                raise ValueError(f"Decision id={decision_id} not found")
+
+            acct_id = int(account_id) if account_id else row.account_id
+            if row.account_id != acct_id:
+                raise ValueError(
+                    f"Decision id={decision_id} belongs to account_id={row.account_id}, "
+                    f"not {acct_id}"
+                )
+            if row.status != "pending":
+                raise ValueError(
+                    f"Decision id={decision_id} status={row.status}, cannot ignore"
+                )
+
+            row.status = "skipped"
+            row.reject_reason = reason or "ignored by user"
+            logger.info(
+                "[PortfolioManagerAgent] Ignored decision id=%s action=%s code=%s",
+                decision_id, row.action, row.code,
+            )
+
 
 # ---------------------------------------------------------------------------
 # Paper-trading tool registration

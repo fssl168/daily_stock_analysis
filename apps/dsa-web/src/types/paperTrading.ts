@@ -24,6 +24,11 @@ export interface AccountCreateRequest {
   resetIfExists?: boolean;
 }
 
+export interface AccountUpdateRequest {
+  name?: string;
+  initialCapital?: number;
+}
+
 export interface AccountListItem {
   accountId: number;
   name: string;
@@ -323,6 +328,9 @@ export interface PMDecisionItem {
   elapsedSeconds: number;
   usedFallback: boolean;
   error?: string;
+  status: string;
+  signalId?: number;
+  orderId?: number;
   createdAt: string;
 }
 
@@ -335,6 +343,24 @@ export interface PMDecisionListResponse {
 export interface PMDecisionTriggerRequest {
   accountId: number;
   extraContext?: Record<string, unknown>;
+}
+
+export interface PMDecisionExecuteResponse {
+  decisionId: number;
+  accountId: number;
+  signalId: number;
+  orderId?: number;
+  side: string;
+  code: string;
+  status: string;
+  fillPrice?: number;
+  fillQuantity?: number;
+  fee?: number;
+  reason: string;
+}
+
+export interface PMDecisionIgnoreRequest {
+  reason?: string;
 }
 
 // ============ Performance / Risk metrics (Phase 2) ============

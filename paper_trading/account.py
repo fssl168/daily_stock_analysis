@@ -21,8 +21,14 @@ from sqlalchemy import and_, delete, desc, select
 from src.storage import (
     DatabaseManager,
     Account,
+    PaperBattlePlan,
+    PaperDecision,
     PaperNetValue,
+    PaperOrder,
     PaperPosition,
+    PaperReflection,
+    PaperSignal,
+    PaperTrade,
     get_db,
 )
 
@@ -194,6 +200,78 @@ class PaperAccountManager:
             )
 
             logger.info("Paper account reset: id=%s capital=%.2f", account_id, target_capital)
+
+    def update_account(
+        self,
+        account_id: int,
+        *,
+        name: Optional[str] = None,
+        initial_capital: Optional[float] = None,
+    ) -> Account:
+        """Update paper account metadata.
+
+        - ``name`` renames the account (must be unique).
+        - ``initial_capital`` only updates the stored initial capital;
+          it does NOT reset live cash/positions. Use ``reset_account``
+          to reinitialize live state.
+        """
+        with self.db.session_scope() as session:
+            account = session.execute(
+                select(Account).where(Account.id == account_id)
+            ).scalar_one_or_none()
+            if account is None:
+                raise ValueError(f"Paper account id={account_id} not found")
+
+            if name is not None and name != account.name:
+                existing = session.execute(
+                    select(Account).where(Account.name == name, Account.id != account_id)
+                ).scalar_one_or_none()
+                if existing is not None:
+                    raise ValueError(f"Account name '{name}' already exists")
+                account.name = name
+
+            if initial_capital is not None:
+                account.initial_capital = float(initial_capital)
+
+            session.flush()
+            account_id = account.id
+
+        return self._get_account_by_id(account_id)
+
+    def delete_account(self, account_id: int) -> None:
+        """Permanently delete a paper account and all its paper-trading data.
+
+        Only ``account_type == 'paper'`` accounts may be deleted to avoid
+        accidentally destroying linked portfolio records. Related paper
+        tables are cleaned up explicitly because the schema does not use
+        cascading deletes.
+        """
+        with self.db.session_scope() as session:
+            account = session.execute(
+                select(Account).where(Account.id == account_id)
+            ).scalar_one_or_none()
+            if account is None:
+                raise ValueError(f"Paper account id={account_id} not found")
+            if account.account_type != "paper":
+                raise ValueError(
+                    f"Account id={account_id} is not a paper account (type={account.account_type})"
+                )
+
+            # Delete paper-trading related rows in dependency order.
+            for model in (
+                PaperBattlePlan,
+                PaperReflection,
+                PaperDecision,
+                PaperSignal,
+                PaperTrade,
+                PaperOrder,
+                PaperNetValue,
+                PaperPosition,
+            ):
+                session.execute(delete(model).where(model.account_id == account_id))
+
+            session.delete(account)
+            logger.info("Paper account deleted: id=%s name=%s", account_id, account.name)
 
     # ------------------------------------------------------------------
     # Cash operations

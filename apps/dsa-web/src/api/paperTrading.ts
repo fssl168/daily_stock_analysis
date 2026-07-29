@@ -4,6 +4,7 @@ import type {
   AccountCreateRequest,
   AccountListResponse,
   AccountSnapshotResponse,
+  AccountUpdateRequest,
   BatchOrderCreateRequest,
   BatchOrderResponse,
   BattlePlanGenerateRequest,
@@ -24,6 +25,8 @@ import type {
   OrderListResponse,
   OrderModifyRequest,
   PerformanceMetricsResponse,
+  PMDecisionExecuteResponse,
+  PMDecisionIgnoreRequest,
   PMDecisionItem,
   PMDecisionListResponse,
   PMDecisionTriggerRequest,
@@ -60,6 +63,27 @@ export const paperTradingApi = {
       }
     );
     return toCamelCase<AccountSnapshotResponse>(response.data);
+  },
+
+  /**
+   * Update account metadata (name / initial capital).
+   */
+  updateAccount: async (accountId: number, params: AccountUpdateRequest): Promise<AccountSnapshotResponse> => {
+    const response = await apiClient.put<Record<string, unknown>>(
+      `/api/v1/paper-trading/accounts/${accountId}`,
+      {
+        name: params.name,
+        initial_capital: params.initialCapital,
+      }
+    );
+    return toCamelCase<AccountSnapshotResponse>(response.data);
+  },
+
+  /**
+   * Delete a paper trading account and all its data.
+   */
+  deleteAccount: async (accountId: number): Promise<void> => {
+    await apiClient.delete(`/api/v1/paper-trading/accounts/${accountId}`);
   },
 
   /**
@@ -405,6 +429,33 @@ export const paperTradingApi = {
       { params: { action: params.action, limit: params.limit ?? 50 } }
     );
     return toCamelCase<PMDecisionListResponse>(response.data);
+  },
+
+  /**
+   * Execute a pending PM decision (buy/sell).
+   */
+  executePMDecision: async (
+    accountId: number,
+    decisionId: number
+  ): Promise<PMDecisionExecuteResponse> => {
+    const response = await apiClient.post<Record<string, unknown>>(
+      `/api/v1/paper-trading/accounts/${accountId}/pm-decisions/${decisionId}/execute`
+    );
+    return toCamelCase<PMDecisionExecuteResponse>(response.data);
+  },
+
+  /**
+   * Ignore / skip a pending PM decision.
+   */
+  ignorePMDecision: async (
+    accountId: number,
+    decisionId: number,
+    params: PMDecisionIgnoreRequest = {}
+  ): Promise<void> => {
+    await apiClient.post(
+      `/api/v1/paper-trading/accounts/${accountId}/pm-decisions/${decisionId}/ignore`,
+      { reason: params.reason }
+    );
   },
 
   /**

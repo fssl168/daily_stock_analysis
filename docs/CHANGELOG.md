@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] 自选股与模拟交易自动交易联动：行情监听启动时默认使用系统自选股列表作为监控代码集，前端 `PaperTradingPage` 在监听卡片中展示自选股加载状态与代码数量。
 - [修复] 更新 `PaperAccountManager`、`portfolio_repo.py`、`portfolio_service.py` 及测试文件，使其全部基于统一的 `Account` 模型查询，按 `account_type` 过滤，避免读写旧表。
 - [测试] 更新 `paper-trading.spec.ts` 补全 `/api/v1/stocks/watchlist` mock 并修正响应格式，完整 e2e 套件 21/21 通过（另有 12 个需真实后端的 smoke 用例跳过）。
+- [新功能] 纸面账户前端 CRUD：支持创建、切换、重命名、重置、删除纸面账户；后端新增 `PUT /accounts/{id}` 和 `DELETE /accounts/{id}` 端点。
+- [新功能] PM 决策接入纸面交易管线：后端新增 `POST /accounts/{id}/pm-decisions/{id}/execute` 将 pending 决策转化为真实订单，`POST /accounts/{id}/pm-decisions/{id}/ignore` 标记为 skipped；前端决策列表增加状态标签、执行/忽略按钮及联动刷新。
 
 ## [3.26.0] - 未发布
 

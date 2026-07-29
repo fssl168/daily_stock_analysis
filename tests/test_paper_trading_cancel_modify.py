@@ -24,7 +24,7 @@ from paper_trading.order import (
 from paper_trading.position import PositionManager
 from paper_trading.risk import RiskChecker
 from paper_trading.trading_engine import TradingEngine
-from src.storage import DatabaseManager, PaperAccount
+from src.storage import Account, DatabaseManager
 
 
 def _build_engine(db: DatabaseManager) -> tuple[TradingEngine, int]:
@@ -33,7 +33,7 @@ def _build_engine(db: DatabaseManager) -> tuple[TradingEngine, int]:
     account_mgr.get_or_create_account(name="pytest_cm", initial_capital=1000.0)
     with db.session_scope() as session:
         acc = session.execute(
-            select(PaperAccount).where(PaperAccount.name == "pytest_cm")
+            select(Account).where(Account.name == "pytest_cm", Account.account_type == "paper")
         ).scalar_one()
         acc_id = acc.id
 

@@ -176,8 +176,11 @@
 |------|---------|---------|--------|
 | REST API | 提供纸牌交易全量接口 | `api/v1/endpoints/paper_trading.py` (1705行，28个端点) | ✅ 非常完备 |
 | Schema 契约 | 请求/响应严格类型化 | `api/v1/schemas/paper_trading.py` (511行，39个schema) | ✅ 完备 |
-| WebUI 前端 | HTML页面展示所有功能 | `web/templates/paper_trading.html` + `web/static/js/paper_trading.js` (1322行) | ✅ 功能列表完整（账户快照、持仓、订单、战斗计划、复盘、触发器等） |
+| WebUI 前端 (React) | React SPA 展示所有功能 | `apps/dsa-web/src/pages/PaperTradingPage.tsx` (1876行) + `api/paperTrading.ts` + `types/paperTrading.ts` | ✅ 功能完整（账户快照、净值曲线、持仓、订单含撤改、信号含撤改、成交、PM决策、复盘、作战卡、日报、绩效含回撤曲线、批量/条件单、监听器控制） |
+| WebUI 前端 (Legacy) | HTML页面展示所有功能 | `web/templates/paper_trading.html` + `web/static/js/paper_trading.js` (1322行) | ✅ 功能列表完整（账户快照、持仓、订单、战斗计划、复盘、触发器等） |
 | WebSocket/实时更新 | 市场监听器联动 | `paper_trading/market_listener.py` (958行) + JS 中的 `startListener/stopListener` | ✅ 一致 |
+| E2E 测试 | Playwright 自动化覆盖 | `apps/dsa-web/e2e/paper-trading.spec.ts` (19个用例) | ✅ 覆盖全部核心交互 |
+| 桌面端同步 | Electron 桌面客户端加载最新 WebUI | `apps/dsa-desktop/main.js` 通过 `loadURL` 加载后端托管的 React SPA | ✅ 已同步 | 桌面端无需代码改动；`build-all.ps1` 管线已包含 WebUI 构建→后端打包→Electron 打包完整链路；`main.js` / `preload.js` 测试 42/47 通过 |
 
 ---
 
@@ -196,7 +199,7 @@
 | P2-A | 文章生成 | content_generator.py, api/v1/endpoints/paper_trading.py | ✅ 完成 | 新增POST/GET daily-report端点；listener支持收盘后自动生成 |
 | P2-B | 多渠道推送 | notification_sender/ | ✅ 多平台支持 | 微信/Lark/DingTalk/Slack等 |
 | P3-A | Paper Trading API | api/v1/endpoints/paper_trading.py | ✅ 非常完备 | 28个端点，39个schema |
-| P3-B | WebUI完整界面 | web/templates/paper_trading.html, .js | ✅ 功能全面 | 所有核心模块均有UI入口 |
+| P3-B | WebUI完整界面 | apps/dsa-web/src/pages/PaperTradingPage.tsx, web/templates/paper_trading.html, apps/dsa-desktop | ✅ 功能全面 | React SPA + Legacy HTML 均有完整UI入口；19个E2E测试覆盖；桌面端通过后端 loadURL 自动同步最新 WebUI |
 | P3-C | 文本文档沉淀 | battle_plan.py, reflection.py, notification_integration.py | ✅ 完成 | battle_plan/reflection保存markdown；notifier推送前落盘 |
 
 ---
@@ -239,7 +242,7 @@
 
 ---
 
-*本对齐文档随项目演进持续更新。最后同步时间：2026-07-27*  
+*本对齐文档随项目演进持续更新。最后同步时间：2026-07-28*  
 *参考源文件：paper_trading_ai_pm_plan.md, battle_plan.py, reflection.py, agent_risk.py, sltp_calculator.py, portfolio_manager_agent.py, paper_trading_api*, *WebUI*
 "## P0-E 记忆策略优化文档"
 ""
@@ -405,7 +408,7 @@ The separate `on_agent_review_result()` function can be either:
 | P1-C | BattlePlanGenerator核心逻辑 | 无需行动 |
 | P2-B | 微信/Lark/DingTalk/Slack等 | 无需行动 |
 | P3-A | 28个端点，39个schema | 端点数已从 56 修正为 28 |
-| P3-B | 所有核心模块均有UI入口 | 无需行动 |
+| P3-B | React SPA + Legacy HTML 均有完整UI入口 | React WebUI 含日报/撤改/回撤曲线/触发器，19个E2E测试覆盖 |
 
 ---
 

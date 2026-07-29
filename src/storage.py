@@ -485,24 +485,72 @@ class BacktestSummary(Base):
     )
 
 
-class PortfolioAccount(Base):
-    """Portfolio account metadata."""
+class Account(Base):
+    """Unified account model combining portfolio and paper-trading account features.
 
-    __tablename__ = 'portfolio_accounts'
+    This single table replaces both legacy portfolio and paper-trading account tables, providing
+    a consistent view across trading, portfolio management, and paper trading systems.
+
+    Account hierarchy:
+    - A ``portfolio`` account is a primary account representing a real brokerage
+      account. It may have zero or more child ``paper`` accounts used for virtual
+      trading practice.
+    - A ``paper`` account is a secondary virtual account. ``parent_account_id``
+      points to the portfolio account it belongs to. A standalone paper account
+      (legacy / default) has ``parent_account_id=None``.
+    """
+
+    __tablename__ = 'accounts'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    owner_id = Column(String(64), index=True)
-    name = Column(String(64), nullable=False)
-    broker = Column(String(64))
-    market = Column(String(8), nullable=False, default='cn', index=True)  # cn/hk/us
-    base_currency = Column(String(8), nullable=False, default='CNY')
-    is_active = Column(Boolean, nullable=False, default=True, index=True)
+
+    # From PortfolioAccount
+    owner_id = Column(String(64), index=True)  # User/customer identifier
+    name = Column(String(64), nullable=False, unique=True)  # Account name
+    broker = Column(String(64))  # Brokerage firm name
+    market = Column(String(8), default='cn', index=True)  # Trading market: cn/hk/us
+    base_currency = Column(String(8), default='CNY')  # Base currency
+    is_active = Column(Boolean, nullable=False, default=True, index=True)  # Active status
+
+    # From PaperAccount (trading-specific fields)
+    cash = Column(Float, default=0.0)  # Available cash
+    frozen_cash = Column(Float, default=0.0)  # Cash reserved for pending orders
+    status = Column(String(16), default='active')  # Trading status: active/paused/stopped
+
+    # Additional trading-specific fields
+    initial_capital = Column(Float, default=1000.0)  # Starting capital
+    config_json = Column(Text)  # JSON config for slippage, commission, etc.
+
+    # Unified account hierarchy
+    account_type = Column(
+        String(16),
+        nullable=False,
+        default='paper',
+        index=True,
+    )  # 'portfolio' | 'paper'
+    parent_account_id = Column(
+        Integer,
+        ForeignKey('accounts.id'),
+        nullable=True,
+        index=True,
+    )  # Non-null for paper accounts linked to a portfolio account
+
+    # Timestamps
     created_at = Column(DateTime, default=datetime.now, index=True)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
+    # Indexes for common queries
     __table_args__ = (
-        Index('ix_portfolio_account_owner_active', 'owner_id', 'is_active'),
+        UniqueConstraint('name', name='uix_account_name'),
+        Index('ix_account_owner_market', 'owner_id', 'market'),
+        Index('ix_account_parent_type', 'parent_account_id', 'account_type'),
     )
+
+    def __repr__(self) -> str:
+        return (
+            f"<Account(id={self.id}, name={self.name}, type={self.account_type}, "
+            f"parent={self.parent_account_id}, cash={self.cash:.2f})>"
+        )
 
 
 class PortfolioTrade(Base):
@@ -511,7 +559,7 @@ class PortfolioTrade(Base):
     __tablename__ = 'portfolio_trades'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    account_id = Column(Integer, ForeignKey('portfolio_accounts.id'), nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey('accounts.id'), nullable=False, index=True)
     trade_uid = Column(String(128))
     symbol = Column(String(16), nullable=False, index=True)
     market = Column(String(8), nullable=False, default='cn')
@@ -539,7 +587,7 @@ class PortfolioCashLedger(Base):
     __tablename__ = 'portfolio_cash_ledger'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    account_id = Column(Integer, ForeignKey('portfolio_accounts.id'), nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey('accounts.id'), nullable=False, index=True)
     event_date = Column(Date, nullable=False, index=True)
     direction = Column(String(8), nullable=False)  # in/out
     amount = Column(Float, nullable=False)
@@ -558,7 +606,7 @@ class PortfolioCorporateAction(Base):
     __tablename__ = 'portfolio_corporate_actions'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    account_id = Column(Integer, ForeignKey('portfolio_accounts.id'), nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey('accounts.id'), nullable=False, index=True)
     symbol = Column(String(16), nullable=False, index=True)
     market = Column(String(8), nullable=False, default='cn')
     currency = Column(String(8), nullable=False, default='CNY')
@@ -580,7 +628,7 @@ class PortfolioPosition(Base):
     __tablename__ = 'portfolio_positions'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    account_id = Column(Integer, ForeignKey('portfolio_accounts.id'), nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey('accounts.id'), nullable=False, index=True)
     cost_method = Column(String(8), nullable=False, default='fifo')
     symbol = Column(String(16), nullable=False, index=True)
     market = Column(String(8), nullable=False, default='cn')
@@ -612,7 +660,7 @@ class PortfolioPositionLot(Base):
     __tablename__ = 'portfolio_position_lots'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    account_id = Column(Integer, ForeignKey('portfolio_accounts.id'), nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey('accounts.id'), nullable=False, index=True)
     cost_method = Column(String(8), nullable=False, default='fifo')
     symbol = Column(String(16), nullable=False, index=True)
     market = Column(String(8), nullable=False, default='cn')
@@ -634,7 +682,7 @@ class PortfolioDailySnapshot(Base):
     __tablename__ = 'portfolio_daily_snapshots'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    account_id = Column(Integer, ForeignKey('portfolio_accounts.id'), nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey('accounts.id'), nullable=False, index=True)
     snapshot_date = Column(Date, nullable=False, index=True)
     cost_method = Column(String(8), nullable=False, default='fifo')  # fifo/avg
     base_currency = Column(String(8), nullable=False, default='CNY')
@@ -702,45 +750,13 @@ class ConversationMessage(Base):
 # for the real-time paper trading subsystem (initial capital configurable,
 # default 1000 CNY per the project requirement).
 
-class PaperAccount(Base):
-    """Virtual paper-trading account.
-
-    A single row is the canonical account; subsequent rows allow multi-account
-    scenarios in the future without schema changes.
-    """
-
-    __tablename__ = 'paper_accounts'
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String(64), nullable=False, default='default')
-    # Initial capital (CNY). Default 1000 per project requirement.
-    initial_capital = Column(Float, nullable=False, default=1000.0)
-    # Cash currently available for new buys.
-    cash = Column(Float, nullable=False, default=1000.0)
-    # Cash frozen by pending limit orders.
-    frozen_cash = Column(Float, nullable=False, default=0.0)
-    # Account status: active / paused / stopped.
-    status = Column(String(16), nullable=False, default='active', index=True)
-    # Config snapshot (JSON): commission rate, slippage, etc.
-    config_json = Column(Text)
-    created_at = Column(DateTime, default=datetime.now, index=True)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-
-    __table_args__ = (
-        UniqueConstraint('name', name='uix_paper_account_name'),
-    )
-
-    def __repr__(self) -> str:
-        return f"<PaperAccount(name={self.name}, cash={self.cash}, status={self.status})>"
-
-
 class PaperPosition(Base):
     """Long position per stock within a paper-trading account."""
 
     __tablename__ = 'paper_positions'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    account_id = Column(Integer, ForeignKey('paper_accounts.id'), nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey('accounts.id'), nullable=False, index=True)
     code = Column(String(10), nullable=False, index=True)
     name = Column(String(50))
     # Total held quantity (shares).
@@ -783,7 +799,7 @@ class PaperOrder(Base):
     __tablename__ = 'paper_orders'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    account_id = Column(Integer, ForeignKey('paper_accounts.id'), nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey('accounts.id'), nullable=False, index=True)
     code = Column(String(10), nullable=False, index=True)
     name = Column(String(50))
     # buy / sell
@@ -845,7 +861,7 @@ class PaperTrade(Base):
     __tablename__ = 'paper_trades'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    account_id = Column(Integer, ForeignKey('paper_accounts.id'), nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey('accounts.id'), nullable=False, index=True)
     order_id = Column(Integer, ForeignKey('paper_orders.id'), nullable=False, index=True)
     code = Column(String(10), nullable=False, index=True)
     name = Column(String(50))
@@ -870,7 +886,7 @@ class PaperSignal(Base):
     __tablename__ = 'paper_signals'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    account_id = Column(Integer, ForeignKey('paper_accounts.id'), nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey('accounts.id'), nullable=False, index=True)
     code = Column(String(10), nullable=False, index=True)
     name = Column(String(50))
     # buy / sell
@@ -901,7 +917,7 @@ class PaperNetValue(Base):
     __tablename__ = 'paper_net_values'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    account_id = Column(Integer, ForeignKey('paper_accounts.id'), nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey('accounts.id'), nullable=False, index=True)
     date = Column(Date, nullable=False, index=True)
     total_assets = Column(Float, nullable=False)  # cash + market_value
     cash = Column(Float, nullable=False)
@@ -937,7 +953,7 @@ class PaperDecision(Base):
     __tablename__ = 'paper_decisions'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    account_id = Column(Integer, ForeignKey('paper_accounts.id'), nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey('accounts.id'), nullable=False, index=True)
     # Decision action: buy / sell / hold / cancel / modify / plan / nop.
     action = Column(String(16), nullable=False, index=True)
     # Target stock code (None for plan-level decisions like market review).
@@ -993,7 +1009,7 @@ class PaperReflection(Base):
     __tablename__ = 'paper_reflections'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    account_id = Column(Integer, ForeignKey('paper_accounts.id'), nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey('accounts.id'), nullable=False, index=True)
     # Reflection scope: trade / daily / weekly / adhoc.
     scope = Column(String(16), nullable=False, default='trade', index=True)
     # Short title summarising the reflection subject.
@@ -1045,7 +1061,7 @@ class PaperBattlePlan(Base):
     __tablename__ = 'paper_battle_plans'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    account_id = Column(Integer, ForeignKey('paper_accounts.id'), nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey('accounts.id'), nullable=False, index=True)
     # The trading day this plan applies to (usually next trading day).
     date = Column(Date, nullable=False, index=True)
     # JSON-serialized list of holding plans.
@@ -1256,6 +1272,24 @@ _LLM_PROMPT_CACHE_TELEMETRY_COLUMNS = {
     "provider_reported_cached_tokens",
     "provider_min_cache_tokens",
     "eligibility_confidence",
+}
+
+# Columns added to paper_orders after the initial schema. Existing SQLite
+# databases created before these columns were introduced need ALTER TABLE
+# ADD COLUMN backfill because Base.metadata.create_all only creates missing
+# tables, not missing columns on existing tables.
+_PAPER_ORDERS_BACKFILL_COLUMN_SQL: Dict[str, str] = {
+    "trigger_price": "FLOAT",
+    "cancel_reason": "VARCHAR(255)",
+    "parent_order_id": "INTEGER",
+    "linked_order_id": "INTEGER",
+    "modified_at": "DATETIME",
+    "triggered_at": "DATETIME",
+}
+
+# Columns added to paper_reflections after the initial schema.
+_PAPER_REFLECTIONS_BACKFILL_COLUMN_SQL: Dict[str, str] = {
+    "agent_action": "VARCHAR(50)",
 }
 
 
@@ -1556,7 +1590,10 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
 
             # 创建所有表
             Base.metadata.create_all(self._engine)
+            self._migrate_to_unified_accounts()
             self._ensure_llm_usage_telemetry_columns()
+            self._ensure_paper_orders_columns()
+            self._ensure_paper_reflections_columns()
             self._ensure_intelligence_item_scope_values()
             self._ensure_schema_migration_record()
             self._ensure_intelligence_items_unique_index()
@@ -1758,6 +1795,90 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                         continue
                     raise
 
+    def _ensure_paper_orders_columns(self) -> None:
+        """Add nullable paper_orders columns to existing SQLite databases."""
+        self._ensure_table_columns(
+            PaperOrder,
+            _PAPER_ORDERS_BACKFILL_COLUMN_SQL,
+            "paper orders",
+        )
+
+    def _ensure_paper_reflections_columns(self) -> None:
+        """Add nullable paper_reflections columns to existing SQLite databases."""
+        self._ensure_table_columns(
+            PaperReflection,
+            _PAPER_REFLECTIONS_BACKFILL_COLUMN_SQL,
+            "paper reflections",
+        )
+
+    def _ensure_table_columns(
+        self,
+        model_class: type,
+        column_sql: Dict[str, str],
+        label: str,
+    ) -> None:
+        """Backfill nullable columns on an existing SQLite table.
+
+        Base.metadata.create_all only creates missing tables; it does not
+        alter existing tables to add new columns. This helper runs
+        ``ALTER TABLE ... ADD COLUMN ...`` for every column defined in
+        ``column_sql`` that is missing from the live table.
+        """
+        if not self._is_sqlite_engine:
+            return
+        try:
+            existing = {
+                column["name"]
+                for column in inspect(self._engine).get_columns(model_class.__tablename__)
+            }
+        except Exception as exc:
+            logger.warning(
+                "[%s] failed to inspect columns; "
+                "skipping best-effort SQLite column backfill: %s",
+                label.capitalize(),
+                exc,
+            )
+            return
+
+        max_retries = self._sqlite_write_retry_max
+        for column, column_type in column_sql.items():
+            if column in existing:
+                continue
+            for attempt in range(max_retries + 1):
+                try:
+                    with self._engine.begin() as connection:
+                        connection.exec_driver_sql(
+                            f"ALTER TABLE {model_class.__tablename__} "
+                            f"ADD COLUMN {column} {column_type}"
+                        )
+                    existing.add(column)
+                    logger.info(
+                        "[%s] backfilled missing column %s (%s)",
+                        label.capitalize(),
+                        column,
+                        column_type,
+                    )
+                    break
+                except OperationalError as exc:
+                    if self._is_sqlite_duplicate_column_error(exc, column):
+                        existing.add(column)
+                        break
+                    if self._is_sqlite_locked_error(exc) and attempt < max_retries:
+                        delay = self._sqlite_write_retry_base_delay * (2 ** attempt)
+                        logger.warning(
+                            "[%s] SQLite column backfill locked, "
+                            "retrying: %s (%s/%s, %.2fs)",
+                            label.capitalize(),
+                            column,
+                            attempt + 1,
+                            max_retries,
+                            delay,
+                        )
+                        if delay > 0:
+                            time.sleep(delay)
+                        continue
+                    raise
+
     def _ensure_intelligence_item_scope_values(self) -> None:
         """Backfill nullable intelligence item scopes so SQLite unique keys work."""
         if not self._is_sqlite_engine:
@@ -1782,6 +1903,208 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                 )
         except Exception as exc:
             logger.warning("资讯池 scope_value 回填失败，已跳过: %s", exc)
+
+    def _migrate_to_unified_accounts(self) -> None:
+        """Merge legacy portfolio_accounts / paper_accounts into unified accounts table.
+
+        This is a one-time migration. It creates ``Account`` rows from the legacy
+        tables, remaps all foreign-key references in portfolio_* and paper_*
+        tables, then drops the legacy tables. Subsequent runs are no-ops once the
+        legacy tables no longer exist.
+        """
+        if not self._is_sqlite_engine:
+            return
+
+        inspector = inspect(self._engine)
+        has_portfolio = inspector.has_table("portfolio_accounts")
+        has_paper = inspector.has_table("paper_accounts")
+        has_accounts = inspector.has_table("accounts")
+
+        if not has_accounts:
+            return
+
+        if not has_portfolio and not has_paper:
+            return
+
+        # Guard against re-running on a database that already has Account rows.
+        try:
+            with self._engine.connect() as connection:
+                existing_count = connection.execute(
+                    text("SELECT COUNT(*) FROM accounts")
+                ).scalar() or 0
+        except Exception as exc:
+            logger.warning("[account-migration] 无法检查 accounts 表，跳过迁移: %s", exc)
+            return
+
+        if existing_count > 0:
+            logger.warning(
+                "[account-migration] accounts 表已有 %s 条记录，跳过敏捷迁移。"
+                "如需强制迁移，请手动清空 accounts 表后重启服务。",
+                existing_count,
+            )
+            return
+
+        logger.info(
+            "[account-migration] 开始合并账户表: portfolio_accounts=%s, paper_accounts=%s",
+            has_portfolio,
+            has_paper,
+        )
+
+        portfolio_old_to_new: Dict[int, int] = {}
+        paper_old_to_new: Dict[int, int] = {}
+
+        try:
+            with self._engine.begin() as connection:
+                # Step 1: migrate portfolio accounts
+                if has_portfolio:
+                    rows = connection.execute(
+                        text(
+                            "SELECT id, owner_id, name, broker, market, base_currency, "
+                            "is_active, created_at, updated_at FROM portfolio_accounts"
+                        )
+                    ).mappings().all()
+                    for row in rows:
+                        result = connection.execute(
+                            text(
+                                "INSERT INTO accounts (owner_id, name, broker, market, "
+                                "base_currency, is_active, account_type, parent_account_id, "
+                                "cash, frozen_cash, status, initial_capital, config_json, "
+                                "created_at, updated_at) VALUES (:owner_id, :name, :broker, "
+                                ":market, :base_currency, :is_active, 'portfolio', NULL, "
+                                "0.0, 0.0, 'active', 0.0, NULL, :created_at, :updated_at)"
+                            ),
+                            {
+                                "owner_id": row["owner_id"],
+                                "name": row["name"],
+                                "broker": row["broker"],
+                                "market": row["market"] or "cn",
+                                "base_currency": row["base_currency"] or "CNY",
+                                "is_active": bool(row["is_active"]),
+                                "created_at": row["created_at"],
+                                "updated_at": row["updated_at"],
+                            },
+                        )
+                        portfolio_old_to_new[row["id"]] = result.lastrowid
+
+                # Step 2: migrate paper accounts
+                if has_paper:
+                    rows = connection.execute(
+                        text(
+                            "SELECT id, name, initial_capital, cash, frozen_cash, status, "
+                            "config_json, created_at, updated_at FROM paper_accounts"
+                        )
+                    ).mappings().all()
+                    for row in rows:
+                        name = row["name"]
+                        # If a portfolio account with the same name exists, merge into it.
+                        existing_account_id = None
+                        if name:
+                            existing = connection.execute(
+                                text("SELECT id FROM accounts WHERE name = :name"),
+                                {"name": name},
+                            ).scalar_one_or_none()
+                            existing_account_id = existing
+
+                        if existing_account_id is not None:
+                            connection.execute(
+                                text(
+                                    "UPDATE accounts SET account_type = 'paper', "
+                                    "initial_capital = :initial_capital, cash = :cash, "
+                                    "frozen_cash = :frozen_cash, status = :status, "
+                                    "config_json = :config_json, updated_at = :updated_at "
+                                    "WHERE id = :id"
+                                ),
+                                {
+                                    "initial_capital": row["initial_capital"],
+                                    "cash": row["cash"],
+                                    "frozen_cash": row["frozen_cash"],
+                                    "status": row["status"] or "active",
+                                    "config_json": row["config_json"],
+                                    "updated_at": row["updated_at"],
+                                    "id": existing_account_id,
+                                },
+                            )
+                            paper_old_to_new[row["id"]] = existing_account_id
+                        else:
+                            result = connection.execute(
+                                text(
+                                    "INSERT INTO accounts (owner_id, name, broker, market, "
+                                    "base_currency, is_active, account_type, parent_account_id, "
+                                    "cash, frozen_cash, status, initial_capital, config_json, "
+                                    "created_at, updated_at) VALUES ('default', :name, NULL, "
+                                    "'cn', 'CNY', 1, 'paper', NULL, :cash, :frozen_cash, "
+                                    ":status, :initial_capital, :config_json, :created_at, "
+                                    ":updated_at)"
+                                ),
+                                {
+                                    "name": name,
+                                    "cash": row["cash"],
+                                    "frozen_cash": row["frozen_cash"],
+                                    "status": row["status"] or "active",
+                                    "initial_capital": row["initial_capital"],
+                                    "config_json": row["config_json"],
+                                    "created_at": row["created_at"],
+                                    "updated_at": row["updated_at"],
+                                },
+                            )
+                            paper_old_to_new[row["id"]] = result.lastrowid
+
+                # Step 3: remap portfolio child tables
+                portfolio_child_tables = (
+                    "portfolio_trades",
+                    "portfolio_cash_ledger",
+                    "portfolio_corporate_actions",
+                    "portfolio_daily_snapshots",
+                    "portfolio_positions",
+                    "portfolio_position_lots",
+                )
+                for table in portfolio_child_tables:
+                    if not inspector.has_table(table):
+                        continue
+                    for old_id, new_id in portfolio_old_to_new.items():
+                        connection.execute(
+                            text(
+                                f"UPDATE {table} SET account_id = :new_id WHERE account_id = :old_id"
+                            ),
+                            {"new_id": new_id, "old_id": old_id},
+                        )
+
+                # Step 4: remap paper child tables
+                paper_child_tables = (
+                    "paper_positions",
+                    "paper_orders",
+                    "paper_trades",
+                    "paper_signals",
+                    "paper_net_values",
+                    "paper_decisions",
+                    "paper_reflections",
+                    "paper_battle_plans",
+                )
+                for table in paper_child_tables:
+                    if not inspector.has_table(table):
+                        continue
+                    for old_id, new_id in paper_old_to_new.items():
+                        connection.execute(
+                            text(
+                                f"UPDATE {table} SET account_id = :new_id WHERE account_id = :old_id"
+                            ),
+                            {"new_id": new_id, "old_id": old_id},
+                        )
+
+                # Step 5: drop legacy account tables
+                if has_portfolio:
+                    connection.execute(text("DROP TABLE IF EXISTS portfolio_accounts"))
+                if has_paper:
+                    connection.execute(text("DROP TABLE IF EXISTS paper_accounts"))
+
+            logger.info(
+                "[account-migration] 完成: portfolio=%s, paper=%s",
+                len(portfolio_old_to_new),
+                len(paper_old_to_new),
+            )
+        except Exception as exc:
+            logger.error("[account-migration] 迁移失败: %s", exc, exc_info=True)
+            raise
 
     @classmethod
     def get_instance(cls) -> 'DatabaseManager':

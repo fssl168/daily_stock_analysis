@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT))
 from paper_trading.account import PaperAccountManager
 from paper_trading.performance import PerformanceAnalyzer
 from paper_trading.risk import RiskChecker, RiskConfig
-from src.storage import DatabaseManager, PaperAccount, PaperNetValue, PaperTrade
+from src.storage import Account, DatabaseManager, PaperNetValue, PaperTrade
 
 
 def _create_account(db: DatabaseManager, name: str, capital: float = 1000.0) -> int:
@@ -24,7 +24,7 @@ def _create_account(db: DatabaseManager, name: str, capital: float = 1000.0) -> 
     mgr.get_or_create_account(name=name, initial_capital=capital)
     with db.session_scope() as session:
         acc = session.execute(
-            select(PaperAccount).where(PaperAccount.name == name)
+            select(Account).where(Account.name == name, Account.account_type == "paper")
         ).scalar_one()
         return int(acc.id)
 

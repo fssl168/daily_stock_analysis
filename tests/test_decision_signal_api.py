@@ -23,7 +23,7 @@ except ModuleNotFoundError:
 import src.auth as auth
 from api.app import create_app
 from src.config import Config
-from src.storage import AnalysisHistory, DatabaseManager, DecisionSignalRecord, PortfolioAccount, PortfolioPosition, utc_naive_now
+from src.storage import Account, AnalysisHistory, DatabaseManager, DecisionSignalRecord, PortfolioPosition, utc_naive_now
 
 
 @contextmanager
@@ -710,11 +710,12 @@ def test_holding_only_uses_cached_positions_and_stock_code_variants(client_and_d
     assert hk_same_symbol_resp.status_code == 200, hk_same_symbol_resp.text
 
     with db.session_scope() as session:
-        account = PortfolioAccount(
+        account = Account(
             name="Test account",
             market="cn",
             base_currency="CNY",
             is_active=True,
+            account_type="portfolio",
         )
         session.add(account)
         session.flush()
@@ -763,11 +764,12 @@ def test_holding_only_uses_cached_positions_and_stock_code_variants(client_and_d
                 total_cost=900,
             )
         )
-        inactive_account = PortfolioAccount(
+        inactive_account = Account(
             name="Inactive account",
             market="us",
             base_currency="USD",
             is_active=False,
+            account_type="portfolio",
         )
         session.add(inactive_account)
         session.flush()
@@ -836,7 +838,9 @@ def test_holding_only_uses_cached_positions_and_stock_code_variants(client_and_d
     assert variant_resp.json()["total"] == 1
 
     with db.session_scope() as session:
-        empty_account = PortfolioAccount(name="Empty account", market="cn", base_currency="CNY")
+        empty_account = Account(
+            name="Empty account", market="cn", base_currency="CNY", account_type="portfolio"
+        )
         session.add(empty_account)
         session.flush()
         empty_account_id = empty_account.id

@@ -29,7 +29,7 @@ from paper_trading.risk import RiskChecker
 from paper_trading.sltp_calculator import build_sltp_calculator
 from paper_trading.trading_engine import TradingEngine
 from src.agent.portfolio_manager_agent import PortfolioManagerAgent
-from src.storage import DatabaseManager, PaperAccount, PaperDecision, PaperReflection, PaperTrade
+from src.storage import Account, DatabaseManager, PaperDecision, PaperReflection, PaperTrade
 from strategies_v2.rule_engine import Signal
 
 from tests.conftest import StubDataProvider
@@ -72,7 +72,7 @@ def _build_engine(db: DatabaseManager) -> tuple[TradingEngine, int]:
     account_mgr.get_or_create_account(name="pytest_e2e", initial_capital=1000.0)
     with db.session_scope() as session:
         acc = session.execute(
-            select(PaperAccount).where(PaperAccount.name == "pytest_e2e")
+            select(Account).where(Account.name == "pytest_e2e", Account.account_type == "paper")
         ).scalar_one()
         acc_id = acc.id
 

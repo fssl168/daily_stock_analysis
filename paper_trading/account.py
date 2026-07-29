@@ -16,11 +16,11 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Dict, Optional
 
-from sqlalchemy import and_, desc, select
+from sqlalchemy import and_, delete, desc, select
 
 from src.storage import (
     DatabaseManager,
-    PaperAccount,
+    Account,
     PaperNetValue,
     PaperPosition,
     get_db,
@@ -82,7 +82,7 @@ class PaperAccountManager:
         name: str = "default",
         initial_capital: float = DEFAULT_INITIAL_CAPITAL,
         config: Optional[Dict[str, Any]] = None,
-    ) -> PaperAccount:
+    ) -> Account:
         """Return the named account, creating it on first call.
 
         If the account already exists, `initial_capital` and `config` are
@@ -90,13 +90,14 @@ class PaperAccountManager:
         """
         with self.db.session_scope() as session:
             account = session.execute(
-                select(PaperAccount).where(PaperAccount.name == name)
+                select(Account).where(Account.name == name)
             ).scalar_one_or_none()
 
             if account is not None:
-                return account
+                # Return a fresh, properly-bound instance by re-fetching
+                return self._get_account_by_id(account.id)
 
-            account = PaperAccount(
+            account = Account(
                 name=name,
                 initial_capital=float(initial_capital),
                 cash=float(initial_capital),
@@ -114,20 +115,44 @@ class PaperAccountManager:
         # Re-fetch to return a detached instance attached to a fresh session scope.
         return self._get_account_by_id(account_id)
 
-    def _get_account_by_id(self, account_id: int) -> PaperAccount:
+    def _get_account_by_id(self, account_id: int) -> Account:
         with self.db.session_scope() as session:
             account = session.execute(
-                select(PaperAccount).where(PaperAccount.id == account_id)
+                select(Account).where(Account.id == account_id)
             ).scalar_one_or_none()
             if account is None:
                 raise ValueError(f"Paper account id={account_id} not found")
+            # Expunge before closing session so attribute access doesn't trigger refresh
+            # on a detached/ expired instance.
+            session.expunge(account)
             return account
 
-    def get_account(self, name: str = "default") -> Optional[PaperAccount]:
+    def get_account(self, name: str = "default") -> Optional[Account]:
         with self.db.session_scope() as session:
-            return session.execute(
-                select(PaperAccount).where(PaperAccount.name == name)
+            account = session.execute(
+                select(Account).where(Account.name == name)
             ).scalar_one_or_none()
+            if account is not None:
+                session.expunge(account)
+            return account
+
+    def list_accounts(
+        self,
+        *,
+        status: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Account]:
+        """List paper trading accounts ordered by id ascending."""
+        with self.db.session_scope() as session:
+            query = select(Account).where(Account.account_type == 'paper')
+            if status:
+                query = query.where(Account.status == status)
+            query = query.order_by(Account.id.asc()).limit(limit).offset(offset)
+            rows = session.execute(query).scalars().all()
+            for row in rows:
+                session.expunge(row)
+            return list(rows)
 
     def set_status(self, account_id: int, status: str) -> None:
         """Update account status: active / paused / stopped."""
@@ -135,7 +160,7 @@ class PaperAccountManager:
             raise ValueError(f"Invalid account status: {status}")
         with self.db.session_scope() as session:
             account = session.execute(
-                select(PaperAccount).where(PaperAccount.id == account_id)
+                select(Account).where(Account.id == account_id)
             ).scalar_one_or_none()
             if account is None:
                 raise ValueError(f"Paper account id={account_id} not found")
@@ -150,7 +175,7 @@ class PaperAccountManager:
         """
         with self.db.session_scope() as session:
             account = session.execute(
-                select(PaperAccount).where(PaperAccount.id == account_id)
+                select(Account).where(Account.id == account_id)
             ).scalar_one_or_none()
             if account is None:
                 raise ValueError(f"Paper account id={account_id} not found")
@@ -163,12 +188,10 @@ class PaperAccountManager:
             account.frozen_cash = 0.0
             account.status = "active"
 
-            # Clear all open positions.
-            positions = session.execute(
-                select(PaperPosition).where(PaperPosition.account_id == account_id)
-            ).scalars().all()
-            for pos in positions:
-                session.delete(pos)
+            # Clear all open positions (use bulk delete to avoid ORM relationship issues).
+            session.execute(
+                delete(PaperPosition).where(PaperPosition.account_id == account_id)
+            )
 
             logger.info("Paper account reset: id=%s capital=%.2f", account_id, target_capital)
 
@@ -182,7 +205,7 @@ class PaperAccountManager:
             raise ValueError("freeze amount must be non-negative")
         with self.db.session_scope() as session:
             account = session.execute(
-                select(PaperAccount).where(PaperAccount.id == account_id)
+                select(Account).where(Account.id == account_id)
             ).scalar_one_or_none()
             if account is None:
                 raise ValueError(f"Paper account id={account_id} not found")
@@ -199,7 +222,7 @@ class PaperAccountManager:
             raise ValueError("unfreeze amount must be non-negative")
         with self.db.session_scope() as session:
             account = session.execute(
-                select(PaperAccount).where(PaperAccount.id == account_id)
+                select(Account).where(Account.id == account_id)
             ).scalar_one_or_none()
             if account is None:
                 raise ValueError(f"Paper account id={account_id} not found")
@@ -216,7 +239,7 @@ class PaperAccountManager:
         """
         with self.db.session_scope() as session:
             account = session.execute(
-                select(PaperAccount).where(PaperAccount.id == account_id)
+                select(Account).where(Account.id == account_id)
             ).scalar_one_or_none()
             if account is None:
                 raise ValueError(f"Paper account id={account_id} not found")
@@ -236,7 +259,7 @@ class PaperAccountManager:
         """Credit sell proceeds (amount net of fees already deducted)."""
         with self.db.session_scope() as session:
             account = session.execute(
-                select(PaperAccount).where(PaperAccount.id == account_id)
+                select(Account).where(Account.id == account_id)
             ).scalar_one_or_none()
             if account is None:
                 raise ValueError(f"Paper account id={account_id} not found")
@@ -250,7 +273,7 @@ class PaperAccountManager:
         """Build a valuation snapshot using current position.last_price."""
         with self.db.session_scope() as session:
             account = session.execute(
-                select(PaperAccount).where(PaperAccount.id == account_id)
+                select(Account).where(Account.id == account_id)
             ).scalar_one_or_none()
             if account is None:
                 raise ValueError(f"Paper account id={account_id} not found")

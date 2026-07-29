@@ -178,7 +178,7 @@ def main() -> int:
 
     from src.storage import (
         DatabaseManager,
-        PaperAccount,
+        Account,
         PaperBattlePlan,
         get_db,
     )
@@ -207,7 +207,7 @@ def main() -> int:
     account_mgr.get_or_create_account(name="smoke_bp", initial_capital=1000.0)
     with db.session_scope() as session:
         acc = session.execute(
-            select(PaperAccount).where(PaperAccount.name == "smoke_bp")
+            select(Account).where(Account.name == "smoke_bp")
         ).scalar_one()
         acc_id = acc.id
 
@@ -440,7 +440,7 @@ def main() -> int:
     account_mgr.get_or_create_account(name="smoke_empty", initial_capital=1000.0)
     with db.session_scope() as session:
         empty_acc = session.execute(
-            select(PaperAccount).where(PaperAccount.name == "smoke_empty")
+            select(Account).where(Account.name == "smoke_empty")
         ).scalar_one()
         empty_acc_id = empty_acc.id
 

@@ -30,7 +30,9 @@ from paper_trading.position import PositionManager
 from paper_trading.risk import RiskChecker
 from paper_trading.sltp_calculator import build_sltp_calculator
 from paper_trading.trading_engine import TradingEngine
-from src.storage import PaperAccount, PaperBattlePlan
+from sqlalchemy import select
+
+from src.storage import Account, PaperBattlePlan
 from strategies_v2.rule_engine import Signal
 
 from tests.conftest import StubDataProvider, _make_synthetic_daily_df
@@ -66,7 +68,7 @@ def _create_account(db, name: str = "battle_test", capital: float = 1000.0) -> i
     mgr.get_or_create_account(name=name, initial_capital=capital)
     with db.session_scope() as session:
         row = session.execute(
-            session.query(PaperAccount).filter(PaperAccount.name == name).statement
+            select(Account).where(Account.name == name, Account.account_type == "paper")
         ).scalar_one()
         return int(row.id)
 

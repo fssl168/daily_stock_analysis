@@ -13,6 +13,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 - [修复] 修复 `PAPER_TRADING_ENABLE_REFLECTION` / `PAPER_TRADING_LISTENER_ENABLE_DAILY_REFLECTION` 及 battle plan 对应配置别名在 `load_dotenv(override=True)` 后进程环境变量被 `.env` 覆盖的问题，新增 `Config._resolve_aliased_bool` 并预捕获进程 env 值。
 - [文档] 更新 `docs/paper_trading_implementation_alignment.md` 状态：P0-B / P0-C / P1-A / P2-A / P3-C 均标记为完成，并记录配置别名加载顺序风险。
+- [新功能] WebUI 模拟交易页面新增 Daily Report 标签页，支持生成和按日期加载每日交易报告（P2-A）。
+- [新功能] WebUI 订单表新增按 order_id 撤单/改单操作入口，信号表新增按 signal_id 撤单/改单操作入口。
+- [新功能] WebUI 绩效卡片新增回撤曲线迷你图（DrawdownSparkline），头部新增 Trigger Reflection 和 Trigger PM 决策按钮。
+- [修复] 修复 `PaperTradingPage.tsx` 因 `import type React` 导致 `React.Fragment` 运行时不可用的问题，改为值导入。
+- [测试] 新增 9 个 Playwright e2e 测试用例，覆盖撤单/改单、信号撤改、回撤曲线、日报生成/加载、PM 触发、复盘触发，共 19/19 通过。
+- [改进] 桌面客户端（Electron）同步 WebUI 更新：验证 `build-all.ps1` 构建管线已包含 WebUI 构建步骤，桌面端通过后端 `loadURL` 加载最新 WebUI 产物，新增的 Daily Report、订单撤改、信号撤改、回撤曲线、复盘触发等功能无需桌面端代码改动即可在桌面端使用；桌面端 `main.js` / `preload.js` 测试 42/47 通过，5 项失败为更新备份/恢复模块既有问题，与本次 WebUI 变更无关。
+- [修复] 修复旧版 SQLite 数据库缺少 `paper_orders.trigger_price` 等列导致查询报 `no such column` 错误的问题，新增 `_ensure_paper_orders_columns` 迁移方法在数据库初始化时自动补齐 `trigger_price`/`cancel_reason`/`parent_order_id`/`linked_order_id`/`modified_at`/`triggered_at` 六个列。
+- [修复] 修复旧版 SQLite 数据库缺少 `paper_reflections.agent_action` 列导致复盘查询报 `no such column` 错误的问题，将迁移逻辑重构为通用 `_ensure_table_columns` 并扩展 `_ensure_paper_reflections_columns` 自动补齐该列。
+- [改进] PaperTrading 前端页面全面中文化：标题、标签页、按钮、表头、状态/方向/类型/心情标签、提示信息、操作反馈均改为中文；同步更新 19 个 Playwright e2e 断言以匹配中文界面，全部通过。
+- [修复] 修复 `paper_trading/reflection.py` 中 `build_reflection_engine` 使用 `from . import get_db` 导致 `ImportError: cannot import name 'get_db' from 'paper_trading'` 的问题，改为使用模块顶部已从 `src.storage` 导入的 `get_db`。
+- [新功能] 持仓管理页面（PortfolioPage）并入纸面交易账户视图：新增纸面账户卡片区域，展示净值、收益率、可用现金、持仓数量与状态，点击卡片可跳转至纸面交易页面；后端新增 `GET /api/v1/paper-trading/accounts` 列表接口。
+- [测试] 新增 `apps/dsa-web/e2e/portfolio.spec.ts`，覆盖持仓页纸面账户展示与点击跳转，2/2 通过；同时补充 `paper-trading.spec.ts` 对账户列表接口的 mock。
+- [改进] 统一账户模型：将 `portfolio_accounts` 与 `paper_accounts` 合并为单一 `accounts` 表，新增 `account_type`（`portfolio`/`paper`）与 `parent_account_id` 字段，支持真实持仓账户与二级虚拟纸面账户的层级关系。
+- [改进] 数据库自动迁移：服务启动时检测旧版 `portfolio_accounts` / `paper_accounts` 表，将数据迁移至 `accounts` 表，重映射所有外键关联表（`portfolio_*` / `paper_*`），迁移完成后删除旧表，不保留旧表数据。
+- [新功能] 自选股与模拟交易自动交易联动：行情监听启动时默认使用系统自选股列表作为监控代码集，前端 `PaperTradingPage` 在监听卡片中展示自选股加载状态与代码数量。
+- [修复] 更新 `PaperAccountManager`、`portfolio_repo.py`、`portfolio_service.py` 及测试文件，使其全部基于统一的 `Account` 模型查询，按 `account_type` 过滤，避免读写旧表。
+- [测试] 更新 `paper-trading.spec.ts` 补全 `/api/v1/stocks/watchlist` mock 并修正响应格式，完整 e2e 套件 21/21 通过（另有 12 个需真实后端的 smoke 用例跳过）。
 
 ## [3.26.0] - 未发布
 

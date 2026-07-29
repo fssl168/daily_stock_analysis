@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 
 from src.storage import (
     DatabaseManager,
-    PortfolioAccount,
+    Account,
     PortfolioCashLedger,
     PortfolioCorporateAction,
     PortfolioDailySnapshot,
@@ -59,22 +59,23 @@ class PortfolioRepository:
         market: str,
         base_currency: str,
         owner_id: Optional[str] = None,
-    ) -> PortfolioAccount:
+    ) -> Account:
         with self.db.get_session() as session:
-            row = PortfolioAccount(
+            row = Account(
                 owner_id=owner_id,
                 name=name,
                 broker=broker,
                 market=market,
                 base_currency=base_currency,
                 is_active=True,
+                account_type='portfolio',
             )
             session.add(row)
             session.commit()
             session.refresh(row)
             return row
 
-    def get_account(self, account_id: int, include_inactive: bool = False) -> Optional[PortfolioAccount]:
+    def get_account(self, account_id: int, include_inactive: bool = False) -> Optional[Account]:
         with self.db.get_session() as session:
             return self.get_account_in_session(
                 session=session,
@@ -82,12 +83,12 @@ class PortfolioRepository:
                 include_inactive=include_inactive,
             )
 
-    def list_accounts(self, include_inactive: bool = False) -> List[PortfolioAccount]:
+    def list_accounts(self, include_inactive: bool = False) -> List[Account]:
         with self.db.get_session() as session:
-            query = select(PortfolioAccount)
+            query = select(Account).where(Account.account_type == 'portfolio')
             if not include_inactive:
-                query = query.where(PortfolioAccount.is_active.is_(True))
-            rows = session.execute(query.order_by(PortfolioAccount.id.asc())).scalars().all()
+                query = query.where(Account.is_active.is_(True))
+            rows = session.execute(query.order_by(Account.id.asc())).scalars().all()
             return list(rows)
 
     def get_account_in_session(
@@ -96,18 +97,24 @@ class PortfolioRepository:
         session: Any,
         account_id: int,
         include_inactive: bool = False,
-    ) -> Optional[PortfolioAccount]:
-        conditions = [PortfolioAccount.id == account_id]
+    ) -> Optional[Account]:
+        conditions = [
+            Account.id == account_id,
+            Account.account_type == 'portfolio',
+        ]
         if not include_inactive:
-            conditions.append(PortfolioAccount.is_active.is_(True))
+            conditions.append(Account.is_active.is_(True))
         return session.execute(
-            select(PortfolioAccount).where(and_(*conditions)).limit(1)
+            select(Account).where(and_(*conditions)).limit(1)
         ).scalar_one_or_none()
 
-    def update_account(self, account_id: int, fields: Dict[str, Any]) -> Optional[PortfolioAccount]:
+    def update_account(self, account_id: int, fields: Dict[str, Any]) -> Optional[Account]:
         with self.db.get_session() as session:
             row = session.execute(
-                select(PortfolioAccount).where(PortfolioAccount.id == account_id).limit(1)
+                select(Account).where(
+                    Account.id == account_id,
+                    Account.account_type == 'portfolio',
+                ).limit(1)
             ).scalar_one_or_none()
             if row is None:
                 return None
@@ -121,7 +128,10 @@ class PortfolioRepository:
     def deactivate_account(self, account_id: int) -> bool:
         with self.db.get_session() as session:
             row = session.execute(
-                select(PortfolioAccount).where(PortfolioAccount.id == account_id).limit(1)
+                select(Account).where(
+                    Account.id == account_id,
+                    Account.account_type == 'portfolio',
+                ).limit(1)
             ).scalar_one_or_none()
             if row is None:
                 return False
@@ -591,14 +601,20 @@ class PortfolioRepository:
                 conditions.append(PortfolioTrade.side == side)
 
             data_query = select(PortfolioTrade).join(
-                PortfolioAccount,
-                PortfolioAccount.id == PortfolioTrade.account_id,
+                Account,
+                and_(
+                    Account.id == PortfolioTrade.account_id,
+                    Account.account_type == 'portfolio',
+                ),
             )
             count_query = select(func.count()).select_from(PortfolioTrade).join(
-                PortfolioAccount,
-                PortfolioAccount.id == PortfolioTrade.account_id,
+                Account,
+                and_(
+                    Account.id == PortfolioTrade.account_id,
+                    Account.account_type == 'portfolio',
+                ),
             )
-            conditions.append(PortfolioAccount.is_active.is_(True))
+            conditions.append(Account.is_active.is_(True))
             if conditions:
                 where_clause = and_(*conditions)
                 data_query = data_query.where(where_clause)
@@ -635,14 +651,20 @@ class PortfolioRepository:
                 conditions.append(PortfolioCashLedger.direction == direction)
 
             data_query = select(PortfolioCashLedger).join(
-                PortfolioAccount,
-                PortfolioAccount.id == PortfolioCashLedger.account_id,
+                Account,
+                and_(
+                    Account.id == PortfolioCashLedger.account_id,
+                    Account.account_type == 'portfolio',
+                ),
             )
             count_query = select(func.count()).select_from(PortfolioCashLedger).join(
-                PortfolioAccount,
-                PortfolioAccount.id == PortfolioCashLedger.account_id,
+                Account,
+                and_(
+                    Account.id == PortfolioCashLedger.account_id,
+                    Account.account_type == 'portfolio',
+                ),
             )
-            conditions.append(PortfolioAccount.is_active.is_(True))
+            conditions.append(Account.is_active.is_(True))
             if conditions:
                 where_clause = and_(*conditions)
                 data_query = data_query.where(where_clause)
@@ -682,14 +704,20 @@ class PortfolioRepository:
                 conditions.append(PortfolioCorporateAction.action_type == action_type)
 
             data_query = select(PortfolioCorporateAction).join(
-                PortfolioAccount,
-                PortfolioAccount.id == PortfolioCorporateAction.account_id,
+                Account,
+                and_(
+                    Account.id == PortfolioCorporateAction.account_id,
+                    Account.account_type == 'portfolio',
+                ),
             )
             count_query = select(func.count()).select_from(PortfolioCorporateAction).join(
-                PortfolioAccount,
-                PortfolioAccount.id == PortfolioCorporateAction.account_id,
+                Account,
+                and_(
+                    Account.id == PortfolioCorporateAction.account_id,
+                    Account.account_type == 'portfolio',
+                ),
             )
-            conditions.append(PortfolioAccount.is_active.is_(True))
+            conditions.append(Account.is_active.is_(True))
             if conditions:
                 where_clause = and_(*conditions)
                 data_query = data_query.where(where_clause)
@@ -801,14 +829,17 @@ class PortfolioRepository:
             query = (
                 select(PortfolioDailySnapshot)
                 .join(
-                    PortfolioAccount,
-                    PortfolioAccount.id == PortfolioDailySnapshot.account_id,
-                )
+                Account,
+                and_(
+                    Account.id == PortfolioDailySnapshot.account_id,
+                    Account.account_type == 'portfolio',
+                ),
+            )
                 .where(
                     and_(
                         PortfolioDailySnapshot.snapshot_date <= as_of,
                         PortfolioDailySnapshot.cost_method == cost_method,
-                        PortfolioAccount.is_active.is_(True),
+                        Account.is_active.is_(True),
                     )
                 )
             )
@@ -835,10 +866,10 @@ class PortfolioRepository:
         with self.db.get_session() as session:
             query = (
                 select(PortfolioPosition.market, PortfolioPosition.symbol)
-                .join(PortfolioAccount, PortfolioPosition.account_id == PortfolioAccount.id)
+                .join(Account, and_(PortfolioPosition.account_id == Account.id, Account.account_type == 'portfolio'))
                 .where(
                     PortfolioPosition.quantity > 0,
-                    PortfolioAccount.is_active.is_(True),
+                    Account.is_active.is_(True),
                 )
             )
             if account_id is not None:

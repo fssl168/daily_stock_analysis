@@ -44,7 +44,7 @@ from sqlalchemy import desc, select
 
 from src.storage import (
     DatabaseManager,
-    PaperAccount,
+    Account,
     PaperBattlePlan,
     PaperDecision,
     PaperNetValue,
@@ -793,7 +793,7 @@ class ContentGenerator:
 
     def _fetch_account_snapshot(self) -> Dict[str, Any]:
         with self.db.session_scope() as session:
-            row = session.get(PaperAccount, self.account_id)
+            row = session.get(Account, self.account_id)
             if row is None:
                 return {}
             # Compute market value from positions

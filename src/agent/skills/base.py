@@ -368,6 +368,8 @@ class SkillManager:
         Args:
             directory: Path to the custom skill directory.
                        If None or empty, does nothing.
+                       Note: Old path 'strategies/' is automatically redirected to
+                             'paper_trading/strategies/configs/'.
 
         Returns:
             Number of skills loaded.
@@ -376,6 +378,14 @@ class SkillManager:
             return 0
 
         directory = Path(directory)
+
+        # Backward compatibility: redirect old 'strategies/' path to new location
+        if directory.name == "strategies" and directory.parent == Path.cwd():
+            new_dir = Path(__file__).resolve().parent.parent.parent.parent / \
+                      "paper_trading" / "strategies" / "configs"
+            logger.info(f"Deprecated path redirected: {directory} -> {new_dir}")
+            directory = new_dir
+
         if not directory.is_dir():
             logger.warning(f"Custom skill directory does not exist: {directory}")
             return 0

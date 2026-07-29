@@ -266,6 +266,7 @@ def build_reflection_engine(
     account_id: int = 0,
     timeout_seconds: float = 180.0,
     db_manager: Optional[Any] = None,
+    config: Optional[Any] = None,
 ) -> "ReflectionEngine":
     """Convenience factory for ReflectionEngine mirroring the pattern in other modules.
 
@@ -274,14 +275,15 @@ def build_reflection_engine(
         account_id: Default account ID for reflections.
         timeout_seconds: Hard cap on agent call duration.
         db_manager: Database manager (defaults to global get_db()).
+        config: Application config for building the agent executor.
 
     Returns:
         Initialized ReflectionEngine instance.
     """
-    from . import get_db  # avoid circular import issues during module load
     if db_manager is None:
         db_manager = get_db()
     return ReflectionEngine(
+        config=config,
         trading_engine=trading_engine,
         account_id=account_id,
         timeout_seconds=timeout_seconds,

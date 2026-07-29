@@ -83,7 +83,7 @@ class _StubExecutor:
 def main() -> int:
     from src.storage import (
         DatabaseManager,
-        PaperAccount,
+        Account,
         PaperDecision,
         PaperOrder,
         PaperPosition,
@@ -110,7 +110,7 @@ def main() -> int:
     account_mgr.get_or_create_account(name="smoke_pm", initial_capital=1000.0)
     with db.session_scope() as session:
         acc = session.execute(
-            select(PaperAccount).where(PaperAccount.name == "smoke_pm")
+            select(Account).where(Account.name == "smoke_pm")
         ).scalar_one()
         acc_id = acc.id
 

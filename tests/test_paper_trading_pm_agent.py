@@ -24,7 +24,7 @@ from src.agent.portfolio_manager_agent import (
     register_paper_trading_tools,
 )
 from src.agent.tools.registry import ToolRegistry
-from src.storage import DatabaseManager, PaperAccount, PaperDecision
+from src.storage import Account, DatabaseManager, PaperDecision
 from strategies_v2.rule_engine import Signal
 
 
@@ -55,7 +55,7 @@ def _build_engine(db: DatabaseManager) -> tuple[TradingEngine, int]:
     account_mgr.get_or_create_account(name="pytest_pm", initial_capital=1000.0)
     with db.session_scope() as session:
         acc = session.execute(
-            select(PaperAccount).where(PaperAccount.name == "pytest_pm")
+            select(Account).where(Account.name == "pytest_pm", Account.account_type == "paper")
         ).scalar_one()
         acc_id = acc.id
 

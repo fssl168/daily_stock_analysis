@@ -39,7 +39,7 @@ def _cleanup_db():
 def main() -> int:
     from src.storage import (
         DatabaseManager,
-        PaperAccount,
+        Account,
         PaperBattlePlan,
         PaperDecision,
         PaperNetValue,
@@ -65,7 +65,7 @@ def main() -> int:
     with db.session_scope() as session:
         from sqlalchemy import select
         acc_obj = session.execute(
-            select(PaperAccount).where(PaperAccount.name == "smoke_p2a")
+            select(Account).where(Account.name == "smoke_p2a")
         ).scalar_one()
         acc_id = acc_obj.id
 

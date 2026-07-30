@@ -108,12 +108,18 @@ class TradingEngine:
         self.order_mgr = order_manager or OrderManager(self.db)
         self.position_mgr = position_manager or PositionManager(self.db)
         self.fee_model = fee_model or FeeModel()
-        self.risk = risk_checker or RiskChecker(
-            db_manager=self.db,
-            account_manager=self.account_mgr,
-            position_manager=self.position_mgr,
-            fee_model=self.fee_model,
-        )
+        # If no explicit risk_checker is provided, create one using the main system config for parameter alignment.
+        if risk_checker is None:
+            from .risk_config_adapter import create_risk_config_from_main
+            risk_cfg = create_risk_config_from_main()
+            risk_checker = RiskChecker(
+                db_manager=self.db,
+                account_manager=self.account_mgr,
+                position_manager=self.position_mgr,
+                fee_model=self.fee_model,
+                config=risk_cfg,
+            )
+        self.risk = risk_checker
         # Optional secondary confirmation layer. When None, signals bypass
         # agent review and flow directly to order creation after risk checks.
         self.agent_reviewer = agent_reviewer

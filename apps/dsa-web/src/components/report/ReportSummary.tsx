@@ -7,6 +7,7 @@ import { ReportDetails } from './ReportDetails';
 import { ReportDiagnostics } from './ReportDiagnostics';
 import { AnalysisContextSummary } from './AnalysisContextSummary';
 import { MarketReviewReportView } from './MarketReviewReportView';
+import { PMDecisionPanel } from '../paper-trading';
 import { getReportText, normalizeReportLanguage } from '../../utils/reportLanguage';
 
 interface ReportSummaryProps {
@@ -70,6 +71,9 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
 
       {/* 策略点位区 */}
       <ReportStrategy strategy={strategy} language={reportLanguage} />
+
+      {/* PM 决策分析面板 (P3-E) */}
+      <PMDecisionPanel stockCode={meta.stockCode} />
 
       {/* 资讯区 */}
       <ReportNews recordId={recordId} limit={8} language={reportLanguage} />

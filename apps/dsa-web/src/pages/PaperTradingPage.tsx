@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { paperTradingApi } from '../api/paperTrading';
 import { Card, Badge } from '../components/common';
+import { BacktestComparisonPanel } from '../components/paper-trading';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { formatUiText } from '../i18n/uiText';
 import type {
@@ -24,7 +25,7 @@ import type {
   TradeResultResponse,
 } from '../types/paperTrading';
 
-type TabKey = 'positions' | 'orders' | 'trades' | 'signals' | 'decisions' | 'reflections' | 'battle-plans' | 'daily-report';
+type TabKey = 'positions' | 'orders' | 'trades' | 'signals' | 'decisions' | 'reflections' | 'battle-plans' | 'daily-report' | 'backtest-comparison';
 
 // ============ Helpers ============
 
@@ -2090,6 +2091,7 @@ const PaperTradingPage: React.FC = () => {
     { key: 'reflections', label: t('paperTrading.tabs.reflections'), count: reflections.length },
     { key: 'battle-plans', label: t('paperTrading.tabs.battlePlans'), count: battlePlans.length },
     { key: 'daily-report', label: t('paperTrading.tabs.dailyReport') },
+    { key: 'backtest-comparison', label: t('paperTrading.tabs.backtestComparison') },
   ], [positions.length, orders.length, trades.length, signals.length, decisions.length, reflections.length, battlePlans.length, t]);
 
   return (
@@ -2248,6 +2250,7 @@ const PaperTradingPage: React.FC = () => {
             {activeTab === 'reflections' && <ReflectionsList reflections={reflections} />}
             {activeTab === 'battle-plans' && <BattlePlansList plans={battlePlans} />}
             {activeTab === 'daily-report' && <DailyReportTab accountId={accountId} />}
+            {activeTab === 'backtest-comparison' && <BacktestComparisonPanel accountId={accountId} />}
           </div>
         </section>
       </main>

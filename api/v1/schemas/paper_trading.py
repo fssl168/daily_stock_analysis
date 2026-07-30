@@ -568,6 +568,86 @@ class RiskMetricsResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Backtest comparison (P3-F)
+# ---------------------------------------------------------------------------
+
+
+class PaperTradingScenario(BaseModel):
+    """Paper-trading history packaged like a backtest scenario."""
+
+    account_id: int
+    strategy_name: str
+    base_date: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    initial_capital: float = 1000.0
+    total_return_pct: float = 0.0
+    max_drawdown_pct: float = 0.0
+    win_rate: float = 0.0
+    trade_count: int = 0
+    win_count: int = 0
+    loss_count: int = 0
+    net_value_curve: List[NetValuePoint] = Field(default_factory=list)
+    trades: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class BacktestPaperComparisonMetric(BaseModel):
+    """Single metric compared between backtest and paper trading."""
+
+    backtest: Optional[float] = None
+    paper: Optional[float] = None
+    delta: Optional[float] = None
+
+
+class BacktestPaperComparisonSampleSize(BaseModel):
+    """Sample size metadata for the comparison."""
+
+    backtest_completed: int = 0
+    backtest_long_signals: int = 0
+    paper_trades: int = 0
+
+
+class BacktestPaperComparisonMetrics(BaseModel):
+    """Numeric comparison between backtest summary and paper trading record."""
+
+    win_rate_pct: BacktestPaperComparisonMetric = Field(
+        default_factory=BacktestPaperComparisonMetric
+    )
+    total_return_pct: BacktestPaperComparisonMetric = Field(
+        default_factory=BacktestPaperComparisonMetric
+    )
+    max_drawdown_pct: Dict[str, Optional[float]] = Field(default_factory=dict)
+    sample_size: BacktestPaperComparisonSampleSize = Field(
+        default_factory=BacktestPaperComparisonSampleSize
+    )
+
+
+class BacktestPaperComparisonRequest(BaseModel):
+    """Compare a backtest summary with the paper-trading account record."""
+
+    strategy_name: str = Field(..., description="Strategy name to evaluate")
+    backtest_summary: Optional[Dict[str, Any]] = Field(
+        None, description="Backtest summary; if omitted the endpoint uses the latest overall summary"
+    )
+    persist_reflection: bool = Field(
+        True, description="Persist the comparison as a reflection note"
+    )
+
+
+class BacktestPaperComparisonResponse(BaseModel):
+    """Result of comparing backtest output with paper-trading performance."""
+
+    account_id: int
+    strategy_name: str
+    paper_scenario: PaperTradingScenario
+    backtest_summary: Dict[str, Any] = Field(default_factory=dict)
+    metrics: BacktestPaperComparisonMetrics
+    interpretation: str = ""
+    generated_at: str = ""
+    reflection_persisted: bool = False
+
+
+# ---------------------------------------------------------------------------
 # Daily report (P2-A)
 # ---------------------------------------------------------------------------
 

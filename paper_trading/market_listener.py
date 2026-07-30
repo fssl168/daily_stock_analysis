@@ -476,7 +476,10 @@ class MarketListener:
             logger.debug("[MarketListener] %s: no prices fetched", market)
             return
 
-        # 1) Match pending limit orders.
+        # 1) Consume AI analysis signals first (before rule-based strategies).
+        self._consume_ai_signals(latest_prices)
+
+        # 2) Match pending limit orders.
         matched = self.engine.match_pending_orders(latest_prices)
         for r in matched:
             logger.info(
@@ -484,7 +487,7 @@ class MarketListener:
                 r.side, r.code, r.fill_quantity, r.fill_price,
             )
 
-        # 2) Check stop-loss / take-profit.
+        # 3) Check stop-loss / take-profit.
         sl_tp = self.engine.check_stop_loss_take_profit(
             latest_prices, account_id=self.config.account_id
         )
@@ -494,18 +497,70 @@ class MarketListener:
                 r.side, r.code, r.status,
             )
 
-        # 2a) P1-A: Dynamic trailing stop-loss for profitable positions.
+        # 3a) P1-A: Dynamic trailing stop-loss for profitable positions.
         self._check_dynamic_sltp(market, latest_prices)
 
-        # 2b) P0-C: Periodic intraday position review via AgentRiskReviewer.
+        # 3b) P0-C: Periodic intraday position review via AgentRiskReviewer.
         self._maybe_review_open_positions(market, latest_prices)
 
-        # 3) Evaluate strategies.
+        # 4) Evaluate strategy rules.
         if self.config.enable_strategies and self.strategies:
             self._evaluate_strategies(codes, latest_prices, market)
 
-        # 4) P1-C: Periodically trigger PM agent decision cycle.
+        # 5) P1-C: Periodically trigger PM agent decision cycle.
         self._maybe_trigger_pm_decision(market)
+
+    def _consume_ai_signals(self, latest_prices: Dict[str, float]) -> None:
+        """Consume AI-generated signals from the shared queue and submit them to the trading engine.
+
+        This bridges the main analysis pipeline with the paper trading system.
+        """
+        from src.paper_trading_signal_queue import get_signal_queue, AIAnalysisSignal
+        from paper_trading.strategies import Signal as V2Signal
+
+        signal_q = get_signal_queue()
+        if signal_q is None or signal_q.empty():
+            return
+
+        cfg = get_config()
+        # Only consume AI signals if enabled and we have relevant watched codes
+        if not getattr(cfg, "paper_trading_enable_ai_signal_source", False):
+            return
+
+        watched_codes_set = set(self.config.watched_codes)
+        for ai_signal in signal_q.pop_all():
+            # Filter by watched codes
+            if ai_signal.code not in watched_codes_set:
+                continue
+
+            # Skip if confidence threshold not met
+            if ai_signal.confidence < cfg.paper_trading_ai_signal_min_confidence:
+                continue
+
+            # Convert to internal Signal type
+            signal = V2Signal(
+                side=ai_signal.side,
+                code=ai_signal.code,
+                name=ai_signal.name,
+                strategy_name=ai_signal.strategy_name,
+                rule_name="ai_analysis_signal",
+                trigger_price=ai_signal.trigger_price,
+                suggested_quantity=ai_signal.suggested_quantity,
+                reason=f"AI分析置信度={ai_signal.confidence:.2f}: {ai_signal.reason}",
+            )
+
+            # Submit to engine
+            try:
+                result = self.engine.submit_signal(
+                    account_id=self.config.account_id,
+                    signal=signal,
+                )
+                logger.info(
+                    "[MarketListener] AI signal submitted: %s %s (confidence=%.2f) -> %s",
+                    ai_signal.side, ai_signal.code, ai_signal.confidence, result.status,
+                )
+            except Exception as exc:
+                logger.warning("[MarketListener] Failed to submit AI signal: %s", exc)
 
     # ------------------------------------------------------------------
     # P1-A / P0-C: Dynamic SL/TP and intraday position review
@@ -780,7 +835,8 @@ class MarketListener:
                 return df
 
         try:
-            df = self.fetcher.get_daily_data(code, days=60)
+            # Use unified multi-source data fetcher; get_daily_data is an alias for get_daily_historical in MultiSourceDataFetcher
+            df = self.fetcher.get_daily_historical(code, days=60)
         except Exception as exc:
             logger.debug(
                 "[MarketListener] get_daily_data failed for %s: %s", code, exc
@@ -1086,9 +1142,11 @@ def build_default_listener(
     # Lazy imports to keep module import cheap.
     from data_provider import DataFetcherManager
     from paper_trading.agent_risk import AgentRiskReviewer
+    from paper_trading import get_watched_codes as get_paper_traded_watchcodes
 
     if watched_codes is None:
-        watched_codes = list(getattr(config, "stock_list", []) or [])
+        # Use sync logic: respect paper_trading_sync_stock_list config and stock_list
+        watched_codes = get_paper_traded_watchcodes(account_id)
 
     if strategy_dir is None:
         # Default location — caller may create strategies here.
@@ -1109,7 +1167,17 @@ def build_default_listener(
             )
 
     if data_fetcher is None:
-        data_fetcher = DataFetcherManager()
+        from src.data_fetcher import MultiSourceDataFetcher
+        from src.config import get_config
+
+        cfg = get_config()
+        # Parse realtime_source_priority from config (comma-separated)
+        priority_list = [p.strip() for p in getattr(cfg, 'realtime_source_priority', '').split(',') if p.strip()]
+        if not priority_list:
+            # Use default order
+            priority_list = None
+
+        data_fetcher = MultiSourceDataFetcher(source_priority=priority_list, cache_ttl=30)
 
     if engine is None:
         engine = TradingEngine(

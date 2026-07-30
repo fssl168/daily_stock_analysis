@@ -1069,6 +1069,12 @@ class Config:
     portfolio_risk_lookback_days: int = 180
     portfolio_fx_update_enabled: bool = True
 
+    # 纸面交易风控参数对齐（P1-B）
+    # 最大同时持仓数量；与 paper_trading RiskConfig.max_open_positions 对齐
+    portfolio_max_open_positions: int = 8
+    # 单次买入最多使用现金百分比（0-100）；与 paper_trading RiskConfig.max_pct_cash_per_buy 对齐
+    portfolio_risk_max_cash_per_buy_pct: float = 50.0
+
     # Discord 机器人状态
     discord_bot_status: str = "A股智能分析 | /help"
 
@@ -1130,6 +1136,8 @@ class Config:
     paper_trading_strategy_dir: Optional[str] = None
     # Comma-separated watched codes for the listener. Empty -> use stock_list.
     paper_trading_watched_codes: List[str] = field(default_factory=list)
+    # If True, automatically sync with STOCK_LIST (main stock selection list) as the watched codes for paper trading.
+    paper_trading_sync_stock_list: bool = True
     # Comma-separated market list (cn/hk/us). Default ["cn"].
     paper_trading_markets: List[str] = field(default_factory=lambda: ["cn"])
 
@@ -1190,8 +1198,23 @@ class Config:
     # P3-C save markdown to disk before pushing notifications.
     paper_trading_save_markdown_before_push: bool = True
 
+    # Notification integration (P2-B) — unified vs dedicated channels
+    paper_trading_use_notification_service: bool = True          # Use global NotificationService by default
+    paper_trading_include_targeted_webhooks_when_using_ns: bool = False   # Also send dedicated lark/dingtalk even when NS is used
+    # 显式指定纸面交易通知渠道列表，逗号分隔；例如 "feishu,wechat,telegram,email,dingtalk"
+    # 留空时自动派生全局已配置的有效渠道
+    paper_trading_notification_channels: Optional[str] = None
+
     # Risk-control limits (Phase 2)
     paper_trading_max_daily_loss_pct: float = 0.05  # 0 disables
+
+    # --- AI signal source for paper trading (P1) ---
+    # Whether to push AI analysis results as trading signals to the paper trading listener
+    paper_trading_enable_ai_signal_source: bool = True
+    # Minimum confidence score for AI signals to be pushed (0.0-1.0)
+    paper_trading_ai_signal_min_confidence: float = 0.7
+    # Minimum cooldown between signals for the same stock (seconds), to avoid spamming
+    paper_trading_ai_signal_cooldown_seconds: float = 30.0
 
     # === 配置校验模式 ===
     # CONFIG_VALIDATE_MODE=warn (default): log all issues but always continue startup

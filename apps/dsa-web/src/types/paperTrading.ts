@@ -450,6 +450,61 @@ export interface ListenerControlResponse {
   message: string;
 }
 
+// ============ Backtest comparison (P3-F) ============
+
+export interface PaperTradingScenario {
+  accountId: number;
+  strategyName: string;
+  baseDate?: string;
+  startDate?: string;
+  endDate?: string;
+  initialCapital: number;
+  totalReturnPct: number;
+  maxDrawdownPct: number;
+  winRate: number;
+  tradeCount: number;
+  winCount: number;
+  lossCount: number;
+  netValueCurve: NetValuePoint[];
+  trades: Record<string, unknown>[];
+}
+
+export interface BacktestPaperComparisonMetric {
+  backtest?: number;
+  paper?: number;
+  delta?: number;
+}
+
+export interface BacktestPaperComparisonSampleSize {
+  backtestCompleted: number;
+  backtestLongSignals: number;
+  paperTrades: number;
+}
+
+export interface BacktestPaperComparisonMetrics {
+  winRatePct: BacktestPaperComparisonMetric;
+  totalReturnPct: BacktestPaperComparisonMetric;
+  maxDrawdownPct: Record<string, number | undefined>;
+  sampleSize: BacktestPaperComparisonSampleSize;
+}
+
+export interface BacktestPaperComparisonRequest {
+  strategyName: string;
+  backtestSummary?: Record<string, unknown>;
+  persistReflection?: boolean;
+}
+
+export interface BacktestPaperComparisonResponse {
+  accountId: number;
+  strategyName: string;
+  paperScenario: PaperTradingScenario;
+  backtestSummary: Record<string, unknown>;
+  metrics: BacktestPaperComparisonMetrics;
+  interpretation: string;
+  generatedAt: string;
+  reflectionPersisted?: boolean;
+}
+
 // ============ Daily report (P2-A) ============
 
 export interface DailyReportResponse {

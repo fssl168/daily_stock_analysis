@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] 纸面账户前端 CRUD：支持创建、切换、重命名、重置、删除纸面账户；后端新增 `PUT /accounts/{id}` 和 `DELETE /accounts/{id}` 端点。
 - [新功能] PM 决策接入纸面交易管线：后端新增 `POST /accounts/{id}/pm-decisions/{id}/execute` 将 pending 决策转化为真实订单，`POST /accounts/{id}/pm-decisions/{id}/ignore` 标记为 skipped；前端决策列表增加状态标签、执行/忽略按钮及联动刷新。
 - [修复] 修复认证中间件拦截 CORS 预检请求（OPTIONS）导致 `DELETE /api/v1/paper-trading/accounts/{id}` 等方法报“Method Not Allowed”的问题，允许 OPTIONS 请求透传到 CORS 中间件；新增回归测试 `test_cors_preflight_allowed_without_session`。
+- [新功能] AI 分析信号接入纸面交易：当 `paper_trading_enabled` 与 `paper_trading_enable_ai_signal_source` 开启且分析结果给出明确买卖建议、置信度达标时，自动将信号推送到 `AIAnalysisSignalQueue`。
+- [改进] 补齐 `portfolio_max_open_positions` 与 `portfolio_risk_max_cash_per_buy_pct` 配置字段，使 `paper_trading/risk_config_adapter.py` 的风控参数对齐可被用户显式配置。
+- [改进] 补齐 `paper_trading_notification_channels` 配置字段并在 `paper_trading/notification_integration.py` 中实现显式渠道白名单：配置后纸面交易通知仅通过指定的可用渠道发送，未配置时仍保持全局渠道广播行为。
+- [改进] PM Agent 决策上下文注入纸面交易绩效摘要（总收益、最大回撤、夏普、胜率、盈亏比等），提升 Agent 对账户历史表现的感知。
+- [新功能] 新增 `paper_trading/backtest_adapter.py` 回测-纸面交易闭环适配器，支持从纸面账户生成回测场景、对比回测与纸面表现，并将差异分析沉淀为复盘笔记；`BacktestEngine.run_with_paper_validation` 提供统一入口。
+- [新功能] WebUI 纸面交易页面新增「回测对比」标签页，支持生成回测场景、对比回测与纸面账户绩效差异，并将差异分析一键沉淀为复盘笔记（P3-F）。
+- [新功能] WebUI 个股分析报告页新增「PM 决策分析」面板，展示当前个股在纸面交易账户中的最新 PM 决策、置信度、理由与执行状态（P3-E）。
 
 ## [3.26.0] - 未发布
 

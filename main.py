@@ -1252,6 +1252,10 @@ def main() -> int:
         logger.exception("加载配置失败: %s", exc)
         return 1
 
+    # Initialize paper trading signal queue for AI analysis integration
+    from paper_trading.hooks import init_paper_trading_signal_queue
+    init_paper_trading_signal_queue(maxsize=1000)
+
     # 配置日志（输出到控制台和文件）
     try:
         _setup_runtime_logging(config.log_dir, debug=args.debug)

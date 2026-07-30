@@ -11,8 +11,14 @@ Real-time paper trading with:
 Public API surface re-exported here for convenience.
 """
 
+
+from typing import List, Optional, Dict, Any
+
 from paper_trading.account import PaperAccountManager, AccountSnapshot
 from paper_trading.agent_risk import AgentReviewResult, AgentRiskReviewer
+from paper_trading.backtest_adapter import (
+    PaperTradingScenario, PaperTradingToBacktestAdapter,
+    run_with_paper_validation, update_paper_trading_from_backtest, )
 from paper_trading.battle_plan import (
     BattlePlan, BattlePlanGenerator, CandidatePlan, HoldingPlan, build_battle_plan_generator, )
 from paper_trading.content_generator import (
@@ -42,7 +48,11 @@ from src.agent.portfolio_manager_agent import (  # noqa: E402
 
 __all__ = [
     # Account
-    "PaperAccountManager", "AccountSnapshot", # Agent risk review
+    "PaperAccountManager", "AccountSnapshot",
+    # Backtest-paper integration (P3-F)
+    "PaperTradingScenario", "PaperTradingToBacktestAdapter",
+    "run_with_paper_validation", "update_paper_trading_from_backtest",
+    # Agent risk review
     "AgentRiskReviewer", "AgentReviewResult", # Fees
     "FeeModel", "DEFAULT_FEE_MODEL", # Market listener (Phase 5)
     "MarketListener", "MarketListenerConfig", "build_default_listener", "is_market_open_now", # Orders
@@ -57,4 +67,32 @@ __all__ = [
     "BattlePlan", "BattlePlanGenerator", "HoldingPlan", "CandidatePlan", "build_battle_plan_generator", # Content generator (P2-A)
     "ContentGenerator", "DailyReportResult", "build_content_generator", # Notification integration (P2-B)
     "PaperTradingNotifier", "PushResult", "build_paper_trading_notifier", # Performance analytics (Phase 2)
-    "PerformanceAnalyzer", "PerformanceMetrics", "DrawdownRecord", "PerformanceConfig", ]
+    "PerformanceAnalyzer", "PerformanceMetrics", "DrawdownRecord", "PerformanceConfig",
+    # Stock list sync utility (P0)
+    "get_watched_codes",
+    # Hook functions for external integration (P1)
+    "hooks",
+]
+
+
+def get_watched_codes(account_id: int = 0) -> List[str]:
+    """获取纸面交易关注的股票代码，优先从 config 联动，其次从 env，最后默认空列表.
+
+    如果 paper_trading_sync_stock_list=True 且配置了 STOCK_LIST，则直接使用自选股列表；
+    否则使用显式配置的 paper_trading_watched_codes；如果两者都未设置，返回空列表。
+    """
+    from src.config import get_config
+    from src.services.stock_list_parser import split_stock_list
+
+    cfg = get_config()
+
+    # 1. 如果启用同步且自有自选股，直接使用
+    if cfg.paper_trading_sync_stock_list and cfg.stock_list:
+        return [c.upper().strip() for c in cfg.stock_list if c.strip()]
+
+    # 2. 否则使用显式配置的 watched_codes
+    if cfg.paper_trading_watched_codes:
+        return [c.upper().strip() for c in cfg.paper_trading_watched_codes]
+
+    # 3. 空兜底
+    return []

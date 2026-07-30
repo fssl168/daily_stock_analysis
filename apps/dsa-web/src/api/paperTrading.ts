@@ -5,6 +5,8 @@ import type {
   AccountListResponse,
   AccountSnapshotResponse,
   AccountUpdateRequest,
+  BacktestPaperComparisonRequest,
+  BacktestPaperComparisonResponse,
   BatchOrderCreateRequest,
   BatchOrderResponse,
   BattlePlanGenerateRequest,
@@ -24,6 +26,7 @@ import type {
   OrderListFilterParams,
   OrderListResponse,
   OrderModifyRequest,
+  PaperTradingScenario,
   PerformanceMetricsResponse,
   PMDecisionExecuteResponse,
   PMDecisionIgnoreRequest,
@@ -519,5 +522,40 @@ export const paperTradingApi = {
       `/api/v1/paper-trading/accounts/${accountId}/daily-report/${reportDate}`
     );
     return toCamelCase<DailyReportResponse>(response.data);
+  },
+
+  /**
+   * Generate a backtest-like scenario from paper-trading history (P3-F).
+   */
+  getBacktestScenario: async (
+    accountId: number,
+    strategyName = 'default'
+  ): Promise<PaperTradingScenario> => {
+    const response = await apiClient.get<Record<string, unknown>>(
+      `/api/v1/paper-trading/accounts/${accountId}/backtest-scenario`,
+      { params: { strategy_name: strategyName } }
+    );
+    return toCamelCase<PaperTradingScenario>(response.data);
+  },
+
+  /**
+   * Compare backtest engine output with the paper-trading account record (P3-F).
+   */
+  compareWithBacktest: async (
+    accountId: number,
+    params: BacktestPaperComparisonRequest
+  ): Promise<BacktestPaperComparisonResponse> => {
+    const body: Record<string, unknown> = {
+      strategy_name: params.strategyName,
+      persist_reflection: params.persistReflection ?? true,
+    };
+    if (params.backtestSummary) {
+      body.backtest_summary = params.backtestSummary;
+    }
+    const response = await apiClient.post<Record<string, unknown>>(
+      `/api/v1/paper-trading/accounts/${accountId}/backtest-comparison`,
+      body
+    );
+    return toCamelCase<BacktestPaperComparisonResponse>(response.data);
   },
 };

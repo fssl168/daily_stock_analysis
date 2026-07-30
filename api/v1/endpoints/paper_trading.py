@@ -38,6 +38,8 @@ from api.v1.schemas.paper_trading import (
     AccountListResponse,
     AccountSnapshotResponse,
     AccountUpdateRequest,
+    BacktestPaperComparisonRequest,
+    BacktestPaperComparisonResponse,
     BatchOrderCreateRequest,
     BatchOrderResponse,
     BattlePlanGenerateRequest,
@@ -60,6 +62,7 @@ from api.v1.schemas.paper_trading import (
     OrderListFilterParams,
     OrderListResponse,
     OrderModifyRequest,
+    PaperTradingScenario,
     PMDecisionExecuteResponse,
     PMDecisionIgnoreRequest,
     PMDecisionItem,
@@ -1943,3 +1946,144 @@ async def get_daily_report(
         )
     except Exception as exc:
         return DailyReportResponse(date=report_date, error=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Backtest comparison (P3-F)
+# ---------------------------------------------------------------------------
+
+
+def _paper_scenario_to_schema(scenario: Any) -> PaperTradingScenario:
+    """Serialize a PaperTradingScenario dataclass to the API schema."""
+    return PaperTradingScenario(
+        account_id=scenario.account_id,
+        strategy_name=scenario.strategy_name,
+        base_date=scenario.base_date.isoformat() if scenario.base_date else None,
+        start_date=scenario.start_date.isoformat() if scenario.start_date else None,
+        end_date=scenario.end_date.isoformat() if scenario.end_date else None,
+        initial_capital=scenario.initial_capital,
+        total_return_pct=scenario.total_return_pct,
+        max_drawdown_pct=scenario.max_drawdown_pct,
+        win_rate=scenario.win_rate,
+        trade_count=scenario.trade_count,
+        win_count=scenario.win_count,
+        loss_count=scenario.loss_count,
+        net_value_curve=scenario.net_value_curve,
+        trades=scenario.trades,
+    )
+
+
+@router.get(
+    "/accounts/{account_id}/backtest-scenario",
+    response_model=PaperTradingScenario,
+    responses={
+        200: {"description": "纸面交易场景"},
+        404: {"description": "账户不存在", "model": ErrorResponse},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="生成纸面交易回测场景",
+    description="将纸面账户历史打包为类回测场景，用于与回测结果对比",
+)
+def get_backtest_scenario(
+    account_id: int,
+    strategy_name: str = Query("default", description="策略名称"),
+    base_date: Optional[str] = Query(None, description="基准日期 ISO"),
+    db_manager: DatabaseManager = Depends(get_database_manager),
+) -> PaperTradingScenario:
+    """Build a backtest-like scenario from paper-trading history."""
+    account_mgr = PaperAccountManager(db_manager)
+    try:
+        account_mgr._get_account_by_id(account_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "message": f"账户 {account_id} 不存在"},
+        )
+    try:
+        from paper_trading.backtest_adapter import PaperTradingToBacktestAdapter
+
+        adapter = PaperTradingToBacktestAdapter(account_id, db_manager=db_manager)
+        scenario = adapter.generate_backtest_scenario(
+            strategy_name=strategy_name,
+            base_date=_parse_iso_date(base_date),
+        )
+        return _paper_scenario_to_schema(scenario)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("[paper_trading] backtest scenario failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "internal_error", "message": f"生成场景失败: {str(exc)}"},
+        )
+
+
+@router.post(
+    "/accounts/{account_id}/backtest-comparison",
+    response_model=BacktestPaperComparisonResponse,
+    responses={
+        200: {"description": "回测与纸面交易对比结果"},
+        400: {"description": "请求参数错误", "model": ErrorResponse},
+        404: {"description": "账户不存在或无回测汇总", "model": ErrorResponse},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="回测与纸面交易对比",
+    description="对比回测引擎输出与纸面账户实际表现，并可写入复盘笔记",
+)
+def compare_backtest_with_paper(
+    account_id: int,
+    request: BacktestPaperComparisonRequest,
+    db_manager: DatabaseManager = Depends(get_database_manager),
+) -> BacktestPaperComparisonResponse:
+    """Compare a backtest summary with the actual paper-trading record."""
+    account_mgr = PaperAccountManager(db_manager)
+    try:
+        account_mgr._get_account_by_id(account_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "message": f"账户 {account_id} 不存在"},
+        )
+
+    backtest_summary = request.backtest_summary
+    if backtest_summary is None:
+        from src.services.backtest_service import BacktestService
+
+        service = BacktestService(db_manager)
+        summary = service.get_summary(scope="overall")
+        if summary is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "message": "未找到整体回测汇总"},
+            )
+        backtest_summary = summary
+
+    try:
+        from paper_trading.backtest_adapter import run_with_paper_validation
+
+        result = run_with_paper_validation(
+            backtest_summary=backtest_summary,
+            strategy_name=request.strategy_name,
+            account_id=account_id,
+            db_manager=db_manager,
+            persist_reflection=request.persist_reflection,
+        )
+
+        return BacktestPaperComparisonResponse(
+            account_id=result["account_id"],
+            strategy_name=result["strategy_name"],
+            paper_scenario=_paper_scenario_to_schema(result["paper_scenario"]),
+            backtest_summary=result["backtest_summary"],
+            metrics=result["metrics"],
+            interpretation=result["interpretation"],
+            generated_at=result["generated_at"],
+            reflection_persisted=bool(result.get("reflection_persisted", False)),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("[paper_trading] backtest comparison failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "internal_error", "message": f"对比失败: {str(exc)}"},
+        )

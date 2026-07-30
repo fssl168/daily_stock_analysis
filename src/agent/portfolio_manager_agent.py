@@ -108,13 +108,17 @@ PM_USER_PROMPT_TEMPLATE = """## 当前账户快照
 
 {positions_summary}
 
+## 账户绩效摘要(基于历史净值与成交记录)
+
+{performance_summary}
+
 ## 最近复盘笔记(最多 3 条)
 
 {reflections_summary}
 
 ## 任务
 
-请基于以上信息和工具调用结果,做出一个交易决策。如果当前无明确信号,请输出 action="hold" 或 action="plan"。
+请基于以上信息、绩效摘要和工具调用结果,做出一个交易决策。如果当前无明确信号,请输出 action="hold" 或 action="plan"。
 """
 
 
@@ -323,10 +327,11 @@ class PortfolioManagerAgent:
         account_id: int,
         extra_context: Optional[Dict[str, Any]],
     ) -> str:
-        """Build the user message with current account state and reflections."""
+        """Build the user message with current account state, performance and reflections."""
         snapshot = self._fetch_account_snapshot(account_id)
         positions = self._fetch_positions_summary(account_id)
-        # Inject reflections via _inject_reflections (P0-E memory loop).
+        # Inject performance summary (P3-E) and reflections (P0-E memory loop).
+        performance = self._inject_performance_metrics(account_id)
         reflections = self._inject_reflections(account_id)
 
         net_value = float(snapshot.get("net_value", 1.0)) if snapshot else 1.0
@@ -341,6 +346,7 @@ class PortfolioManagerAgent:
             position_count=int(snapshot.get("position_count", 0)) if snapshot else 0,
             open_order_count=int(snapshot.get("open_order_count", 0)) if snapshot else 0,
             positions_summary=positions,
+            performance_summary=performance,
             reflections_summary=reflections,
         )
 
@@ -414,6 +420,39 @@ class PortfolioManagerAgent:
             return "\n".join(lines_list)
         except Exception as exc:
             return f"(复盘笔记查询失败: {exc})"
+
+    def _inject_performance_metrics(self, account_id: int) -> str:
+        """Inject paper-trading performance summary into decision context (P3-E).
+
+        Uses :class:`paper_trading.performance.PerformanceAnalyzer` to compute
+        account-level risk/return metrics from persisted net-value and trade
+        history.  Falls back to a friendly placeholder if the account has no
+        history or the analyzer is unavailable.
+        """
+        try:
+            from paper_trading.performance import PerformanceAnalyzer
+
+            analyzer = PerformanceAnalyzer()
+            metrics = analyzer.calculate(account_id)
+            if metrics.trade_count == 0:
+                return "(暂无成交记录,绩效指标待生成)"
+
+            lines = [
+                f"- 统计区间: {metrics.start_date or '-'} 至 {metrics.end_date or '-'}",
+                f"- 总收益率: {metrics.total_return_pct:.2f}%",
+                f"- 年化收益率: {metrics.annualized_return_pct:.2f}%",
+                f"- 最大回撤: {metrics.max_drawdown_pct:.2f}%",
+                f"- 夏普比率: {metrics.sharpe_ratio:.3f}" if metrics.sharpe_ratio is not None else "- 夏普比率: N/A",
+                f"- 胜率: {metrics.win_rate:.1f}%",
+                f"- 盈亏比: {metrics.profit_factor:.2f}" if metrics.profit_factor is not None else "- 盈亏比: N/A",
+                f"- 交易次数: {metrics.trade_count} (胜 {metrics.win_count} / 负 {metrics.loss_count})",
+            ]
+            return "\n".join(lines)
+        except Exception as exc:
+            logger.debug(
+                "[PortfolioManagerAgent] performance metrics injection failed: %s", exc
+            )
+            return f"(绩效摘要查询失败: {exc})"
 
     def _fetch_account_snapshot(self, account_id: int) -> Dict[str, Any]:
         """Fetch a lightweight account snapshot for the prompt.

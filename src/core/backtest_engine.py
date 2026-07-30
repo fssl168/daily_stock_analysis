@@ -478,6 +478,35 @@ class BacktestEngine:
             "diagnostics": diagnostics,
         }
 
+    @classmethod
+    def run_with_paper_validation(
+        cls,
+        backtest_summary: Dict[str, Any],
+        strategy_name: str,
+        paper_account_id: int = 1,
+        backtest_only: bool = False,
+        db_manager: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """Compare a backtest summary with the paper-trading account (P3-F).
+
+        This is a thin integration hook: the pure backtest engine stays
+        DB-agnostic, while the comparison logic lives in
+        ``paper_trading.backtest_adapter``.  Callers can use this method to
+        close the loop between simulated and actual performance.
+        """
+        if backtest_only:
+            return {"backtest": backtest_summary, "paper_scenario": None, "paper_comparison": None}
+
+        from paper_trading.backtest_adapter import run_with_paper_validation
+
+        return run_with_paper_validation(
+            backtest_summary=backtest_summary,
+            strategy_name=strategy_name,
+            account_id=int(paper_account_id),
+            db_manager=db_manager,
+            persist_reflection=True,
+        )
+
     @staticmethod
     def _normalize_text(value: Optional[str]) -> str:
         return str(value or "").strip().lower()

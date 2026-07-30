@@ -15,10 +15,13 @@ Two transport layers are supported and used in order:
   Use these when you want paper-trading notifications isolated from the main
   analysis notifications.
 - **Broadcast transport**: delegates to the existing
-  :class:`src.notification.NotificationService`, which already fans out to
-  every globally-configured channel (feishu/wechat/telegram/email/...). Used
-  only when ``PAPER_TRADING_BROADCAST_ENABLED=true``. When neither targeted
-  webhooks nor broadcast_enabled is configured, push methods return a
+  :class:`src.notification.NotificationService`, which fans out to the
+  globally-configured channels (feishu/wechat/telegram/email/...). When
+  ``PAPER_TRADING_NOTIFICATION_CHANNELS`` is set (e.g.
+  ``feishu,wechat,telegram,email,dingtalk``), only the requested and
+  available channels receive the message; otherwise every configured channel
+  is used. Used when ``PAPER_TRADING_USE_NOTIFICATION_SERVICE`` is enabled
+  (default True). When no channel is configured, push methods return a
   ``skipped`` :class:`PushResult`.
 
 Public API::
@@ -134,7 +137,11 @@ class PaperTradingNotifier:
             broadcast_enabled = bool(
                 getattr(config, "paper_trading_broadcast_enabled", False)
             )
-        self.broadcast_enabled = bool(broadcast_enabled)
+        # Map to unified flag; default to True if not explicitly set
+        use_ns = getattr(config, "paper_trading_use_notification_service", None)
+        if use_ns is None:
+            use_ns = broadcast_enabled
+        self._use_notification_service = bool(use_ns if use_ns is not None else True)
 
         self.lark_max_bytes = int(lark_max_bytes)
         self.dingtalk_max_bytes = int(dingtalk_max_bytes)
@@ -142,6 +149,18 @@ class PaperTradingNotifier:
         self.verify_ssl = bool(verify_ssl)
         self.save_before_push = bool(save_before_push)
         self.output_dir = output_dir
+
+        # Flag for whether to also send dedicated webhooks when using NotificationService
+        self._include_targeted_when_using_ns = bool(
+            getattr(config, "paper_trading_include_targeted_webhooks_when_using_ns", False)
+        )
+
+        # Explicit NotificationService channel allow-list (P2-D).
+        # e.g. "feishu,wechat,telegram,email,dingtalk" overrides the default
+        # "send to every configured channel" behavior.
+        self._notification_channels = self._parse_notification_channels(
+            getattr(config, "paper_trading_notification_channels", None)
+        )
 
         # Lazy-initialized broadcast service
         self._broadcast_service: Optional[Any] = None
@@ -267,65 +286,221 @@ class PaperTradingNotifier:
         markdown: str,
         content_type: str,
     ) -> List[PushResult]:
-        """Send to all configured channels.
+        """Send via unified NotificationService (preferred) and optionally targeted webhooks.
 
-        Order: dedicated lark -> dedicated dingtalk -> broadcast (if enabled).
+        Primary path: if use_notification_service is enabled (default True), send to all
+        globally-configured channels (feishu, wechat, telegram, email, etc.) through
+        NotificationService. This ensures paper-trading notifications are distributed
+        consistently with the main analysis system.
 
-        When neither targeted webhooks nor broadcast_enabled is configured,
-        returns a single ``skipped`` result so callers can distinguish
-        "nothing attempted" from "attempted but failed".
+        Secondary paths (backward compatible): if dedicated lark/dingtalk webhooks are
+        configured, they will also receive a copy of the message when
+        include_targeted_webhooks_when_using_ns is enabled (default False), preserving
+          isolated testing or fallback scenarios.
+
+        Results list includes one entry per attempted channel type.
         """
         results: List[PushResult] = []
 
-        if self.lark_webhook_url:
+        # --- Primary: Unified Notification Service ---
+        if self._use_notification_service:
             try:
-                ok = self._send_lark(header, markdown)
-                results.append(
-                    PushResult(channel="lark", success=ok, extra={"content_type": content_type})
-                )
+                service = self._get_broadcast_service()
+                if service is not None:
+                    results.extend(
+                        self._send_via_notification_service(
+                            service, header, markdown, content_type
+                        )
+                    )
+                else:
+                    logger.warning("NotificationService unavailable, skipping primary path")
             except Exception as exc:
-                logger.error("[PaperTradingNotifier] lark push failed: %s", exc)
+                logger.error("[PaperTradingNotifier] NotificationService push failed: %s", exc)
                 results.append(
-                    PushResult(channel="lark", success=False, error=str(exc),
-                               extra={"content_type": content_type})
+                    PushResult(
+                        channel="notification_service",
+                        success=False,
+                        error=str(exc),
+                        extra={"content_type": content_type},
+                    )
                 )
 
-        if self.dingtalk_webhook_url:
-            try:
-                ok = self._send_dingtalk(header, markdown)
-                results.append(
-                    PushResult(channel="dingtalk", success=ok,
-                               extra={"content_type": content_type})
-                )
-            except Exception as exc:
-                logger.error("[PaperTradingNotifier] dingtalk push failed: %s", exc)
-                results.append(
-                    PushResult(channel="dingtalk", success=False, error=str(exc),
-                               extra={"content_type": content_type})
-                )
+        # --- Secondary: Targeted webhooks (optional backward compat) ---
+        # Controlled by config: include_targeted_webhooks_when_using_ns
+        include_tgt = getattr(self.config, "paper_trading_include_targeted_webhooks_when_using_ns", False)
+        # Send targeted webhooks if user explicitly requested it OR if Notification Service is disabled
+        if include_tgt or not self._use_notification_service:
+            # Send lark if configured
+            if self.lark_webhook_url:
+                try:
+                    ok = self._send_lark(header, markdown)
+                    results.append(PushResult(channel="lark", success=ok, extra={"content_type": content_type}))
+                except Exception as exc:
+                    logger.error("[PaperTradingNotifier] lark push failed: %s", exc)
+                    results.append(PushResult(channel="lark", success=False, error=str(exc), extra={"content_type": content_type}))
 
-        if self.broadcast_enabled:
-            try:
-                ok = self._broadcast(markdown)
-                results.append(
-                    PushResult(channel="broadcast", success=ok,
-                               extra={"content_type": content_type})
-                )
-            except Exception as exc:
-                logger.error("[PaperTradingNotifier] broadcast failed: %s", exc)
-                results.append(
-                    PushResult(channel="broadcast", success=False, error=str(exc),
-                               extra={"content_type": content_type})
-                )
+            # Send dingtalk if configured
+            if self.dingtalk_webhook_url:
+                try:
+                    ok = self._send_dingtalk(header, markdown)
+                    results.append(PushResult(channel="dingtalk", success=ok, extra={"content_type": content_type}))
+                except Exception as exc:
+                    logger.error("[PaperTradingNotifier] dingtalk push failed: %s", exc)
+                    results.append(PushResult(channel="dingtalk", success=False, error=str(exc), extra={"content_type": content_type}))
 
         if not results:
-            logger.warning(
-                "[PaperTradingNotifier] no channels configured; skip %s", content_type
+            logger.warning("[PaperTradingNotifier] no channels configured; skip %s", content_type)
+            results.append(
+                PushResult(channel="skipped", success=False, error="no channels configured", extra={"content_type": content_type})
+            )
+
+        return results
+
+    # ------------------------------------------------------------------
+    # Broadcast transport (delegates to NotificationService)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_notification_channels(value: Optional[Any]) -> Optional[List[str]]:
+        """Parse a channel allow-list from config into normalized values.
+
+        Supports comma-separated string or list/tuple. Returns ``None`` when
+        the value is empty, so callers can fall back to the default behavior
+        (send to every configured channel).
+        """
+        if not value:
+            return None
+        if isinstance(value, str):
+            channels = [c.strip().lower() for c in value.split(",") if c.strip()]
+        elif isinstance(value, (list, tuple)):
+            channels = [str(c).strip().lower() for c in value if str(c).strip()]
+        else:
+            return None
+        return channels if channels else None
+
+    def _send_via_notification_service(
+        self,
+        service: Any,
+        header: str,
+        markdown: str,
+        content_type: str,
+    ) -> List[PushResult]:
+        """Send through NotificationService, honouring ``_notification_channels``.
+
+        When no explicit allow-list is configured, delegates to the unified
+        ``service.send(content)`` interface. When an allow-list exists, only
+        the requested and available channels receive the message.
+        """
+        results: List[PushResult] = []
+        content = f"{header}\n\n{markdown}"
+
+        if not self._notification_channels:
+            try:
+                success = bool(service.send(content))
+                results.append(
+                    PushResult(
+                        channel="notification_service",
+                        success=success,
+                        extra={"content_type": content_type},
+                    )
+                )
+            except Exception as exc:
+                logger.error(
+                    "[PaperTradingNotifier] NotificationService push failed: %s", exc
+                )
+                results.append(
+                    PushResult(
+                        channel="notification_service",
+                        success=False,
+                        error=str(exc),
+                        extra={"content_type": content_type},
+                    )
+                )
+            return results
+
+        # Explicit allow-list path (P2-D)
+        try:
+            available = {
+                ch.value: ch for ch in getattr(service, "get_available_channels", lambda: [])()
+            }
+            requested = [c for c in self._notification_channels if c in available]
+            invalid = [c for c in self._notification_channels if c not in available]
+            if invalid:
+                logger.warning(
+                    "[PaperTradingNotifier] requested channels not available: %s", invalid
+                )
+
+            if not requested:
+                logger.warning(
+                    "[PaperTradingNotifier] no requested channels available; configured: %s",
+                    list(available.keys()),
+                )
+                results.append(
+                    PushResult(
+                        channel="notification_service",
+                        success=False,
+                        error="no requested channels available",
+                        extra={"content_type": content_type},
+                    )
+                )
+                return results
+
+            method_map = {
+                "wechat": "send_to_wechat",
+                "dingtalk": "send_to_dingtalk",
+                "feishu": "send_to_feishu",
+                "telegram": "send_to_telegram",
+                "email": "send_to_email",
+                "pushover": "send_to_pushover",
+                "ntfy": "send_to_ntfy",
+                "gotify": "send_to_gotify",
+                "pushplus": "send_to_pushplus",
+                "serverchan3": "send_to_serverchan3",
+                "custom": "send_to_custom_webhook",
+                "discord": "send_to_discord",
+                "slack": "send_to_slack",
+                "astrbot": "send_to_astrbot",
+            }
+
+            for ch in requested:
+                method_name = method_map.get(ch)
+                if not method_name or not hasattr(service, method_name):
+                    logger.warning("[PaperTradingNotifier] unsupported channel: %s", ch)
+                    results.append(
+                        PushResult(
+                            channel=ch,
+                            success=False,
+                            error="unsupported channel",
+                            extra={"content_type": content_type},
+                        )
+                    )
+                    continue
+                try:
+                    ok = bool(getattr(service, method_name)(content))
+                    results.append(
+                        PushResult(channel=ch, success=ok, extra={"content_type": content_type})
+                    )
+                except Exception as exc:
+                    logger.error("[PaperTradingNotifier] %s push failed: %s", ch, exc)
+                    results.append(
+                        PushResult(
+                            channel=ch,
+                            success=False,
+                            error=str(exc),
+                            extra={"content_type": content_type},
+                        )
+                    )
+        except Exception as exc:
+            logger.error(
+                "[PaperTradingNotifier] filtered NotificationService push failed: %s", exc
             )
             results.append(
-                PushResult(channel="skipped", success=False,
-                           error="no channels configured",
-                           extra={"content_type": content_type})
+                PushResult(
+                    channel="notification_service",
+                    success=False,
+                    error=str(exc),
+                    extra={"content_type": content_type},
+                )
             )
 
         return results

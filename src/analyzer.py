@@ -16,6 +16,7 @@ import math
 import re
 import time
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Optional, Dict, Any, List, Tuple, Callable
 
 import litellm
@@ -1857,6 +1858,98 @@ def populate_decision_action_fields(
     return result
 
 
+def _map_analysis_result_to_signal_side(result: "AnalysisResult") -> Optional[str]:
+    """将 AnalysisResult 的决策字段映射为纸面交易信号 side (buy/sell/hold).
+
+    优先使用已经归一化的 decision_type，其次看 operation_advice / action。
+    仅当 side 为 buy 或 sell 时才推送信号，hold 不产生信号。
+    """
+    decision_type = str(getattr(result, "decision_type", "") or "").strip().lower()
+    if decision_type in ("buy", "sell"):
+        return decision_type
+    if decision_type == "hold":
+        return None
+
+    operation_advice = str(getattr(result, "operation_advice", "") or "").strip().lower()
+    if any(kw in operation_advice for kw in ("买入", "加仓", "strong buy", "buy", "add")):
+        return "buy"
+    if any(kw in operation_advice for kw in ("卖出", "减仓", "清仓", "strong sell", "sell", "reduce")):
+        return "sell"
+
+    action = str(getattr(result, "action", "") or "").strip().lower()
+    if action in ("buy", "add"):
+        return "buy"
+    if action in ("sell", "reduce"):
+        return "sell"
+
+    return None
+
+
+def _map_confidence_level_to_score(confidence_level: Optional[str]) -> float:
+    """把置信度文字映射为 0-1 数值，用于信号队列过滤."""
+    level = str(confidence_level or "中").strip().lower()
+    if level in ("高", "high"):
+        return 0.85
+    if level in ("低", "low"):
+        return 0.35
+    return 0.60
+
+
+def _push_ai_signal_to_paper_trading(result: "AnalysisResult") -> None:
+    """如果启用纸面交易 AI 信号源，把分析结果推送到信号队列.
+
+    失败时只记录 debug 日志，不影响主分析流程。
+    """
+    try:
+        from src.config import get_config
+        cfg = get_config()
+    except Exception as exc:
+        logger.debug("[analyzer] skip AI signal push: config unavailable: %s", exc)
+        return
+
+    if not getattr(cfg, "paper_trading_enabled", False):
+        return
+    if not getattr(cfg, "paper_trading_enable_ai_signal_source", False):
+        return
+
+    side = _map_analysis_result_to_signal_side(result)
+    if side not in ("buy", "sell"):
+        return
+
+    confidence = _map_confidence_level_to_score(getattr(result, "confidence_level", None))
+    min_confidence = float(getattr(cfg, "paper_trading_ai_signal_min_confidence", 0.7))
+    if confidence < min_confidence:
+        logger.debug(
+            "[analyzer] AI signal confidence %.2f below threshold %.2f for %s, skip",
+            confidence, min_confidence, result.code,
+        )
+        return
+
+    trigger_price = getattr(result, "current_price", None) or 0.0
+    if trigger_price <= 0:
+        # 如果 result 没有 current_price，尝试从 market_snapshot 兜底
+        snapshot = getattr(result, "market_snapshot", None) or {}
+        trigger_price = float(snapshot.get("price") or snapshot.get("close") or 0.0)
+    if trigger_price <= 0:
+        logger.debug("[analyzer] skip AI signal for %s: no valid price", result.code)
+        return
+
+    try:
+        from paper_trading.hooks import push_ai_signal_from_decision
+        decision = SimpleNamespace(
+            code=result.code,
+            side=side,
+            name=result.name,
+            trigger_price=float(trigger_price),
+            suggested_quantity=None,
+            reason=result.get_core_conclusion() or result.analysis_summary or f"AI分析 {side} 信号",
+            confidence=float(confidence),
+        )
+        push_ai_signal_from_decision(decision)
+    except Exception as exc:
+        logger.debug("[analyzer] failed to push AI signal for %s: %s", result.code, exc)
+
+
 class GeminiAnalyzer:
     """
     Gemini AI 分析器
@@ -3637,8 +3730,11 @@ class GeminiAnalyzer:
 
             logger.info(f"[LLM解析] {name}({code}) 分析完成: {result.trend_prediction}, 评分 {result.sentiment_score}")
 
+            # P1-A: 将 AI 分析结果作为信号推送给纸面交易子系统（失败不阻塞主流程）
+            _push_ai_signal_to_paper_trading(result)
+
             return result
-            
+
         except Exception as e:
             safe_error = self._sanitize_hermes_exception_text(e)
             logger.error("AI 分析 %s(%s) 失败: %s", name, code, safe_error)

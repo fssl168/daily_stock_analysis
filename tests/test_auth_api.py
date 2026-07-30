@@ -297,7 +297,10 @@ class AuthApiTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         call_next.assert_awaited_once()
 
-    def test_auth_settings_requires_session_when_auth_enabled(self) -> None:
+    def test_auth_settings_bypasses_middleware_when_auth_enabled(self) -> None:
+        """auth/settings is exempt from middleware because the endpoint has its own
+        currentPassword / session verification logic. Without this exemption, users
+        cannot disable auth when their session has expired."""
         scope = {
             "type": "http",
             "method": "POST",
@@ -311,11 +314,14 @@ class AuthApiTestCase(unittest.TestCase):
         }
         request = Request(scope)
         middleware = AuthMiddleware(app=MagicMock())
+        next_response = Response(status_code=200)
+        call_next = AsyncMock(return_value=next_response)
 
         with patch("api.middlewares.auth.is_auth_enabled", return_value=True):
-            response = asyncio.run(middleware.dispatch(request, AsyncMock(return_value=Response(status_code=200))))
+            response = asyncio.run(middleware.dispatch(request, call_next))
 
-        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.status_code, 200)
+        call_next.assert_awaited_once()
 
     def test_auth_settings_is_reachable_when_auth_disabled(self) -> None:
         scope = {

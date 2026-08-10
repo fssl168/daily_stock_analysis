@@ -32,6 +32,8 @@ from sqlalchemy import desc, select
 
 from api.deps import get_config_dep, get_database_manager
 from api.v1.schemas.common import ErrorResponse
+from starlette.requests import Request
+from src.permissions import check_paper_trading_account_access
 from api.v1.schemas.paper_trading import (
     AccountCreateRequest,
     AccountListItem,
@@ -45,6 +47,7 @@ from api.v1.schemas.paper_trading import (
     BattlePlanGenerateRequest,
     BattlePlanItem,
     BattlePlanMarkdownResponse,
+    BreakerStatusResponse,
     ConditionalOrderCreateRequest,
     ConditionalOrderItem,
     DailyReflectionRequest,
@@ -616,9 +619,9 @@ def _candidate_dict_to_item(c: Dict[str, Any]) -> Any:
     },
     summary="List paper trading accounts",
 )
-def list_accounts(
-    service: PaperTradingService = Depends(get_paper_trading_service),
-) -> AccountListResponse:
+def list_accounts(request: Request, service: PaperTradingService = Depends(get_paper_trading_service)):
+    # Check user has permission to access paper trading accounts
+    check_paper_trading_account_access(request)
     try:
         mgr = service.account_mgr()
         rows = mgr.list_accounts()
@@ -2089,3 +2092,37 @@ def compare_backtest_with_paper(
             status_code=500,
             detail={"error": "internal_error", "message": f"对比失败: {str(exc)}"},
         )
+
+# ---------------------------------------------------------------------------
+# Breaker status (integration ①)
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/accounts/{account_id}/breaker/status",
+    response_model=BreakerStatusResponse,
+    summary="Get circuit breaker status for an account",
+)
+def get_breaker_status(
+    account_id: int,
+    service: PaperTradingService = Depends(get_paper_trading_service),
+) -> BreakerStatusResponse:
+    """Return the current circuit breaker state (SOFT/HARD/LIQUIDATION)."""
+    try:
+        engine = service.engine()
+        breaker = getattr(engine, "circuit_breaker", None)
+        if breaker is None:
+            return BreakerStatusResponse(
+                account_id=account_id, level="normal",
+                can_trade=True, can_open_new=True, reason="breaker not configured",
+            )
+        return BreakerStatusResponse(
+            account_id=account_id,
+            level=breaker.state.level.value,
+            can_trade=breaker.allow_any_trade(),
+            can_open_new=breaker.allow_new_position(),
+            reason=breaker.state.reason or "normal",
+            triggered_at=breaker.state.triggered_at.isoformat() if breaker.state.triggered_at else None,
+        )
+    except Exception as exc:
+        logger.error("[paper_trading] breaker status failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))

@@ -661,3 +661,16 @@ class DailyReportResponse(BaseModel):
     voice_path: Optional[str] = Field(None, description="Saved voice script path")
     used_fallback: bool = Field(False, description="Whether fallback narrative was used")
     error: Optional[str] = Field(None, description="Error message if generation failed")
+
+# ---------------------------------------------------------------------------
+# Breaker status (integration ①)
+# ---------------------------------------------------------------------------
+
+class BreakerStatusResponse(BaseModel):
+    """Circuit breaker state for frontend consumption."""
+    account_id: int = Field(..., description="Account ID")
+    level: str = Field("normal", description="Breaker level: normal/soft/hard/liquidate")
+    can_trade: bool = Field(True, description="Whether any trade is allowed")
+    can_open_new: bool = Field(True, description="Whether new positions can be opened")
+    reason: str = Field("", description="Breaker reason if engaged")
+    triggered_at: Optional[str] = Field(None, description="ISO timestamp of trigger")

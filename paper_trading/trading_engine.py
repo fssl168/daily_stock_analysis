@@ -100,6 +100,7 @@ class TradingEngine:
         agent_reviewer: Optional[AgentRiskReviewer] = None,
         sltp_calculator: Optional[Any] = None,
         enable_auto_sltp: bool = True,
+        circuit_breaker: Optional[Any] = None,  # ① T2 integration
         on_trade_executed: Optional[Any] = None,
         on_signal_rejected: Optional[Any] = None,
     ):
@@ -136,6 +137,32 @@ class TradingEngine:
         # pipeline never breaks.
         self._on_trade_executed = on_trade_executed
         self._on_signal_rejected = on_signal_rejected
+
+        # T18-A: Pre-trade RMS (Risk Management System) — delegated risk checks
+        from paper_trading.rms_mgmt import RiskManagementSystem
+
+        self.rms = RiskManagementSystem(
+            risk_checker=self.risk,
+            account_manager=self.account_mgr,
+            position_manager=self.position_mgr,
+            agent_reviewer=self.agent_reviewer,
+        )
+
+        # T18-B: OMS (Order Management System) — delegated order lifecycle
+        from paper_trading.oms_mgmt import OrderManagementSystem
+
+        self.oms = OrderManagementSystem(
+            order_mgr=self.order_mgr,
+            account_mgr=self.account_mgr,
+            position_mgr=self.position_mgr,
+            fee_model=self.fee_model,
+        )
+
+        # ① CircuitBreaker (T2 integration) — optional, defaults to disabled
+        if circuit_breaker is not None:
+            self.circuit_breaker = circuit_breaker
+        else:
+            self.circuit_breaker = None
 
     # ------------------------------------------------------------------
     # Signal submission
@@ -203,16 +230,14 @@ class TradingEngine:
         else:
             ref_price = float(signal.trigger_price)
 
-        # Run risk checks.
-        if side == "buy":
-            decisions = self.risk.check_buy(account_id, signal.code, ref_price, quantity)
-        else:
-            decisions = self.risk.check_sell(account_id, signal.code, ref_price, quantity)
-        overall = self.risk.evaluate(decisions)
+        # Run risk checks (delegated to RMS — T18-A).
+        risk_result = self.rms.pre_trade_check(
+            account_id, signal.code, ref_price, quantity, side
+        )
 
-        if not overall.passed:
+        if not risk_result.passed:
             self._update_signal_status(
-                signal_id, "rejected", reason=overall.reason
+                signal_id, "rejected", reason=risk_result.reason
             )
             return TradeResult(
                 signal_id=signal_id,
@@ -223,57 +248,35 @@ class TradingEngine:
                 fill_price=None,
                 fill_quantity=None,
                 fee=None,
-                reason=overall.reason,
-                risk_decisions=[d.to_dict() for d in decisions],
+                reason=risk_result.reason,
+                risk_decisions=risk_result.risk_decisions,
             )
 
-        # Optional Agent risk-control review (Phase 4).
-        # When agent_reviewer is configured, the signal is sent to the agent
-        # for a yes/no confirmation. A veto rejects the signal before any
-        # order is created. The verdict is persisted to PaperSignal for audit.
-        agent_review_dict: Optional[Dict[str, Any]] = None
-        if self.agent_reviewer is not None:
-            try:
-                account_snap = self.account_mgr.snapshot(account_id)
-                position_row = self.position_mgr.get_position(account_id, signal.code)
-                verdict = self.agent_reviewer.review_signal(
-                    signal=signal,
-                    account_snapshot=account_snap,
-                    position=position_row,
-                )
-                agent_review_dict = verdict.to_dict()
-                self._persist_agent_verdict(signal_id, verdict)
-            except Exception as exc:
-                # Reviewer raised despite its own fallback (e.g., fallback disabled).
-                logger.error(
-                    "Agent review raised for signal=%s code=%s: %s",
-                    signal_id, signal.code, exc, exc_info=True,
-                )
-                agent_review_dict = {
-                    "approved": False,
-                    "reason": f"agent review raised: {exc}",
-                    "used_fallback": True,
-                    "error": str(exc),
-                }
-                verdict = AgentReviewResult(
-                    approved=False,
-                    reason=f"agent review raised: {exc}",
-                    error=str(exc),
-                    used_fallback=True,
-                )
-                self._persist_agent_verdict(signal_id, verdict)
+        # Optional Agent risk-control review (delegated to RMS — T18-A).
+        # Verdict is persisted to PaperSignal for audit.
+        agent_review_dict: Optional[Dict[str, Any]] = self.rms.agent_review(
+            account_id, signal=signal,
+        )
 
-            # P0-C / R2: Map agent verdict to order actions (cancel/sell/modify).
+        # P0-C / R2: Map agent verdict to order actions (cancel/sell/modify).
+        if agent_review_dict is not None:
+            from paper_trading.agent_risk import AgentReviewResult
+            verdict = AgentReviewResult(
+                approved=agent_review_dict.get("approved", False),
+                reason=agent_review_dict.get("reason", ""),
+                error=agent_review_dict.get("error", ""),
+                used_fallback=agent_review_dict.get("used_fallback", False),
+            )
             self._maybe_trigger_order_action(account_id, verdict, signal)
 
-            if not verdict.approved:
+            if not agent_review_dict.get("approved", True):
                 self._update_signal_status(
                     signal_id, "rejected",
-                    reason=f"agent veto: {verdict.reason}",
+                    reason=f"agent veto: {agent_review_dict.get('reason', '')}",
                 )
                 logger.info(
                     "Signal vetoed by agent: signal_id=%s code=%s reason=%s",
-                    signal_id, signal.code, verdict.reason,
+                    signal_id, signal.code, agent_review_dict.get("reason", ""),
                 )
                 return TradeResult(
                     signal_id=signal_id,
@@ -284,70 +287,83 @@ class TradingEngine:
                     fill_price=None,
                     fill_quantity=None,
                     fee=None,
-                    reason=f"agent veto: {verdict.reason}",
-                    risk_decisions=[d.to_dict() for d in decisions],
+                    reason=f"agent veto: {agent_review_dict.get('reason', '')}",
+                    risk_decisions=risk_result.risk_decisions,
                     agent_review=agent_review_dict,
                 )
 
-        # Create the order.
-        order_req = OrderRequest(
+        # ① CircuitBreaker check (T2 integration) — after RMS, before OMS.
+        if self.circuit_breaker is not None:
+            account = self.account_mgr.snapshot(account_id)
+            breaker_state = self.circuit_breaker.evaluate(
+                current_pnl=account.total_assets - account.initial_capital
+                    if hasattr(account, 'initial_capital') else 0.0,
+                initial_capital=getattr(account, 'initial_capital', account.total_assets),
+            )
+            if not self.circuit_breaker.allow_any_trade():
+                return TradeResult(
+                    signal_id=signal_id, order_id=None, side=side,
+                    code=signal.code, status="rejected",
+                    reason=f"breaker: {breaker_state.reason}",
+                    risk_decisions=risk_result.risk_decisions,
+                    agent_review=agent_review_dict,
+                )
+            if side == "buy" and not self.circuit_breaker.allow_new_position():
+                return TradeResult(
+                    signal_id=signal_id, order_id=None, side=side,
+                    code=signal.code, status="rejected",
+                    reason=f"breaker(soft): new positions blocked",
+                    risk_decisions=risk_result.risk_decisions,
+                    agent_review=agent_review_dict,
+                )
+
+        # Create and execute the order via OMS (T18-B).
+        from paper_trading.oms_mgmt import OrderParams
+
+        oms_params = OrderParams(
             account_id=account_id,
             code=signal.code,
-            side=OrderSide(side),
+            side=side,
             quantity=quantity,
             order_type=order_type,
-            price=limit_price if order_type == OrderType.LIMIT else None,
-            name=signal.name,
-            strategy_name=signal.strategy_name,
+            limit_price=limit_price if order_type == OrderType.LIMIT else None,
+            ref_price=ref_price,
             signal_id=signal_id,
-            reason=signal.reason,
+            signal=signal,
+            risk_decisions=risk_result.risk_decisions,
+            agent_review=agent_review_dict,
         )
-        order = self.order_mgr.create_order(order_req)
-        order_id = order.id
 
-        # Execute based on order type.
         if order_type == OrderType.MARKET:
-            return self._execute_market_order(
-                account_id=account_id,
-                order_id=order_id,
-                side=side,
-                code=signal.code,
-                name=signal.name,
-                ref_price=ref_price,
-                quantity=quantity,
-                signal_id=signal_id,
-                risk_decisions=decisions,
-                agent_review=agent_review_dict,
-            )
+            order_result = self.oms.create_order(oms_params)
+            if order_result.order_id is None:
+                return order_result  # creation failed
+            oms_params.order_id = order_result.order_id
+            trade_result = self.oms.execute_market(order_result.order_id, oms_params)
+            self._update_signal_status(signal_id, trade_result.status,
+                                       reason=trade_result.reason)
+            self._apply_sltp_to_position(account_id, signal.code, oms_params.ref_price)
+            if trade_result.status == "filled":
+                self._fire_callback(self._on_trade_executed, trade_result,
+                                    trade_id=getattr(trade_result, 'trade_id', None))
+            else:
+                self._fire_callback(self._on_signal_rejected, trade_result)
+            return trade_result
 
-        # Limit order: freeze cash for buys and wait for matcher.
-        if side == "buy":
-            eff_price = limit_price or ref_price
-            estimated_cost = self.fee_model.estimate_buy_cost(eff_price, quantity)
-            try:
-                self.account_mgr.freeze_cash(account_id, estimated_cost)
-            except ValueError as exc:
-                # Freeze failed (e.g., cash became insufficient between check and freeze).
-                self.order_mgr.reject_order(order_id, reason=f"freeze failed: {exc}")
-                self._update_signal_status(signal_id, "rejected", reason=str(exc))
-                return TradeResult(
-                    signal_id=signal_id,
-                    order_id=order_id,
-                    side=side,
-                    code=signal.code,
-                    status="rejected",
-                    fill_price=None,
-                    fill_quantity=None,
-                    fee=None,
-                    reason=f"freeze failed: {exc}",
-                    risk_decisions=[d.to_dict() for d in decisions],
-                    agent_review=agent_review_dict,
-                )
+        # Limit order: handle via OMS.
+        order_result = self.oms.create_order(oms_params)
+        if order_result.order_id is None:
+            return order_result
+        oms_params.order_id = order_result.order_id
+        limit_reject = self.oms.handle_limit(order_result.order_id, oms_params)
+        if limit_reject is not None:
+            self._update_signal_status(signal_id, "rejected", reason=limit_reject.reason)
+            return limit_reject
 
         self._update_signal_status(signal_id, "pending", reason="limit order awaiting match")
         return TradeResult(
             signal_id=signal_id,
-            order_id=order_id,
+            order_id=order_result.order_id,
             side=side,
             code=signal.code,
             status="pending",
@@ -355,7 +371,7 @@ class TradingEngine:
             fill_quantity=None,
             fee=None,
             reason="limit order pending",
-            risk_decisions=[d.to_dict() for d in decisions],
+            risk_decisions=risk_result.risk_decisions,
             agent_review=agent_review_dict,
         )
 

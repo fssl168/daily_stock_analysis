@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { paperTradingApi } from '../api/paperTrading';
 import { Card, Badge } from '../components/common';
 import { BacktestComparisonPanel } from '../components/paper-trading';
+import { BreakerStatusBadge } from '../components/paper-trading/BreakerStatusBadge';
+import { HealthDashboard } from '../components/paper-trading/HealthDashboard';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { formatUiText } from '../i18n/uiText';
 import type {
@@ -2186,6 +2188,10 @@ const PaperTradingPage: React.FC = () => {
               <p className="mt-3 text-xs text-muted">{t('paperTrading.loadingAccount')}</p>
             )}
           </Card>
+
+          {/* Breaker status + System health (integration batch) */}
+          <BreakerStatusBadge accountId={accountId} />
+          <HealthDashboard />
 
           {/* Net value curve */}
           <Card variant="gradient" padding="md">

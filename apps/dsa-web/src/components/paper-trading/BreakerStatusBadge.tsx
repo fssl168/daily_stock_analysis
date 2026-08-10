@@ -25,19 +25,17 @@ export function BreakerStatusBadge({ accountId, className = "" }: Props) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(false);
+    const cancelled = { current: false };
     const fetch = () => {
       paperTradingApi
         .getBreakerStatus(accountId)
-        .then((s) => { if (!cancelled) { setStatus(s); setError(false); } })
-        .catch(() => { if (!cancelled) setError(true); })
-        .finally(() => { if (!cancelled) setLoading(false); });
+        .then((s) => { if (!cancelled.current) { setStatus(s); setError(false); } })
+        .catch(() => { if (!cancelled.current) setError(true); })
+        .finally(() => { if (!cancelled.current) setLoading(false); });
     };
     fetch();
     const timer = setInterval(fetch, 30_000);
-    return () => { cancelled = true; clearInterval(timer); };
+    return () => { cancelled.current = true; clearInterval(timer); };
   }, [accountId]);
 
   if (loading && !status) {

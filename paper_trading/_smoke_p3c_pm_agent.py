@@ -214,7 +214,7 @@ def main() -> int:
     # --- Test 2: Execute the decision via TradingEngine ---
     # Use a cheap stock so 1000 CNY can buy 50 shares. We'll use code "600519"
     # but with a low price to satisfy risk checks.
-    from strategies_v2.rule_engine import Signal
+    from paper_trading.strategies.engine.rule_engine import Signal
 
     signal = Signal(
         side="buy",

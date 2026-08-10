@@ -31,7 +31,6 @@ import logging
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -157,29 +156,47 @@ DAILY_REFLECTION_PROMPT_TEMPLATE = """## 每日复盘请求
 class ReflectionNote:
     """Structured reflection note returned by the reflection engine."""
 
-    scope: str  # trade / daily / weekly / adhoc
-    subject: str = ""
-    summary: str = ""
-    takeaway: str = ""
-    lessons: List[str] = field(default_factory=list)
-    tags: List[str] = field(default_factory=list)
-    mood: str = "neutral"  # good / bad / neutral
-    raw_response: Optional[str] = None
-    error: Optional[str] = None
-    elapsed_seconds: float = 0.0
-    used_fallback: bool = False
-    # Optional related entity IDs.
-    account_id: Optional[int] = None
-    trade_id: Optional[int] = None
-    order_id: Optional[int] = None
-    signal_id: Optional[int] = None
-    code: Optional[str] = None
-    # Row id after persistence (set by _persist_note).
-    row_id: Optional[int] = None
-    # Timestamp the note was created (set on persistence / row_to_note).
-    created_at: Optional[datetime] = None
-    # P0-C: Agent action from verdict (e.g., cancel, sell, modify, hold, approve).
-    agent_action: Optional[str] = None
+    def __init__(
+        self,
+        scope: str = "",
+        subject: str = "",
+        summary: str = "",
+        takeaway: str = "",
+        lessons: Optional[List[str]] = None,
+        tags: Optional[List[str]] = None,
+        mood: str = "neutral",
+        raw_response: Optional[str] = None,
+        error: Optional[str] = None,
+        elapsed_seconds: float = 0.0,
+        used_fallback: bool = False,
+        account_id: Optional[int] = None,
+        trade_id: Optional[int] = None,
+        order_id: Optional[int] = None,
+        signal_id: Optional[int] = None,
+        code: Optional[str] = None,
+        row_id: Optional[int] = None,
+        created_at: Optional[datetime] = None,
+        agent_action: Optional[str] = None,
+    ):
+        self.scope = scope
+        self.subject = subject
+        self.summary = summary
+        self.takeaway = takeaway
+        self.lessons = list(lessons or [])
+        self.tags = list(tags or [])
+        self.mood = mood
+        self.raw_response = raw_response
+        self.error = error
+        self.elapsed_seconds = elapsed_seconds
+        self.used_fallback = used_fallback
+        self.account_id = account_id
+        self.trade_id = trade_id
+        self.order_id = order_id
+        self.signal_id = signal_id
+        self.code = code
+        self.row_id = row_id
+        self.created_at = created_at
+        self.agent_action = agent_action
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -294,11 +311,12 @@ def build_reflection_engine(
 def _compute_note_score(note, now, target_code=None):
     """Compute score = time_decay * quality * relevance * outcome_weight (P0-E)."""
     from datetime import timedelta
-    
+    import math
+
     # Time decay: exp(-delta_days / 7), half-life = 7 days
     if note.created_at:
         delta_days = (now - note.created_at).total_seconds() / 86400.0
-        decay = float('exp(-delta_days / 7.0)')
+        decay = math.exp(-delta_days / 7.0)
         decay = max(decay, 0.1)
     else:
         decay = 1.0
@@ -320,7 +338,11 @@ def _compute_note_score(note, now, target_code=None):
     
     # Outcome weight from mood and tags
     mood = note.mood or 'neutral'
-    tags = (note.tags or '').lower()
+    raw_tags = note.tags or []
+    if isinstance(raw_tags, str):
+        tags = raw_tags.lower()
+    else:
+        tags = " ".join(str(t) for t in raw_tags).lower()
     good = ['win','profit','gain','success','good','outperform']
     bad = ['loss','fail','mistake','bad','underperform','stop']
     g_count = sum(1 for k in good if k in tags)
@@ -524,6 +546,270 @@ class ReflectionEngine:
             return None
 
     # ------------------------------------------------------------------
+    # Trade retrieval helper
+    # ------------------------------------------------------------------
+
+    def _fetch_trade(self, trade_id: int):
+        """Fetch a PaperTrade row by id, or None when not found.
+
+        Returns a simple object (not a SQLAlchemy ORM instance) so all
+        attribute reads work after the session closes.
+        """
+        from types import SimpleNamespace
+
+        with self.db.session_scope() as session:
+            stmt = select(PaperTrade).where(PaperTrade.id == trade_id)
+            row = session.execute(stmt).scalars().first()
+            if row is None:
+                return None
+            # Snapshot all fields eagerly to avoid DetachedInstanceError.
+            return SimpleNamespace(
+                id=row.id,
+                account_id=row.account_id,
+                order_id=row.order_id,
+                code=row.code,
+                name=row.name,
+                side=row.side,
+                price=row.price,
+                quantity=row.quantity,
+                amount=row.amount,
+                fee=row.fee,
+                traded_at=row.traded_at,
+            )
+
+    # ------------------------------------------------------------------
+    # Prompt builders
+    # ------------------------------------------------------------------
+
+    def _build_trade_reflection_prompt(
+        self,
+        trade,
+        account_id: int,
+        decision_context: str = "",
+    ) -> str:
+        """Build the LLM prompt for reflecting on a single trade."""
+        positions_summary = self._positions_summary(account_id)
+        return TRADE_REFLECTION_PROMPT_TEMPLATE.format(
+            account_id=account_id,
+            trade_id=getattr(trade, "id", ""),
+            code=getattr(trade, "code", ""),
+            name=getattr(trade, "name", "") or "",
+            side=getattr(trade, "side", ""),
+            fill_price=float(getattr(trade, "price", 0) or 0),
+            fill_quantity=float(getattr(trade, "quantity", 0) or 0),
+            fill_amount=float(getattr(trade, "amount", 0) or 0),
+            fee=float(getattr(trade, "fee", 0) or 0),
+            traded_at=getattr(trade, "traded_at", "") or "",
+            decision_context=decision_context or "(无决策背景)",
+            positions_summary=positions_summary,
+        )
+
+    def _build_daily_reflection_prompt(
+        self,
+        account_id: int,
+        review_date,
+    ) -> str:
+        """Build the LLM prompt for end-of-day reflection."""
+        try:
+            snap = self.trading_engine.account_mgr.snapshot(account_id)
+            start_assets = float(getattr(snap, "initial_capital", 0) or 0)
+            end_assets = float(getattr(snap, "total_assets", 0) or 0)
+        except Exception:
+            start_assets = 0.0
+            end_assets = 0.0
+        daily_pnl = end_assets - start_assets
+        daily_pnl_pct = (daily_pnl / start_assets * 100) if start_assets > 0 else 0.0
+        try:
+            trades = self.trading_engine.order_mgr.list_trades(account_id) if hasattr(self.trading_engine, "order_mgr") else []
+            trade_count = len(trades)
+        except Exception:
+            trade_count = 0
+        try:
+            positions = self.trading_engine.position_mgr.list_positions(account_id)
+            position_count = len(positions)
+        except Exception:
+            position_count = 0
+        return DAILY_REFLECTION_PROMPT_TEMPLATE.format(
+            account_id=account_id,
+            review_date=str(review_date),
+            start_assets=start_assets,
+            end_assets=end_assets,
+            daily_pnl=daily_pnl,
+            daily_pnl_pct=daily_pnl_pct,
+            trade_count=trade_count,
+            decision_count=0,
+            position_count=position_count,
+            positions_summary=self._positions_summary(account_id),
+            decisions_summary="",
+        )
+
+    def _positions_summary(self, account_id: int) -> str:
+        """Render a compact positions summary for prompt context."""
+        try:
+            positions = self.trading_engine.position_mgr.list_positions(account_id)
+        except Exception:
+            return "(无持仓信息)"
+        if not positions:
+            return "(无持仓)"
+        lines = []
+        for p in positions[:10]:
+            lines.append(
+                f"{p.get('code')} qty={p.get('available_quantity', 0)} "
+                f"avg_cost={p.get('avg_cost', 0)}"
+            )
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Reflection execution + persistence
+    # ------------------------------------------------------------------
+
+    def _run_reflection(
+        self,
+        prompt: str,
+        scope: str,
+        account_id: int,
+        trade_id: Optional[int] = None,
+        order_id: Optional[int] = None,
+        signal_id: Optional[int] = None,
+        code: Optional[str] = None,
+    ) -> ReflectionNote:
+        """Run the LLM reflection, parse JSON output, and persist the note."""
+        import json
+        import time
+
+        start = time.time()
+        try:
+            executor = self.executor
+            if executor is None:
+                raise RuntimeError("no agent executor configured")
+            result = executor.chat(message=prompt, session_id="reflection")
+            raw = getattr(result, "content", "") or ""
+            elapsed = time.time() - start
+            note = self._parse_reflection_json(raw, scope, account_id)
+            note.raw_response = raw
+            note.elapsed_seconds = round(elapsed, 2)
+            note.trade_id = trade_id
+            note.order_id = order_id
+            note.signal_id = signal_id
+            note.code = code
+            self._persist_note(note)
+            return note
+        except Exception as exc:
+            logger.warning("Reflection run failed: %s", exc)
+            note = ReflectionNote(
+                scope=scope,
+                subject=f"{scope} reflection failed",
+                summary=str(exc),
+                takeaway="no reflection possible",
+                mood="neutral",
+                used_fallback=True,
+                error=str(exc),
+                account_id=account_id,
+                trade_id=trade_id,
+                order_id=order_id,
+                code=code,
+                elapsed_seconds=round(time.time() - start, 2),
+            )
+            return note
+
+    def _parse_reflection_json(
+        self,
+        raw: str,
+        scope: str,
+        account_id: int,
+    ) -> ReflectionNote:
+        """Parse the LLM's JSON reflection payload into a ReflectionNote."""
+        import json
+        import re
+
+        note = ReflectionNote(scope=scope, account_id=account_id)
+        text = (raw or "").strip()
+        # Extract JSON object from the response (may have prose around it).
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            text = match.group(0)
+        try:
+            data = json.loads(text)
+        except Exception:
+            data = {}
+        note.subject = str(data.get("subject", ""))
+        note.summary = str(data.get("summary", ""))
+        note.takeaway = str(data.get("takeaway", ""))
+        lessons = data.get("lessons", [])
+        note.lessons = [str(x) for x in lessons] if isinstance(lessons, list) else []
+        tags = data.get("tags", "")
+        note.tags = [t.strip() for t in str(tags).split(",") if t.strip()]
+        note.mood = str(data.get("mood", "neutral"))
+        return note
+
+    def _persist_note(self, note: ReflectionNote) -> Optional[int]:
+        """Persist a ReflectionNote into the paper_reflections table."""
+        import json
+        try:
+            from src.storage import PaperReflection
+            with self.db.session_scope() as session:
+                row = PaperReflection(
+                    account_id=note.account_id or 0,
+                    scope=note.scope,
+                    subject=note.subject,
+                    summary=note.summary,
+                    takeaway=note.takeaway,
+                    lessons_json=json.dumps(note.lessons, ensure_ascii=False),
+                    tags=",".join(note.tags),
+                    mood=note.mood,
+                    trade_id=note.trade_id,
+                    order_id=note.order_id,
+                    signal_id=note.signal_id,
+                    code=note.code,
+                    raw_response=note.raw_response,
+                    elapsed_seconds=note.elapsed_seconds,
+                    used_fallback=note.used_fallback,
+                    agent_action=note.agent_action,
+                )
+                session.add(row)
+                session.flush()
+                note.row_id = int(row.id)
+                note.created_at = row.created_at or datetime.now()
+            return note.row_id
+        except Exception as exc:
+            logger.warning("Reflection persist failed: %s", exc)
+            return None
+
+    def _persist_note_with_action(self, note: ReflectionNote, action: str) -> None:
+        """Re-persist a note that carries an agent_action field."""
+        note.agent_action = action
+        self._persist_note(note)
+
+    def _row_to_note(self, row) -> ReflectionNote:
+        """Convert a PaperReflection DB row back into a ReflectionNote."""
+        import json
+        note = ReflectionNote(
+            scope=row.scope,
+            subject=row.subject or "",
+            summary=row.summary or "",
+            takeaway=row.takeaway or "",
+            mood=row.mood or "neutral",
+            account_id=row.account_id,
+            trade_id=row.trade_id,
+            order_id=row.order_id,
+            signal_id=row.signal_id,
+            code=row.code,
+            raw_response=row.raw_response,
+            elapsed_seconds=row.elapsed_seconds or 0.0,
+            used_fallback=bool(row.used_fallback),
+            agent_action=row.agent_action,
+            row_id=row.id,
+            created_at=row.created_at,
+        )
+        try:
+            lessons = json.loads(row.lessons_json) if row.lessons_json else []
+            note.lessons = [str(x) for x in lessons] if isinstance(lessons, list) else []
+        except Exception:
+            note.lessons = []
+        note.tags = [t.strip() for t in (row.tags or "").split(",") if t.strip()]
+        return note
+
+    # ------------------------------------------------------------------
     # Memory retrieval (P0-E integration point)
     # ------------------------------------------------------------------
 
@@ -535,23 +821,56 @@ class ReflectionEngine:
         with 7-day half-life for temporal decay.
         """
         acct_id = account_id if account_id is not None else self.account_id
-        
+
         from src.storage import PaperReflection
+        # Build notes inside the session so ORM attributes load eagerly;
+        # accessing detached rows after the session closes raises
+        # DetachedInstanceError.
+        notes: List[ReflectionNote] = []
         with self.db.session_scope() as session:
             stmt = select(PaperReflection).where(
                 PaperReflection.account_id == acct_id
             )
-            rows = session.execute(stmt).scalars().all()
-        
+            for row in session.execute(stmt).scalars().all():
+                notes.append(self._row_to_note(row))
+
         from datetime import datetime
         now = datetime.now()
         scored = []
-        
-        for row in rows:
-            note = self._row_to_note(row)
+
+        for note in notes:
             score = _compute_note_score(note, now, target_code=None)
             scored.append((score, note))
-        
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [note for _, note in scored[:limit]]
+
+    def get_relevant_notes(self, code: str, limit: int = 3, account_id=None):
+        """Fetch notes relevant to a specific stock code (P0-E).
+
+        Filters notes for the account, boosts same-code matches via
+        ``_compute_note_score(..., target_code=code)``, and returns the
+        top-N by score.
+        """
+        acct_id = account_id if account_id is not None else self.account_id
+
+        from src.storage import PaperReflection
+        # Same eager-load pattern: build notes inside the session.
+        notes: List[ReflectionNote] = []
+        with self.db.session_scope() as session:
+            stmt = select(PaperReflection).where(
+                PaperReflection.account_id == acct_id
+            )
+            for row in session.execute(stmt).scalars().all():
+                notes.append(self._row_to_note(row))
+
+        from datetime import datetime
+        now = datetime.now()
+        scored = []
+        for note in notes:
+            score = _compute_note_score(note, now, target_code=code)
+            scored.append((score, note))
+
         scored.sort(key=lambda x: x[0], reverse=True)
         return [note for _, note in scored[:limit]]
 

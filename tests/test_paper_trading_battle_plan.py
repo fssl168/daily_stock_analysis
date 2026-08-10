@@ -33,7 +33,7 @@ from paper_trading.trading_engine import TradingEngine
 from sqlalchemy import select
 
 from src.storage import Account, PaperBattlePlan
-from strategies_v2.rule_engine import Signal
+from paper_trading.strategies.engine.rule_engine import Signal
 
 from tests.conftest import StubDataProvider, _make_synthetic_daily_df
 

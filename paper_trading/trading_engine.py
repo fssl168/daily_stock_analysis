@@ -342,10 +342,16 @@ class TradingEngine:
                 return order_result  # creation failed
             oms_params.order_id = order_result.order_id
             trade_result = self.oms.execute_market(order_result.order_id, oms_params)
+            # Normalize OMS status to the public "executed" contract.
+            # OMS uses "filled" internally; the external TradeResult contract
+            # (and downstream callers/tests) expects "executed".
+            if trade_result.status == "filled":
+                from dataclasses import replace
+                trade_result = replace(trade_result, status="executed")
             self._update_signal_status(signal_id, trade_result.status,
                                        reason=trade_result.reason)
             self._apply_sltp_to_position(account_id, signal.code, oms_params.ref_price)
-            if trade_result.status == "filled":
+            if trade_result.status == "executed":
                 self._fire_callback(self._on_trade_executed, trade_result,
                                     trade_id=getattr(trade_result, 'trade_id', None))
             else:
@@ -1067,7 +1073,7 @@ class TradingEngine:
                     logger.warning("Risk action cancel failed for code=%s: %s", cmd.code, exc)
             elif cmd.action == "sell" and cmd.code:
                 try:
-                    from strategies_v2.rule_engine import Signal as V2Signal
+                    from paper_trading.strategies.engine.rule_engine import Signal as V2Signal
                     sell_signal = V2Signal(
                         side="sell",
                         code=cmd.code,

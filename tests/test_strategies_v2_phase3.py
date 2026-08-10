@@ -20,13 +20,13 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from strategies_v2 import (
+from paper_trading.strategies import (
     RuleEngine,
     RuleStrategy,
     TEMPLATES,
     get_template,
 )
-from strategies_v2.indicators import (
+from paper_trading.strategies.engine.indicators import (
     IndicatorSpec,
     compute_cci,
     compute_indicators,
@@ -36,7 +36,7 @@ from strategies_v2.indicators import (
     compute_volume_ma,
     compute_williams_r,
 )
-from strategies_v2.schema import Rule
+from paper_trading.strategies.engine.schema import Rule
 from paper_trading.market_listener import MarketListener, MarketListenerConfig
 
 

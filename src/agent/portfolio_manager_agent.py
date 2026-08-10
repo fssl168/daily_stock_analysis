@@ -1003,7 +1003,7 @@ def register_paper_trading_tools(
             # Build a synthetic Signal so we can reuse submit_signal which
             # handles risk checks, fee model, agent review (if any), and
             # persistence.
-            from strategies_v2.rule_engine import Signal
+            from paper_trading.strategies.engine.rule_engine import Signal
             ot = OrderType.LIMIT if order_type == "limit" else OrderType.MARKET
             if ot == OrderType.LIMIT:
                 trigger_price = float(

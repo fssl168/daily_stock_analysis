@@ -17,7 +17,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from strategies_v2.indicators import (
+from paper_trading.strategies.engine.indicators import (
     IndicatorSpec,
     compute_atr,
     compute_fibonacci_retracement,

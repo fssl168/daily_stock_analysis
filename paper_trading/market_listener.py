@@ -990,8 +990,19 @@ class MarketListener:
                 logger.debug("[MarketListener] local_store read failed for %s: %s", code, exc)
 
         try:
-            # Use unified multi-source data fetcher.
-            df = self.fetcher.get_daily_historical(code, days=60)
+            # Use unified multi-source data fetcher. Prefer get_daily_historical
+            # (MultiSourceDataFetcher), fall back to get_daily_data (stub/test
+            # fetchers and older DataFetcherManager).
+            if hasattr(self.fetcher, "get_daily_historical"):
+                df = self.fetcher.get_daily_historical(code, days=60)
+            elif hasattr(self.fetcher, "get_daily_data"):
+                df = self.fetcher.get_daily_data(code, days=60)
+            else:
+                logger.debug(
+                    "[MarketListener] fetcher has no get_daily_historical/get_daily_data: %s",
+                    type(self.fetcher).__name__,
+                )
+                return None
         except Exception as exc:
             logger.debug(
                 "[MarketListener] get_daily_data failed for %s: %s", code, exc

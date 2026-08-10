@@ -261,7 +261,7 @@ class TestTradingEngineModifyFlow:
 
     def test_limit_buy_modify_then_match(self, engine_account):
         engine, acc_id = engine_account
-        from strategies_v2.rule_engine import Signal
+        from paper_trading.strategies.engine.rule_engine import Signal
 
         signal = Signal(
             side="buy",

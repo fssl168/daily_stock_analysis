@@ -30,7 +30,7 @@ from paper_trading.sltp_calculator import build_sltp_calculator
 from paper_trading.trading_engine import TradingEngine
 from src.agent.portfolio_manager_agent import PortfolioManagerAgent
 from src.storage import Account, DatabaseManager, PaperDecision, PaperReflection, PaperTrade
-from strategies_v2.rule_engine import Signal
+from paper_trading.strategies.engine.rule_engine import Signal
 
 from tests.conftest import StubDataProvider
 

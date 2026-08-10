@@ -195,7 +195,7 @@ def main() -> int:
     from paper_trading.risk import RiskChecker
     from paper_trading.sltp_calculator import SLTPCalculator, build_sltp_calculator
     from paper_trading.trading_engine import TradingEngine
-    from strategies_v2.rule_engine import Signal
+    from paper_trading.strategies.engine.rule_engine import Signal
 
     _cleanup_db()
     DatabaseManager.reset_instance()

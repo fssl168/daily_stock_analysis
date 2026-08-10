@@ -25,7 +25,7 @@ from src.agent.portfolio_manager_agent import (
 )
 from src.agent.tools.registry import ToolRegistry
 from src.storage import Account, DatabaseManager, PaperDecision
-from strategies_v2.rule_engine import Signal
+from paper_trading.strategies.engine.rule_engine import Signal
 
 
 class _StubAgentResult:

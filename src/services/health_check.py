@@ -23,7 +23,7 @@ import logging
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 # psutil 必须在 try/except 内导入：未安装时降级为 healthy，守护进程不崩溃
 try:

@@ -19,12 +19,15 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from paper_trading.strategies.engine.rule_engine import Signal
+
+logger = logging.getLogger(__name__)
 
 
 class FusionMethod(str, Enum):

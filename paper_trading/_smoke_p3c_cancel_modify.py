@@ -265,7 +265,7 @@ def main() -> int:
     # Test 7: End-to-end via TradingEngine.submit_signal + match
     # ------------------------------------------------------------------
     # Place a limit buy below market via submit_signal.
-    from strategies_v2.rule_engine import Signal
+    from paper_trading.strategies.engine.rule_engine import Signal
 
     signal_low = Signal(
         side="buy",

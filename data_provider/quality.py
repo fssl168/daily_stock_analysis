@@ -67,9 +67,11 @@ class DataQualityPipeline:
     # ---------------- 对外入口 ----------------
 
     def validate_realtime(self, quote) -> QualityReport:
-        """对实时行情逐字段校验。"""
+        """对实时行情逐字段校验。T-012: full 5 checks."""
         results = [
+            self._safe_check("suspended_check", self._check_not_suspended, quote),
             self._safe_check("price_sanity", self._check_price_sanity, quote),
+            self._safe_check("volume_sanity", self._check_volume_sanity, quote),
             self._safe_check("timestamp_freshness", self._check_timestamp_freshness, quote),
         ]
         return QualityReport(
@@ -230,6 +232,53 @@ class DataQualityPipeline:
                 "detail": f"{len(bad_gaps)} gap(s) with >=2 missing trading days, first={bad_gaps[0]}",
             }
         return {"name": name, "passed": True, "detail": f"max gap={max_gap}d, no missing trading days"}
+
+    # ---- T-012: 停牌检测 ----
+
+    @staticmethod
+    def _check_not_suspended(quote) -> Dict[str, Any]:
+        """Detect suspended stocks.
+
+        Signals: realtime price equals pre_close AND volume ≈ 0, or
+        the stock name contains the Chinese word for "suspended" (停牌).
+        """
+        name_flag = "suspended_check"
+        stock_name = str(_get(quote, "name", "") or "")
+        if "停牌" in stock_name:
+            return {"name": name_flag, "passed": False, "detail": "name contains 停牌 (suspended)"}
+
+        price = _get(quote, "price", None)
+        pre_close = _get(quote, "pre_close", None)
+        volume = _get(quote, "volume", None)
+        if price is not None and pre_close is not None:
+            try:
+                if abs(float(price) - float(pre_close)) < 0.001:
+                    vol = float(volume or 0)
+                    if vol == 0.0:
+                        return {"name": name_flag, "passed": False,
+                                "detail": "price == pre_close and volume == 0 (likely suspended)"}
+            except (TypeError, ValueError):
+                pass
+        return {"name": name_flag, "passed": True, "detail": "not suspended"}
+
+    # ---- T-012: 量合理性 ----
+
+    @staticmethod
+    def _check_volume_sanity(quote) -> Dict[str, Any]:
+        """Detect obviously bad volume data (negative, NaN, etc.)."""
+        name_flag = "volume_sanity"
+        vol = _get(quote, "volume", None)
+        if vol is None:
+            return {"name": name_flag, "passed": True, "detail": "volume missing, skipped"}
+        try:
+            vol = float(vol)
+        except (TypeError, ValueError):
+            return {"name": name_flag, "passed": False, "detail": "volume not numeric"}
+        if vol < 0:
+            return {"name": name_flag, "passed": False, "detail": f"negative volume={vol}"}
+        if not np.isfinite(vol):
+            return {"name": name_flag, "passed": False, "detail": "volume is NaN/Inf"}
+        return {"name": name_flag, "passed": True, "detail": f"volume={vol} ok"}
 
     @staticmethod
     def _extract_dates(df: pd.DataFrame):

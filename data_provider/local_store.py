@@ -30,6 +30,8 @@ class StoreConfig:
 
     db_path: str = "data/market_data.db"
     stale_threshold_hours: int = 24
+    max_incremental_days: int = 5       # T-019: incremental pull window
+    full_refresh_interval_days: int = 30  # T-019: full refresh cadence
 
 
 class LocalMarketStore:
@@ -42,7 +44,7 @@ class LocalMarketStore:
         self._init_schema()
 
     def _init_schema(self):
-        """建表（幂等）。"""
+        """建表（幂等）。T-019: ensure adjust_factor column and index exist."""
         with self._lock:
             self._conn.execute("""
                 CREATE TABLE IF NOT EXISTS daily_kline (
@@ -50,10 +52,21 @@ class LocalMarketStore:
                     trade_date TEXT NOT NULL,
                     open REAL, high REAL, low REAL, close REAL,
                     volume REAL, amount REAL,
+                    adjust_factor REAL DEFAULT 1.0,
                     source TEXT,
                     fetched_at TEXT,
                     PRIMARY KEY (code, trade_date)
                 )
+            """)
+            # Ensure adjust_factor column exists for tables created before T-019.
+            try:
+                self._conn.execute("ALTER TABLE daily_kline ADD COLUMN adjust_factor REAL DEFAULT 1.0")
+            except Exception:
+                pass  # column already exists
+            # Ensure index for fast code+date lookups.
+            self._conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_kline_code_date
+                ON daily_kline(code, trade_date)
             """)
             self._conn.commit()
 

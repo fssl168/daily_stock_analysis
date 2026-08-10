@@ -4,6 +4,16 @@ import { Card, Badge } from '../components/common';
 import { BacktestComparisonPanel } from '../components/paper-trading';
 import { BreakerStatusBadge } from '../components/paper-trading/BreakerStatusBadge';
 import { HealthDashboard } from '../components/paper-trading/HealthDashboard';
+import { QuoteTicker } from '../components/paper-trading/QuoteTicker';
+import { ExtremeMarketBanner } from '../components/paper-trading/ExtremeMarketBanner';
+import { RiskAlertToast } from '../components/paper-trading/RiskAlertToast';
+import { LatencyPanel } from '../components/paper-trading/LatencyPanel';
+import { MarketStatusDashboard } from '../components/paper-trading/MarketStatusDashboard';
+import { StrategyLeaderboard } from '../components/paper-trading/StrategyLeaderboard';
+import { StrategyLifecyclePanel } from '../components/paper-trading/StrategyLifecyclePanel';
+import { DriftPanel } from '../components/paper-trading/DriftPanel';
+import { FeaturesPanel } from '../components/paper-trading/FeaturesPanel';
+import { EventLogFeed } from '../components/paper-trading/EventLogFeed';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { formatUiText } from '../i18n/uiText';
 import type {
@@ -27,7 +37,7 @@ import type {
   TradeResultResponse,
 } from '../types/paperTrading';
 
-type TabKey = 'positions' | 'orders' | 'trades' | 'signals' | 'decisions' | 'reflections' | 'battle-plans' | 'daily-report' | 'backtest-comparison';
+type TabKey = 'positions' | 'orders' | 'trades' | 'signals' | 'decisions' | 'reflections' | 'battle-plans' | 'daily-report' | 'backtest-comparison' | 'strategies' | 'features';
 
 // ============ Helpers ============
 
@@ -2094,6 +2104,8 @@ const PaperTradingPage: React.FC = () => {
     { key: 'battle-plans', label: t('paperTrading.tabs.battlePlans'), count: battlePlans.length },
     { key: 'daily-report', label: t('paperTrading.tabs.dailyReport') },
     { key: 'backtest-comparison', label: t('paperTrading.tabs.backtestComparison') },
+    { key: 'strategies', label: '策略' },
+    { key: 'features', label: '特征' },
   ], [positions.length, orders.length, trades.length, signals.length, decisions.length, reflections.length, battlePlans.length, t]);
 
   return (
@@ -2154,10 +2166,16 @@ const PaperTradingPage: React.FC = () => {
         )}
       </header>
 
+      {/* Realtime strips — quote ticker + extreme-market banner */}
+      <div className="flex-shrink-0 px-4 py-1.5 border-b border-white/5 space-y-1.5">
+        <QuoteTicker accountId={accountId} maxCodes={12} />
+        <ExtremeMarketBanner accountId={accountId} />
+      </div>
+
       {/* Main content */}
-      <main className="flex-1 flex overflow-hidden p-3 gap-3">
+      <main className="flex-1 flex overflow-hidden p-3 gap-3 max-sm:flex-col max-sm:p-2 max-sm:gap-2">
         {/* Left sidebar */}
-        <div className="flex flex-col gap-3 w-80 flex-shrink-0 overflow-y-auto">
+        <div className="flex flex-col gap-3 w-80 flex-shrink-0 overflow-y-auto max-sm:w-full max-sm:flex-shrink max-sm:order-2">
           {/* Account summary */}
           <Card variant="gradient" padding="md">
             <span className="label-uppercase">
@@ -2204,6 +2222,15 @@ const PaperTradingPage: React.FC = () => {
           {/* Performance metrics */}
           <PerformanceCard accountId={accountId} />
 
+          {/* Realtime latency + market status */}
+          <Card padding="md">
+            <span className="label-uppercase">实时状态</span>
+            <div className="mt-2 space-y-2">
+              <MarketStatusDashboard accountId={accountId} />
+              <LatencyPanel accountId={accountId} />
+            </div>
+          </Card>
+
           {/* Order form */}
           <OrderForm accountId={accountId} onSubmitted={loadAll} />
 
@@ -2212,9 +2239,9 @@ const PaperTradingPage: React.FC = () => {
         </div>
 
         {/* Right content */}
-        <section className="flex-1 flex flex-col overflow-hidden">
+        <section className="flex-1 flex flex-col overflow-hidden max-sm:min-h-0">
           {/* Tabs */}
-          <div className="flex items-center gap-1 overflow-x-auto pb-2 border-b border-white/5" data-testid="paper-trading-tabs">
+          <div className="flex items-center gap-1 overflow-x-auto pb-2 border-b border-white/5 max-sm:gap-0.5" data-testid="paper-trading-tabs">
             {tabs.map((tab) => (
               <button
                 key={tab.key}
@@ -2240,7 +2267,7 @@ const PaperTradingPage: React.FC = () => {
           </div>
 
           {/* Tab content */}
-          <div className="flex-1 overflow-y-auto pt-3">
+          <div className="flex-1 overflow-y-auto pt-3 max-sm:overflow-x-auto">
             {activeTab === 'positions' && <PositionsTable positions={positions} />}
             {activeTab === 'orders' && (
               <OrdersTable
@@ -2257,9 +2284,30 @@ const PaperTradingPage: React.FC = () => {
             {activeTab === 'battle-plans' && <BattlePlansList plans={battlePlans} />}
             {activeTab === 'daily-report' && <DailyReportTab accountId={accountId} />}
             {activeTab === 'backtest-comparison' && <BacktestComparisonPanel accountId={accountId} />}
+            {activeTab === 'strategies' && (
+              <div className="space-y-4">
+                <StrategyLeaderboard accountId={accountId} />
+                <DriftPanel accountId={accountId} />
+                <StrategyLifecyclePanel accountId={accountId} />
+              </div>
+            )}
+            {activeTab === 'features' && <FeaturesPanel accountId={accountId} />}
           </div>
         </section>
       </main>
+
+      {/* Global risk-alert toast (fixed, overlays everything) */}
+      <RiskAlertToast accountId={accountId} />
+
+      {/* Realtime event log (fixed bottom-left) */}
+      <div className="fixed bottom-3 left-3 z-40 w-80 max-h-64 hidden lg:block">
+        <Card padding="md" className="backdrop-blur-sm bg-card/80">
+          <span className="label-uppercase">实时事件流</span>
+          <div className="mt-2">
+            <EventLogFeed accountId={accountId} maxEvents={20} />
+          </div>
+        </Card>
+      </div>
     </div>
   );
 };

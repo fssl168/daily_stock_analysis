@@ -296,3 +296,30 @@ class SignalFusionEngine:
             method=method,
             details=details,
         )
+
+    # ------------------------------------------------------------------
+    # Drift-based weight adjustment (T-010)
+    # ------------------------------------------------------------------
+
+    def update_weights_from_drift(self, drift_reports: Dict[str, Any]) -> None:
+        """Adjust strategy weights based on drift-detector recommendations.
+
+        Mapping:
+        - ``reduce_weight`` → multiply weight by 0.5.
+        - ``pause`` → set weight to 0.0 (strategy remains registered).
+        - ``retire`` → remove the strategy from the weight table entirely.
+        """
+        for name, report in drift_reports.items():
+            action = getattr(report, "recommended_action", "keep")
+            if action == "reduce_weight":
+                old = self._strategy_weights.get(name, 1.0)
+                self._strategy_weights[name] = old * 0.5
+                logger.info(
+                    "Drift: %s → reduce_weight (%.2f → %.2f)", name, old, old * 0.5,
+                )
+            elif action == "pause":
+                self._strategy_weights[name] = 0.0
+                logger.warning("Drift: %s → paused (weight=0.0)", name)
+            elif action == "retire":
+                self._strategy_weights.pop(name, None)
+                logger.critical("Drift: %s → retired (removed from active weights)", name)

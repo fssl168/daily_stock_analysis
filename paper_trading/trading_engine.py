@@ -101,6 +101,7 @@ class TradingEngine:
         sltp_calculator: Optional[Any] = None,
         enable_auto_sltp: bool = True,
         circuit_breaker: Optional[Any] = None,  # ① T2 integration
+        broker_router: Optional[Any] = None,  # T-020: broker routing
         on_trade_executed: Optional[Any] = None,
         on_signal_rejected: Optional[Any] = None,
     ):
@@ -156,6 +157,7 @@ class TradingEngine:
             account_mgr=self.account_mgr,
             position_mgr=self.position_mgr,
             fee_model=self.fee_model,
+            broker_router=broker_router,
         )
 
         # ① CircuitBreaker (T2 integration) — optional, defaults to disabled

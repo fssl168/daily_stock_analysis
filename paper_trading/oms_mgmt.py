@@ -53,11 +53,13 @@ class OrderManagementSystem:
         account_mgr: PaperAccountManager,
         position_mgr: PositionManager,
         fee_model: FeeModel,
+        broker_router: Optional[Any] = None,  # T-020: real-broker routing
     ):
         self.order_mgr = order_mgr
         self.account_mgr = account_mgr
         self.position_mgr = position_mgr
         self.fee_model = fee_model
+        self.broker_router = broker_router
 
     # ------------------------------------------------------------------
     # Order creation
@@ -127,7 +129,18 @@ class OrderManagementSystem:
                 actual_cost = self.fee_model.estimate_buy_cost(eff_price, quantity)
                 freeze_amount = max(estimated_cost, actual_cost)
                 self.account_mgr.freeze_cash(params.account_id, freeze_amount)
-                self.order_mgr.fill_order(order_id, eff_price, quantity, fee=fee)
+                # T-006: optimistic-lock fill — get order version for concurrency safety.
+                order = self.order_mgr.get_order(order_id)
+                trade = self.order_mgr.fill_order(
+                    order_id, eff_price, quantity, fee=fee,
+                    expected_version=order.version if order else None,
+                )
+                if trade is None:
+                    return TradeResult(
+                        signal_id=params.signal_id, order_id=order_id,
+                        side=side, code=code, status="retry",
+                        reason="version conflict; retry",
+                    )
                 self.account_mgr.settle_buy(params.account_id, freeze_amount, actual_cost)
                 self.position_mgr.apply_buy(
                     params.account_id, code, quantity, eff_price,
@@ -137,7 +150,17 @@ class OrderManagementSystem:
                 realized_pnl = self.position_mgr.apply_sell(
                     params.account_id, code, quantity, eff_price,
                 )
-                self.order_mgr.fill_order(order_id, eff_price, quantity, fee=fee)
+                order = self.order_mgr.get_order(order_id)
+                trade = self.order_mgr.fill_order(
+                    order_id, eff_price, quantity, fee=fee,
+                    expected_version=order.version if order else None,
+                )
+                if trade is None:
+                    return TradeResult(
+                        signal_id=params.signal_id, order_id=order_id,
+                        side=side, code=code, status="retry",
+                        reason="version conflict; retry",
+                    )
                 self.account_mgr.settle_sell(params.account_id, eff_price, quantity, fee)
 
             return TradeResult(

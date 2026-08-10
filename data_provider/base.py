@@ -1361,6 +1361,7 @@ class DataFetcherManager:
                                 f"rows={len(df)}, elapsed={elapsed:.2f}s"
                             )
                             self._record_daily_source_success(fetcher, market)
+                            df = self._normalize_timestamps(df, stock_code)
                             return df, fetcher.name
                         duration_ms = int((time.time() - attempt_start) * 1000)
                         record_provider_run(
@@ -1441,6 +1442,7 @@ class DataFetcherManager:
                         f"rows={len(df)}, elapsed={elapsed:.2f}s"
                     )
                     self._record_daily_source_success(fetcher, market)
+                    df = self._normalize_timestamps(df, stock_code)
                     return df, fetcher.name
                 duration_ms = int((time.time() - attempt_start) * 1000)
                 record_provider_run(
@@ -1488,7 +1490,23 @@ class DataFetcherManager:
         elapsed = time.time() - request_start
         logger.error(f"[数据源终止] {stock_code} 获取失败: elapsed={elapsed:.2f}s\n{error_summary}")
         raise DataFetchError(error_summary)
-    
+
+    @staticmethod
+    def _normalize_timestamps(df: pd.DataFrame, stock_code: str) -> pd.DataFrame:
+        """Normalize daily-data timestamps to exchange-local naive datetime.
+
+        yfinance returns UTC-indexed DataFrames; akshare returns timezone-naive
+        local times. This method converts all sources to the exchange's local
+        timezone (naive) so bars from different sources align correctly.
+        """
+        from src.utils.exchange_clock import EXCHANGE_TIMEZONES
+
+        if df.index.tz is not None:
+            tz = EXCHANGE_TIMEZONES["us"] if _is_us_market(stock_code) else EXCHANGE_TIMEZONES["cn"]
+            df = df.copy()
+            df.index = df.index.tz_convert(tz).tz_localize(None)
+        return df
+
     @property
     def available_fetchers(self) -> List[str]:
         """返回可用数据源名称列表"""

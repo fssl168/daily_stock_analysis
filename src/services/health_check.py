@@ -203,3 +203,58 @@ def check_ntp_sync() -> HealthStatus:
         message="synced" if synced else "NOT SYNCHRONIZED",
         metadata={"offset_ms": getattr(ExchangeClock, "_offset_ms", None)},
     )
+
+
+# ---------------------------------------------------------------------------
+# Runtime-object health checks (registered from main.py via lambda closures)
+# ---------------------------------------------------------------------------
+
+
+def check_listener_alive(listener: Any) -> HealthStatus:
+    """Check whether the MarketListener daemon thread is still running.
+
+    Caller should pass the listener via a lambda at registration time,
+    e.g. ``daemon.register(lambda: check_listener_alive(listener))``.
+    """
+    is_running = getattr(listener, "is_alive", lambda: False)()
+    last_tick = getattr(listener, "_last_settle_date", None)
+    return HealthStatus(
+        component="market_listener",
+        healthy=bool(is_running),
+        message="running" if is_running else "DEAD",
+        metadata={"last_settle": str(last_tick) if last_tick else "N/A"},
+    )
+
+
+def check_data_source_health(fetcher: Any) -> HealthStatus:
+    """Check whether any data source has a failure rate above 30%.
+
+    Uses ``_daily_source_health`` on the fetcher (if available).
+    Caller should pass the fetcher via a lambda closure.
+    """
+    health_dict = getattr(fetcher, "_daily_source_health", {})
+    failures: Dict[str, float] = {}
+    for name, (s, f) in health_dict.items():
+        total = s + f
+        if total > 0 and f / total > 0.30:
+            failures[name] = round(f / total, 3)
+    return HealthStatus(
+        component="data_sources",
+        healthy=len(failures) == 0,
+        message=f"failures: {failures}" if failures else "all healthy",
+        metadata={"source_failure_rates": failures},
+    )
+
+
+def check_broker_connection(broker: Any) -> HealthStatus:
+    """Check whether the broker backend is reachable.
+
+    Caller should pass the broker via a lambda closure,
+    e.g. ``daemon.register(lambda: check_broker_connection(broker))``.
+    """
+    connected = getattr(broker, "is_connected", lambda: False)()
+    return HealthStatus(
+        component="broker",
+        healthy=bool(connected),
+        message="connected" if connected else "DISCONNECTED",
+    )

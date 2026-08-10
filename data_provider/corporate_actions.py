@@ -179,3 +179,80 @@ class CorporateEventCalendar:
         if len(after) == 0:
             return None
         return df.loc[after[0], "close"]
+
+    # ---- T-018: 外部数据拉取 + 统一复权入口 ----
+
+    def update(self, codes: List[str]) -> int:
+        """Fetch dividend records from akshare for all codes and ingest events.
+
+        Returns the total number of events added.
+        """
+        try:
+            import akshare as ak
+        except ImportError:
+            logger.warning("akshare not installed; cannot update corporate events")
+            return 0
+
+        added = 0
+        for code in codes:
+            try:
+                clean = str(code).strip().upper()
+                # Remove market suffix for akshare CN query if present.
+                symbol = clean.replace("SH", "").replace("SZ", "").replace("BJ", "")
+                df = ak.stock_dividents_cninfo(symbol=symbol)
+                if df is None or df.empty:
+                    continue
+                for _, row in df.iterrows():
+                    event_date_raw = row.get("除权除息日") or row.get("公告日期")
+                    dps = float(row.get("每股派息", 0) or 0)
+                    if not event_date_raw or dps <= 0:
+                        continue
+                    event_date = _normalize_date(event_date_raw)
+                    self.add_event(CorporateEvent(
+                        code=clean,
+                        event_date=event_date,
+                        event_type=_DIVIDEND,
+                        details={"dividend_per_share": dps},
+                    ))
+                    added += 1
+            except Exception as exc:
+                logger.debug("Corporate action fetch failed for %s: %s", code, exc)
+        if added:
+            self.save()
+        return added
+
+    def apply_to_prices(self, code: str, df: pd.DataFrame) -> pd.DataFrame:
+        """Unified entry point: apply all corporate actions to price data.
+
+        Currently supports dividend (前复权) and split adjustments.
+        Returns a new DataFrame; does not modify the original.
+        """
+        result = df.copy()
+        # Dividend adjustment.
+        result = self.apply_dividend_adjustment(code, result)
+        # Split adjustment (future).
+        return result
+
+    def apply_split_adjustment(self, code: str, df: pd.DataFrame) -> pd.DataFrame:
+        """Apply split/stock-split forward adjustment.
+
+        Each split event with details['split_ratio'] > 0 adjusts historical
+        prices before the event date.
+        """
+        result = df.copy()
+        if df.empty or "close" not in df.columns:
+            return result
+        events = [
+            e for e in self._events.get(code, [])
+            if e.event_type == "split" and e.details.get("split_ratio", 0) > 0
+        ]
+        if not events:
+            return result
+        price_cols = [c for c in ("open", "high", "low", "close") if c in result.columns]
+        for event in events:
+            ratio = float(event.details["split_ratio"])
+            event_ts = pd.Timestamp(event.event_date)
+            mask = result.index < event_ts
+            for col in price_cols:
+                result.loc[mask, col] = result.loc[mask, col] * ratio
+        return result

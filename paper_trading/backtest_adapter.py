@@ -481,3 +481,76 @@ def run_with_paper_validation(
         result["reflection"] = reflection_result
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# T-017: Passthrough backtest from paper account
+# ---------------------------------------------------------------------------
+
+
+def backtest_from_paper_account(
+    account_id: int,
+    strategies: List[Any],
+    start_date: date,
+    end_date: date,
+    db_manager: Optional[DatabaseManager] = None,
+) -> Any:
+    """Run a full backtest for a paper-trading account (passthrough entry point).
+
+    Pulls the account's watchlist, fetches historical daily data via
+    ``DataFetcherManager``, and delegates to ``BacktestEngine.run()``.
+
+    This is the UI-facing counterpart of ``PaperTradingToBacktestAdapter``
+    — it answers "what would this account's strategies have returned in
+    the past?" without requiring the caller to manually assemble
+    configurations and data.
+
+    Returns a ``BacktestResult`` or None if data is insufficient.
+    """
+    from data_provider.base import DataFetcherManager
+    from paper_trading.account import PaperAccountManager
+    from paper_trading.backtest.engine import BacktestConfig, BacktestEngine
+
+    fetcher = DataFetcherManager()
+    account_mgr = PaperAccountManager(db_manager)
+    account = account_mgr.snapshot(account_id)
+
+    # Resolve watched codes from config (or all positions as fallback).
+    codes: List[str] = []
+    config_json = getattr(account, "config_json", None)
+    if config_json:
+        import json
+        cfg = json.loads(config_json) if isinstance(config_json, str) else config_json
+        codes = cfg.get("watched_codes", [])
+    if not codes:
+        from paper_trading.position import PositionManager
+        pm = PositionManager(db_manager)
+        positions = pm.list_positions(account_id)
+        codes = [p.get("code", "") for p in positions if p.get("code")]
+
+    if not codes:
+        logger.warning("backtest_from_paper_account: no codes found for account %s", account_id)
+        return None
+
+    # Pull daily data.
+    daily_data: Dict[str, Any] = {}
+    for code in codes:
+        df, _ = fetcher.get_daily_data(
+            code,
+            start_date=start_date.strftime("%Y%m%d"),
+            end_date=end_date.strftime("%Y%m%d"),
+            days=9999,
+        )
+        if df is not None and not df.empty:
+            daily_data[code] = df
+
+    if not daily_data:
+        logger.warning("backtest_from_paper_account: no daily data for account %s", account_id)
+        return None
+
+    engine = BacktestEngine(BacktestConfig(
+        initial_cash=float(getattr(account, "initial_capital", account.cash)),
+        start_date=start_date,
+        end_date=end_date,
+    ))
+    return engine.run(codes=list(daily_data.keys()), strategies=strategies, daily_data=daily_data)

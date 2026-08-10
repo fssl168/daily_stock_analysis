@@ -529,3 +529,75 @@ export interface BreakerStatusResponse {
   reason: string;
   triggeredAt?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Realtime quant types (PN-009: TypeScript type completions)
+// ---------------------------------------------------------------------------
+
+/** A single span within a latency trace. */
+export interface LatencySpanStep {
+  name: string;
+  p50Ms: number;
+  p95Ms: number;
+  p99Ms: number;
+}
+
+/** Full tick latency report. */
+export interface LatencyReport {
+  tickTotalMs: { p50: number; p95: number; p99: number };
+  steps: LatencySpanStep[];
+}
+
+/** Level 2 quote — ten-level order book. */
+export interface Level2Quote {
+  code: string;
+  timestamp: string;
+  bidPrices: number[];
+  bidVolumes: number[];
+  askPrices: number[];
+  askVolumes: number[];
+  bidAskImbalance: number;
+  weightedBid: number;
+  weightedAsk: number;
+  depthWeightedSpread: number;
+}
+
+/** Order-flow signal derived from tick data. */
+export interface OrderFlowSignal {
+  code: string;
+  largeBuyOrders: number;
+  largeSellOrders: number;
+  netFlow: number;
+  icebergDetected: boolean;
+  spoofingDetected: boolean;
+}
+
+/** Risk alert from RiskDaemon. */
+export interface RiskAlertItem {
+  alertType: "var_breach" | "liquidity_warning" | "market_anomaly";
+  message: string;
+  detail?: string;
+  level: "warning" | "danger";
+  detectedAt: string;
+}
+
+/** Strategy drift report. */
+export interface DriftReportItem {
+  strategyName: string;
+  isDrifting: boolean;
+  rollingSharpe: number[];
+  sharpeTrend: number;
+  consecutiveLosingDays: number;
+  recommendedAction: "keep" | "reduce_weight" | "pause" | "retire";
+}
+
+/** Extreme market alert. */
+export interface ExtremeMarketAlertItem {
+  market: string;
+  isActive: boolean;
+  currentVol: number;
+  historicalVol: number;
+  ratio: number;
+  actions: string[];
+  detectedAt: string;
+}

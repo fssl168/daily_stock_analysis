@@ -1256,12 +1256,64 @@ def main() -> int:
     from paper_trading.hooks import init_paper_trading_signal_queue
     init_paper_trading_signal_queue(maxsize=1000)
 
+    # ③ HealthCheckDaemon (T4 integration) — start if enabled; runtime objects
+    # register listener/data-source/broker checks via lambda closures.
+    _health_daemon = None
+    if _is_truthy_env("HEALTH_CHECK_ENABLED", "false"):
+        try:
+            from src.services.health_check import (
+                HealthCheckDaemon,
+                check_ntp_sync,
+                check_system_resources,
+                check_task_queue,
+            )
+            _health_daemon = HealthCheckDaemon(
+                on_alert=lambda level, msg: logger.warning("[Health] %s: %s", level, msg),
+            )
+            _health_daemon.register(check_ntp_sync)
+            _health_daemon.register(check_system_resources)
+            _health_daemon.register(check_task_queue)
+            # Runtime checks registered lazily after listener/fetcher/broker are built.
+            _health_daemon.start()
+            logger.info("HealthCheckDaemon started (%d checks)", len(_health_daemon._checks))
+        except Exception as exc:
+            logger.warning("HealthCheckDaemon failed to start: %s", exc)
+
     # 配置日志（输出到控制台和文件）
     try:
         _setup_runtime_logging(config.log_dir, debug=args.debug)
     except Exception as exc:
         logger.exception("切换到配置日志目录失败: %s", exc)
         return 1
+
+    # T4 deferred: register runtime health checks now that listener/fetcher
+    # may be available (paper-trading is started from the API layer, not
+    # from CLI main, so these lambdas resolve at check-time).
+    if _health_daemon is not None:
+        try:
+            from src.services.health_check import (
+                check_listener_alive, check_data_source_health, check_broker_connection,
+            )
+            def _safe_import(module_path: str, attr: str) -> Any:
+                """Lazy-safe import; returns a sentinel with ``is_alive``/``is_connected`` False."""
+                try:
+                    import importlib
+                    return getattr(importlib.import_module(module_path), attr, None)
+                except Exception:
+                    return None
+
+            _health_daemon.register(
+                lambda: check_listener_alive(_safe_import("paper_trading.market_listener", "MarketListener"))
+            )
+            _health_daemon.register(
+                lambda: check_data_source_health(_safe_import("data_provider.base", "DataFetcherManager"))
+            )
+            _health_daemon.register(
+                lambda: check_broker_connection(_safe_import("paper_trading.broker.router", "PaperBroker"))
+            )
+            logger.info("HealthCheckDaemon: runtime checks registered (listener/data/broker)")
+        except Exception as exc:
+            logger.debug("HealthCheckDaemon runtime checks skipped: %s", exc)
 
     logger.info("=" * 60)
     logger.info("A股自选股智能分析系统 启动")

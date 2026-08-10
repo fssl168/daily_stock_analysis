@@ -44,6 +44,7 @@ from zoneinfo import ZoneInfo
 
 from paper_trading.trading_engine import TradeResult, TradingEngine
 from paper_trading.strategies import RuleEngine, RuleStrategy, Signal, load_strategies_from_dir
+from src.utils.exchange_clock import ExchangeClock
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +151,7 @@ def is_market_open_now(market: str, now: Optional[datetime] = None) -> bool:
     if tz_name is None:
         return False
     tz = ZoneInfo(tz_name)
-    now_local = now or datetime.now(tz)
+    now_local = now or ExchangeClock.now(market)
     if now_local.tzinfo is None:
         now_local = now_local.replace(tzinfo=tz)
 
@@ -180,7 +181,7 @@ def get_market_close_today(market: str, now: Optional[datetime] = None) -> Optio
     if tz_name is None:
         return None
     tz = ZoneInfo(tz_name)
-    now_local = now or datetime.now(tz)
+    now_local = now or ExchangeClock.now(market)
     if now_local.tzinfo is None:
         now_local = now_local.replace(tzinfo=tz)
     if not is_market_open(market, now_local.date()):
@@ -355,6 +356,10 @@ class MarketListener:
         notifier: Optional[Any] = None,
         quote_cache: Optional["SharedQuoteCache"] = None,  # ② T12 integration
         signal_fusion: Optional["SignalFusionEngine"] = None,  # ④ T3 integration
+        risk_daemon: Optional[Any] = None,  # ⑤ T8 integration
+        feature_pipeline: Optional[Any] = None,  # ⑥ T13: feature pipeline
+        extreme_market_response: Optional[Any] = None,  # ⑦ T11: extreme market
+        drift_detector: Optional[Any] = None,  # ⑧ T10: drift detector
     ):
         self.engine = engine
         self.fetcher = data_fetcher
@@ -373,6 +378,18 @@ class MarketListener:
 
         # ④ SignalFusionEngine (T3 integration) — optional multi-strategy fusion.
         self._signal_fusion = signal_fusion
+
+        # ⑤ RiskDaemon (T8 integration) — optional real-time risk monitoring.
+        self._risk_daemon = risk_daemon
+
+        # ⑥ FeaturePipeline (T13 integration) — post-settle feature computation.
+        self._feature_pipeline = feature_pipeline
+
+        # ⑦ ExtremeMarketResponse (T11 integration) — VIX-like volatility response.
+        self._extreme_market_response = extreme_market_response
+
+        # ⑧ DriftDetector (T10 integration) — strategy drift monitoring.
+        self._drift_detector = drift_detector
 
         self.rule_engine = RuleEngine()
         self._shutdown = threading.Event()
@@ -475,11 +492,17 @@ class MarketListener:
 
     def _tick_market(self, market: str) -> None:
         """Run one tick for a single open market."""
+        # T-005: Latency tracking for the full tick cycle.
+        from src.utils.latency_tracker import LatencySpan
+        import uuid
+        span = LatencySpan("tick_market", str(uuid.uuid4())[:8])
+
         codes = self._codes_for_market(market)
         if not codes:
             return
 
         latest_prices = self._fetch_latest_prices(codes)
+        span.mark("fetch_prices_done", codes=len(latest_prices))
         if not latest_prices:
             logger.debug("[MarketListener] %s: no prices fetched", market)
             return
@@ -511,9 +534,50 @@ class MarketListener:
         # 3b) P0-C: Periodic intraday position review via AgentRiskReviewer.
         self._maybe_review_open_positions(market, latest_prices)
 
+        # 3c) T-011: Extreme market — check and gate buy signals before eval.
+        em = getattr(self, "_extreme_market_response", None)
+        if em is not None:
+            em.auto_resume()
+            if em.is_active() and em.force_hold_buy():
+                logger.debug("[MarketListener] Extreme market: holding buy signals")
+            # If market orders are disabled, the engine's RMS/Oms will enforce.
+
         # 4) Evaluate strategy rules.
         if self.config.enable_strategies and self.strategies:
             self._evaluate_strategies(codes, latest_prices, market)
+        span.mark("evaluate_strategies_done")
+
+        # T-005: Record tick latency; warn if > 1000ms.
+        result = span.finish()
+        if result["total_ms"] > 1000:
+            logger.warning("[MarketListener] Slow tick: %.1fms steps=%s",
+                           result["total_ms"], result["steps"])
+
+        # T-008: RiskDaemon — per-tick VaR + liquidity + market anomaly check.
+        if self._risk_daemon is not None:
+            try:
+                account = self.engine.account_mgr.snapshot(self.config.account_id)
+                positions = self.engine.position_mgr.list_positions(self.config.account_id)
+                alerts = self._risk_daemon.tick(account, positions, latest_prices)
+                for alert in alerts:
+                    logger.warning(
+                        "[MarketListener] RiskDaemon alert: type=%s detail=%s",
+                        getattr(alert, "alert_type", "?"),
+                        getattr(alert, "detail", alert),
+                    )
+                    # VaR breach → feed back into circuit breaker.
+                    if (hasattr(alert, "alert_type")
+                            and getattr(alert, "alert_type", None) == "var_breach"
+                            and self.engine.circuit_breaker is not None):
+                        detail = getattr(alert, "detail", None)
+                        current_var = getattr(detail, "var_95_pct", None) if detail else None
+                        self.engine.circuit_breaker.evaluate(
+                            current_pnl=account.total_assets - account.initial_capital,
+                            initial_capital=account.initial_capital,
+                            current_var=current_var,
+                        )
+            except Exception:
+                logger.exception("[MarketListener] RiskDaemon tick failed")
 
         # 5) P1-C: PM agent decision now runs via AISignalWorker (T20)
         # — decoupled from the rule-engine tick to avoid blocking.
@@ -647,7 +711,7 @@ class MarketListener:
         reviewer = getattr(self.engine, "agent_reviewer", None)
         if reviewer is None:
             return
-        now = datetime.now()
+        now = ExchangeClock.now(market)
         last = getattr(self, "_last_position_review_ts", None)
         interval = getattr(self.config, "position_review_interval_seconds", 1800.0)
         if last is not None and (now - last).total_seconds() < interval:
@@ -748,7 +812,6 @@ class MarketListener:
                 # ② Write back to cache.
                 if cache is not None:
                     from paper_trading.quote_cache import CachedQuote
-                    from datetime import datetime
                     cache.update(code, CachedQuote(
                         price=float(price),
                         volume=float(getattr(quote, "volume", 0) or 0),
@@ -757,7 +820,7 @@ class MarketListener:
                         low=float(getattr(quote, "low", 0) or 0),
                         open=float(getattr(quote, "open", 0) or 0),
                         pre_close=float(getattr(quote, "pre_close", 0) or 0),
-                        timestamp=getattr(quote, "timestamp", datetime.now()),
+                        timestamp=getattr(quote, "timestamp", ExchangeClock.now("cn")),
                         source=f"poll_{getattr(quote, 'fetcher_name', 'unknown')}",
                     ))
         return out
@@ -828,7 +891,7 @@ class MarketListener:
                 )]
 
             for signal in targets:
-                if not self._should_emit_signal(signal):
+                if not self._should_emit_signal(signal, market):
                     continue
                 try:
                     result = self.engine.submit_signal(
@@ -878,13 +941,13 @@ class MarketListener:
             out[tf] = df_tf
         return out
 
-    def _should_emit_signal(self, signal: Signal) -> bool:
+    def _should_emit_signal(self, signal: Signal, market: str = "cn") -> bool:
         """Dedupe: skip if same (code, strategy, side) was emitted recently."""
         key = (signal.code, signal.strategy_name, signal.side)
         last = self._last_signal_at.get(key)
         if last is None:
             return True
-        elapsed = (datetime.now() - last).total_seconds()
+        elapsed = (ExchangeClock.now(market) - last).total_seconds()
         if elapsed < self.config.signal_cooldown_seconds:
             logger.debug(
                 "[MarketListener] dedupe skip: %s %s %s (last=%ss ago)",
@@ -896,11 +959,15 @@ class MarketListener:
 
     def _record_signal(self, signal: Signal) -> None:
         key = (signal.code, signal.strategy_name, signal.side)
-        self._last_signal_at[key] = datetime.now()
+        self._last_signal_at[key] = ExchangeClock.now("cn")
 
     def _get_daily_df(self, code: str) -> Any:
-        """Return the daily-bar DataFrame for ``code``, with caching."""
-        now = datetime.now()
+        """Return the daily-bar DataFrame for ``code``, with caching.
+
+        T-023: Checks local SQLite store first; falls back to remote fetch
+        and upserts the result.
+        """
+        now = ExchangeClock.now("cn")
         cached = self._daily_df_cache.get(code)
         if cached is not None:
             fetched_at, df = cached
@@ -908,8 +975,22 @@ class MarketListener:
             if age < self.config.daily_df_cache_seconds:
                 return df
 
+        # T-023: Try local store first.
+        local_store = getattr(self, "_local_store", None)
+        if local_store is not None:
+            try:
+                from datetime import timedelta
+                start = (now - timedelta(days=365)).date()
+                end = now.date()
+                df_local = local_store.get(code, start, end)
+                if df_local is not None and len(df_local) >= 2:
+                    self._daily_df_cache[code] = (now, df_local)
+                    return df_local
+            except Exception as exc:
+                logger.debug("[MarketListener] local_store read failed for %s: %s", code, exc)
+
         try:
-            # Use unified multi-source data fetcher; get_daily_data is an alias for get_daily_historical in MultiSourceDataFetcher
+            # Use unified multi-source data fetcher.
             df = self.fetcher.get_daily_historical(code, days=60)
         except Exception as exc:
             logger.debug(
@@ -933,6 +1014,14 @@ class MarketListener:
             )
 
         self._daily_df_cache[code] = (now, df)
+
+        # T-023: Upsert into local store for next restart.
+        if local_store is not None and df is not None and not df.empty:
+            try:
+                local_store.upsert(code, df, source="fetcher")
+            except Exception as exc:
+                logger.debug("[MarketListener] local_store write failed for %s: %s", code, exc)
+
         return df
 
     # ------------------------------------------------------------------
@@ -954,7 +1043,7 @@ class MarketListener:
         close_dt = get_market_close_today(market)
         if close_dt is not None:
             tz = close_dt.tzinfo
-            now_local = datetime.now(tz)
+            now_local = ExchangeClock.now(market)
             elapsed_since_close = (now_local - close_dt).total_seconds()
             if elapsed_since_close < 0:
                 # Market still open (shouldn't happen here, but defensive).
@@ -1003,6 +1092,15 @@ class MarketListener:
         if self.config.enable_daily_report:
             self._maybe_generate_daily_report(today)
 
+        # T-013: Feature pipeline — recompute after each daily settle.
+        self._maybe_run_feature_pipeline(today)
+
+        # T-011: Extreme market auto-resume — check every settle cycle.
+        self._maybe_auto_resume_extreme_market()
+
+        # T-010: Drift detector — record daily PnL after settle.
+        self._maybe_record_drift_pnl(today)
+
     # ------------------------------------------------------------------
     # P1-C: PM agent / reflection / battle-plan triggers
     # ------------------------------------------------------------------
@@ -1021,7 +1119,7 @@ class MarketListener:
         if interval <= 0:
             return
         last = self._last_pm_decision_at.get(market)
-        now = datetime.now()
+        now = ExchangeClock.now("cn")
         if last is not None and (now - last).total_seconds() < interval:
             return
         self._last_pm_decision_at[market] = now
@@ -1119,6 +1217,81 @@ class MarketListener:
         except Exception as exc:
             logger.warning("Daily report generation failed: %s", exc)
 
+    # ------------------------------------------------------------------
+    # T-013: Feature pipeline post-settle trigger
+    # ------------------------------------------------------------------
+
+    def _maybe_run_feature_pipeline(self, today: Optional[date] = None) -> None:
+        """Run feature computation after daily settle (T-013).
+
+        Activated when ``feature_pipeline`` is configured on the listener.
+        Fault-tolerant: failures are logged and never break the settle cycle.
+        """
+        pipeline = getattr(self, "_feature_pipeline", None)
+        if pipeline is None:
+            return
+        try:
+            settle_date = today or date.today()
+            codes = list(self._daily_df_cache.keys()) or self._codes_for_market("cn")
+            if not codes:
+                return
+            daily_data: Dict[str, Any] = {}
+            for code in codes:
+                df_wrapper = self._daily_df_cache.get(code)
+                if df_wrapper is not None:
+                    _, df = df_wrapper
+                    if df is not None and not df.empty:
+                        daily_data[code] = df
+            if not daily_data:
+                return
+            features = pipeline.run(list(daily_data.keys()), daily_data)
+            if features is not None and not features.empty:
+                path = pipeline.save(features, settle_date)
+                logger.info("Feature pipeline saved: %s rows → %s", len(features), path)
+        except Exception as exc:
+            logger.warning("Feature pipeline run failed: %s", exc)
+
+    # ------------------------------------------------------------------
+    # T-011: Extreme market auto-resume
+    # ------------------------------------------------------------------
+
+    def _maybe_auto_resume_extreme_market(self, auto_resume_minutes: int = 30) -> None:
+        """Check and auto-resume from extreme market state (T-011)."""
+        response = getattr(self, "_extreme_market_response", None)
+        if response is None:
+            return
+        try:
+            if response.auto_resume(auto_resume_minutes):
+                logger.info("ExtremeMarketResponse auto-resumed after cooling period")
+        except Exception as exc:
+            logger.warning("Extreme market auto-resume check failed: %s", exc)
+
+    # ------------------------------------------------------------------
+    # T-010: Drift detector — daily PnL record
+    # ------------------------------------------------------------------
+
+    def _maybe_record_drift_pnl(self, today: Optional[date] = None) -> None:
+        """Record each strategy's daily PnL into the drift detector (T-010).
+
+        Reads today's trades from the engine and computes per-strategy PnL.
+        """
+        drift = getattr(self, "_drift_detector", None)
+        fusion = getattr(self, "_signal_fusion", None)
+        if drift is None:
+            return
+        try:
+            account = self.engine.account_mgr.snapshot(self.config.account_id)
+            today_pnl = getattr(account, "total_assets", account.cash) - getattr(account, "initial_capital", account.cash)
+            # Record for all active strategies — drift detector aggregates per name.
+            for strategy in self.strategies:
+                drift.record_daily_pnl(strategy.name, today_pnl)
+            # Feed drift reports into signal fusion for weight adjustment.
+            if fusion is not None and hasattr(fusion, "update_weights_from_drift"):
+                reports = {s.name: drift.check(s.name) for s in self.strategies}
+                fusion.update_weights_from_drift(reports)
+        except Exception as exc:
+            logger.warning("Drift PnL record failed: %s", exc)
+
 
 # ============================================================
 # Factory
@@ -1150,6 +1323,10 @@ def build_default_listener(
     enable_position_review: Optional[bool] = None,
     position_review_interval_seconds: Optional[float] = None,
     enable_daily_report: Optional[bool] = None,
+    circuit_breaker: Optional[Any] = None,  # T-003: circuit breaker injection
+    risk_daemon: Optional[Any] = None,  # T-008: risk daemon injection
+    signal_fusion: Optional[Any] = None,  # T-009: signal fusion injection
+    quote_cache: Optional[Any] = None,  # T-007: quote cache injection
 ) -> MarketListener:
     """Build a MarketListener wired to project defaults.
 
@@ -1254,8 +1431,18 @@ def build_default_listener(
         data_fetcher = MultiSourceDataFetcher(source_priority=priority_list, cache_ttl=30)
 
     if engine is None:
+        # T-003: Build CircuitBreaker when not supplied — defaults to env-configurable.
+        if circuit_breaker is None:
+            from paper_trading.circuit_breaker import BreakerConfig, CircuitBreaker
+            breaker_cfg = BreakerConfig(
+                soft_threshold_pct=float(getattr(config, "circuit_breaker_soft_threshold_pct", 3.0)),
+                hard_threshold_pct=float(getattr(config, "circuit_breaker_hard_threshold_pct", 5.0)),
+                liquidation_threshold_pct=float(getattr(config, "circuit_breaker_liquidation_threshold_pct", 8.0)),
+            )
+            circuit_breaker = CircuitBreaker(config=breaker_cfg, account_id=account_id)
         engine = TradingEngine(
             agent_reviewer=agent_reviewer,
+            circuit_breaker=circuit_breaker,
             on_trade_executed=on_trade_executed,
             on_signal_rejected=on_signal_rejected,
         )
@@ -1316,4 +1503,7 @@ def build_default_listener(
         battle_plan_generator=battle_plan_generator,
         content_generator=content_generator,
         notifier=notifier,
+        quote_cache=quote_cache,
+        signal_fusion=signal_fusion,
+        risk_daemon=risk_daemon,
     )

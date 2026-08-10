@@ -46,14 +46,21 @@ __all__ = ['app']
 if __name__ == "__main__":
     import uvicorn, os
 
-    # ③ HealthCheckDaemon (T6 integration) — optional, enabled via env.
+    # ③ HealthCheckDaemon (T6 integration) — enabled via HEALTH_CHECK_ENABLED env.
     if os.getenv("HEALTH_CHECK_ENABLED", "").strip().lower() in ("1", "true", "yes"):
-        from src.services.health_check import HealthCheckDaemon, check_ntp_sync
+        from src.services.health_check import (
+            HealthCheckDaemon, check_ntp_sync, check_system_resources, check_task_queue,
+        )
         daemon = HealthCheckDaemon(
             on_alert=lambda level, msg: logging.getLogger("health").warning("[%s] %s", level, msg),
         )
         daemon.register(check_ntp_sync)
+        daemon.register(check_system_resources)
+        daemon.register(check_task_queue)
+        # Listener-alive and data-source-health checks require runtime objects;
+        # register them from the caller (main.py) via daemon.register(lambda: ...).
         daemon.start()
+        logging.getLogger("health").info("HealthCheckDaemon started with %d checks", len(daemon._checks))
 
     uvicorn.run(
         "server:app",

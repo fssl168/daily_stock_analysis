@@ -41,6 +41,9 @@ import type {
   SignalListResponse,
   TradeListResponse,
   TradeResultResponse,
+  LatencyReport,
+  DriftReportItem,
+  ExtremeMarketAlertItem,
 } from '../types/paperTrading';
 
 // ============ API ============
@@ -566,6 +569,126 @@ export const paperTradingApi = {
       `/api/v1/paper-trading/accounts/${accountId}/breaker/status`
     );
     return toCamelCase<BreakerStatusResponse>(response.data);
+  },
+
+  // ---------------------------------------------------------------------------
+  // Realtime-quant API surface (added during frontend alignment)
+  // Backend endpoints may not all exist yet — these stubs call the documented
+  // routes and degrade to empty defaults on failure.
+  // ---------------------------------------------------------------------------
+
+  /** Get tick-level latency statistics (p50/p95/p99). */
+  getLatency: async (accountId: number): Promise<LatencyReport> => {
+    try {
+      const response = await apiClient.get<Record<string, unknown>>(
+        `/api/v1/paper-trading/accounts/${accountId}/latency`
+      );
+      return toCamelCase<LatencyReport>(response.data);
+    } catch {
+      return {
+        tickTotalMs: { p50: 0, p95: 0, p99: 0 },
+        steps: [],
+      };
+    }
+  },
+
+  /** Get strategy drift reports. */
+  getDrift: async (accountId: number): Promise<DriftReportItem[]> => {
+    try {
+      const response = await apiClient.get<Record<string, unknown>>(
+        `/api/v1/paper-trading/accounts/${accountId}/drift`
+      );
+      const data = response.data;
+      const items = Array.isArray(data) ? data : (data as Record<string, unknown>).items;
+      return (items ?? []) as unknown as DriftReportItem[];
+    } catch {
+      return [];
+    }
+  },
+
+  /** Get extreme market alert status. */
+  getExtremeMarket: async (accountId: number): Promise<ExtremeMarketAlertItem> => {
+    try {
+      const response = await apiClient.get<Record<string, unknown>>(
+        `/api/v1/paper-trading/accounts/${accountId}/extreme-market`
+      );
+      return toCamelCase<ExtremeMarketAlertItem>(response.data);
+    } catch {
+      return {
+        market: "cn",
+        isActive: false,
+        currentVol: 0,
+        historicalVol: 0,
+        ratio: 0,
+        actions: [],
+        detectedAt: "",
+      };
+    }
+  },
+
+  /** Get all strategies with lifecycle + performance. */
+  getStrategies: async <T = unknown[]>(accountId: number): Promise<T> => {
+    try {
+      const response = await apiClient.get<Record<string, unknown>>(
+        `/api/v1/paper-trading/accounts/${accountId}/strategies`
+      );
+      const data = response.data;
+      const items = Array.isArray(data) ? data : (data as Record<string, unknown>).items;
+      return (items ?? []) as T;
+    } catch {
+      return [] as T;
+    }
+  },
+
+  /** Get strategy performance leaderboard. */
+  getStrategyPerformance: async <T = unknown[]>(accountId: number): Promise<T> => {
+    try {
+      const response = await apiClient.get<Record<string, unknown>>(
+        `/api/v1/paper-trading/accounts/${accountId}/strategies/performance`
+      );
+      const data = response.data;
+      const items = Array.isArray(data) ? data : (data as Record<string, unknown>).items;
+      return (items ?? []) as T;
+    } catch {
+      return [] as T;
+    }
+  },
+
+  /** Get latest feature-pipeline snapshot. */
+  getFeatures: async <T = unknown>(accountId: number): Promise<T> => {
+    try {
+      const response = await apiClient.get<Record<string, unknown>>(
+        `/api/v1/paper-trading/accounts/${accountId}/features`
+      );
+      return response.data as T;
+    } catch {
+      return { as_of: "", features: [], skipped_codes: [] } as T;
+    }
+  },
+
+  /** Trigger feature pipeline recompute. */
+  recomputeFeatures: async (accountId: number): Promise<void> => {
+    try {
+      await apiClient.post(
+        `/api/v1/paper-trading/accounts/${accountId}/features/recompute`
+      );
+    } catch {
+      // silent — feature pipeline not yet available
+    }
+  },
+
+  /** Get daily OHLC bars for a stock (for candlestick chart). */
+  getDailyBars: async <T = unknown[]>(accountId: number, code: string, days = 90): Promise<T> => {
+    try {
+      const response = await apiClient.get<Record<string, unknown>>(
+        `/api/v1/paper-trading/accounts/${accountId}/daily-bars/${code}?days=${days}`
+      );
+      const data = response.data;
+      const items = Array.isArray(data) ? data : (data as Record<string, unknown>).items;
+      return (items ?? []) as T;
+    } catch {
+      return [] as T;
+    }
   },
 };
 

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import date
+from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 import numpy as np
@@ -90,6 +92,27 @@ def ma_alignment(df: pd.DataFrame, short: int = 5, long: int = 20) -> pd.Series:
     return (short_ma > long_ma).astype(int)
 
 
+@FeatureRegistry.register("bid_ask_imbalance")
+def bid_ask_imbalance(
+    df: pd.DataFrame,
+    l2_data: Optional[Dict] = None,
+) -> pd.Series:
+    """L2 买卖盘不平衡度特征（默认全 0，需传入 L2 数据源激活）。
+
+    当 ``l2_data`` 为 None 时返回全 0 序列（不阻塞管线）。
+    当有数据时，按 code 匹配 bid_ask_imbalance 值。
+    """
+    if l2_data is None:
+        return pd.Series(0.0, index=df.index, dtype=float)
+    # Extract per-code imbalance from L2 snapshot.
+    result = pd.Series(0.0, index=df.index, dtype=float)
+    code = str(l2_data.get("code", ""))
+    imbalance = float(l2_data.get("bid_ask_imbalance", 0) or 0)
+    if code and imbalance != 0.0:
+        result.iloc[-1] = imbalance  # only the latest bar gets the L2 signal
+    return result
+
+
 class FeaturePipeline:
     """离线特征工程管线.
 
@@ -150,3 +173,16 @@ class FeaturePipeline:
         """返回列结构完整、无行的空结果 DataFrame（code, date MultiIndex）."""
         index = pd.MultiIndex.from_arrays([[], []], names=["code", "date"])
         return pd.DataFrame(columns=feature_names, index=index)
+
+    # ------------------------------------------------------------------
+    # T-013: Persistence
+    # ------------------------------------------------------------------
+
+    def save(self, features: pd.DataFrame, as_of: date) -> Path:
+        """Persist features to a date-stamped parquet file."""
+        output_dir = Path("data/features")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / f"{as_of.strftime('%Y%m%d')}.parquet"
+        features.to_parquet(path)
+        logger.info("FeaturePipeline saved: %s (%d rows)", path, len(features))
+        return path

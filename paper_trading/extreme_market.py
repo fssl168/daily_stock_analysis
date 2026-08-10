@@ -147,3 +147,39 @@ class ExtremeMarketResponse:
             return True
         return not self.disable_market_orders_on_activation
 
+    # ---- T-011: auto-resume + circuit breaker threshold widening ----
+
+    def auto_resume(self, auto_resume_minutes: int = 30) -> bool:
+        """Auto-deactivate after *auto_resume_minutes* have passed since activation.
+
+        Returns True if the deactivation happened, False otherwise.
+        """
+        if not self.is_active() or self.activated_at is None:
+            return False
+        elapsed = (datetime.now() - self.activated_at).total_seconds()
+        if elapsed >= auto_resume_minutes * 60:
+            self.deactivate()
+            logger.info("ExtremeMarketResponse auto-resumed after %.0f min", elapsed / 60)
+            return True
+        return False
+
+    def widen_circuit_breaker(self, cb: Any, factor: float = 2.0) -> None:
+        """Temporarily widen circuit breaker thresholds during extreme markets.
+
+        Multiplies soft/hard/liquidation thresholds by *factor* so the breaker
+        doesn't trip prematurely amid elevated volatility.
+        """
+        if cb is None:
+            return
+        cfg = getattr(cb, "config", None)
+        if cfg is None:
+            return
+        cfg.soft_threshold_pct = getattr(cfg, "soft_threshold_pct", 3.0) * factor
+        cfg.hard_threshold_pct = getattr(cfg, "hard_threshold_pct", 5.0) * factor
+        cfg.liquidation_threshold_pct = getattr(cfg, "liquidation_threshold_pct", 8.0) * factor
+        logger.warning(
+            "CircuitBreaker thresholds widened: soft=%.1f%% hard=%.1f%% liq=%.1f%% (factor=%.1fx)",
+            cfg.soft_threshold_pct, cfg.hard_threshold_pct,
+            cfg.liquidation_threshold_pct, factor,
+        )
+

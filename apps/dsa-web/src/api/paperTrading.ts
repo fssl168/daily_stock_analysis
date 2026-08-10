@@ -12,6 +12,7 @@ import type {
   BattlePlanGenerateRequest,
   BattlePlanItem,
   BattlePlanMarkdownResponse,
+  BreakerStatusResponse,
   ConditionalOrderCreateRequest,
   ConditionalOrderItem,
   DailyReflectionRequest,
@@ -560,11 +561,11 @@ export const paperTradingApi = {
   },
 
   /** Get circuit breaker status for an account. */
-  getBreakerStatus: async (accountId: number): Promise<import("../types/paperTrading").BreakerStatusResponse> => {
+  getBreakerStatus: async (accountId: number): Promise<BreakerStatusResponse> => {
     const response = await apiClient.get<Record<string, unknown>>(
       `/api/v1/paper-trading/accounts/${accountId}/breaker/status`
     );
-    return toCamelCase<import("../types/paperTrading").BreakerStatusResponse>(response.data);
+    return toCamelCase<BreakerStatusResponse>(response.data);
   },
 };
 

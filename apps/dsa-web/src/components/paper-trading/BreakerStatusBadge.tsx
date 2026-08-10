@@ -22,23 +22,33 @@ interface Props {
 export function BreakerStatusBadge({ accountId, className = "" }: Props) {
   const [status, setStatus] = useState<BreakerStatusResponse | null>(null);
   const [error, setError] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
-    paperTradingApi
-      .getBreakerStatus(accountId)
-      .then((s) => { if (!cancelled) setStatus(s); })
-      .catch(() => { if (!cancelled) setError(true); });
-    const timer = setInterval(() => {
+    setLoading(true);
+    setError(false);
+    const fetch = () => {
       paperTradingApi
         .getBreakerStatus(accountId)
-        .then((s) => { if (!cancelled) setStatus(s); })
-        .catch(() => {});
-    }, 30_000);
+        .then((s) => { if (!cancelled) { setStatus(s); setError(false); } })
+        .catch(() => { if (!cancelled) setError(true); })
+        .finally(() => { if (!cancelled) setLoading(false); });
+    };
+    fetch();
+    const timer = setInterval(fetch, 30_000);
     return () => { cancelled = true; clearInterval(timer); };
   }, [accountId]);
 
-  if (error || !status) return null;
+  if (loading && !status) {
+    return <span className={`text-xs text-muted-foreground ${className}`}>熔断检测中…</span>;
+  }
+
+  if (error && !status) {
+    return <span className={`text-xs text-muted-foreground ${className}`}>熔断状态不可用</span>;
+  }
+
+  if (!status) return null;
 
   const meta = LEVEL_META[status.level] ?? LEVEL_META.normal;
   const Icon = meta.icon;

@@ -28,7 +28,21 @@ export function HealthDashboard({ className = "" }: { className?: string }) {
     return () => { cancelled = true; clearInterval(t); };
   }, []);
 
-  if (loading) return null;
+  if (loading) {
+    return (
+      <Card className={`p-3 ${className}`}>
+        <span className="text-xs text-muted-foreground">系统检测中…</span>
+      </Card>
+    );
+  }
+
+  if (!health) {
+    return (
+      <Card className={`p-3 ${className}`}>
+        <span className="text-xs text-muted-foreground">系统状态不可用</span>
+      </Card>
+    );
+  }
 
   const ok = health?.status === "ok";
 

@@ -258,7 +258,7 @@ def _reload_env_file_values_preserving_overrides() -> None:
 def parse_arguments() -> argparse.Namespace:
     """解析命令行参数"""
     parser = argparse.ArgumentParser(
-        description='A股自选股智能分析系统',
+        description='A股自选股智能分析系统 | Paper Trading CLI',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 示例:
@@ -271,8 +271,16 @@ def parse_arguments() -> argparse.Namespace:
   python main.py --single-notify    # 启用单股推送模式（每分析完一只立即推送）
   python main.py --schedule         # 启用定时任务模式
   python main.py --market-review    # 仅运行大盘复盘
+
+  # Paper Trading CLI 示例:
+  python main.py paper-trading account create --name=my-account
+  python main.py paper-trading account list
+  python main.py paper-trading strategy list
+  python main.py paper-trading listen start --account-id=1
         '''
     )
+
+    subparsers = parser.add_subparsers(dest="command")
 
     parser.add_argument(
         '--debug',
@@ -417,6 +425,10 @@ def parse_arguments() -> argparse.Namespace:
         action='store_true',
         help='强制回测（即使已有回测结果也重新计算）'
     )
+
+    # === Paper Trading CLI ===
+    from paper_trading.cli import add_subparser as add_paper_trading
+    add_paper_trading(subparsers)
 
     return parser.parse_args()
 
@@ -1233,6 +1245,20 @@ def main() -> int:
     """
     # 解析命令行参数
     args = parse_arguments()
+
+    # --- Paper Trading CLI 快捷入口 ---
+    if getattr(args, "pt_command", None):
+        _bootstrap_environment()
+        try:
+            _setup_bootstrap_logging(debug=getattr(args, "debug", False))
+        except Exception:
+            pass
+        try:
+            config = get_config()
+        except Exception:
+            config = None
+        from paper_trading.cli import dispatch
+        return dispatch(args)
 
     # 在配置加载前先初始化 bootstrap 日志，确保早期失败也能落盘
     try:

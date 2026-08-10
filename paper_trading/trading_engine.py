@@ -147,6 +147,16 @@ class TradingEngine:
             agent_reviewer=self.agent_reviewer,
         )
 
+        # T18-B: OMS (Order Management System) — delegated order lifecycle
+        from paper_trading.oms_mgmt import OrderManagementSystem
+
+        self.oms = OrderManagementSystem(
+            order_mgr=self.order_mgr,
+            account_mgr=self.account_mgr,
+            position_mgr=self.position_mgr,
+            fee_model=self.fee_model,
+        )
+
     # ------------------------------------------------------------------
     # Signal submission
     # ------------------------------------------------------------------
@@ -275,65 +285,53 @@ class TradingEngine:
                     agent_review=agent_review_dict,
                 )
 
-        # Create the order.
-        order_req = OrderRequest(
+        # Create and execute the order via OMS (T18-B).
+        from paper_trading.oms_mgmt import OrderParams
+
+        oms_params = OrderParams(
             account_id=account_id,
             code=signal.code,
-            side=OrderSide(side),
+            side=side,
             quantity=quantity,
             order_type=order_type,
-            price=limit_price if order_type == OrderType.LIMIT else None,
-            name=signal.name,
-            strategy_name=signal.strategy_name,
+            limit_price=limit_price if order_type == OrderType.LIMIT else None,
+            ref_price=ref_price,
             signal_id=signal_id,
-            reason=signal.reason,
+            signal=signal,
+            risk_decisions=risk_result.risk_decisions,
+            agent_review=agent_review_dict,
         )
-        order = self.order_mgr.create_order(order_req)
-        order_id = order.id
 
-        # Execute based on order type.
         if order_type == OrderType.MARKET:
-            return self._execute_market_order(
-                account_id=account_id,
-                order_id=order_id,
-                side=side,
-                code=signal.code,
-                name=signal.name,
-                ref_price=ref_price,
-                quantity=quantity,
-                signal_id=signal_id,
-                risk_decisions=decisions,
-                agent_review=agent_review_dict,
-            )
+            order_result = self.oms.create_order(oms_params)
+            if order_result.order_id is None:
+                return order_result  # creation failed
+            oms_params.order_id = order_result.order_id
+            trade_result = self.oms.execute_market(order_result.order_id, oms_params)
+            self._update_signal_status(signal_id, trade_result.status,
+                                       reason=trade_result.reason)
+            self._apply_sltp_to_position(account_id, signal.code, oms_params.ref_price)
+            if trade_result.status == "filled":
+                self._fire_callback(self._on_trade_executed, trade_result,
+                                    trade_id=getattr(trade_result, 'trade_id', None))
+            else:
+                self._fire_callback(self._on_signal_rejected, trade_result)
+            return trade_result
 
-        # Limit order: freeze cash for buys and wait for matcher.
-        if side == "buy":
-            eff_price = limit_price or ref_price
-            estimated_cost = self.fee_model.estimate_buy_cost(eff_price, quantity)
-            try:
-                self.account_mgr.freeze_cash(account_id, estimated_cost)
-            except ValueError as exc:
-                # Freeze failed (e.g., cash became insufficient between check and freeze).
-                self.order_mgr.reject_order(order_id, reason=f"freeze failed: {exc}")
-                self._update_signal_status(signal_id, "rejected", reason=str(exc))
-                return TradeResult(
-                    signal_id=signal_id,
-                    order_id=order_id,
-                    side=side,
-                    code=signal.code,
-                    status="rejected",
-                    fill_price=None,
-                    fill_quantity=None,
-                    fee=None,
-                    reason=f"freeze failed: {exc}",
-                    risk_decisions=[d.to_dict() for d in decisions],
-                    agent_review=agent_review_dict,
-                )
+        # Limit order: handle via OMS.
+        order_result = self.oms.create_order(oms_params)
+        if order_result.order_id is None:
+            return order_result
+        oms_params.order_id = order_result.order_id
+        limit_reject = self.oms.handle_limit(order_result.order_id, oms_params)
+        if limit_reject is not None:
+            self._update_signal_status(signal_id, "rejected", reason=limit_reject.reason)
+            return limit_reject
 
         self._update_signal_status(signal_id, "pending", reason="limit order awaiting match")
         return TradeResult(
             signal_id=signal_id,
-            order_id=order_id,
+            order_id=order_result.order_id,
             side=side,
             code=signal.code,
             status="pending",
@@ -341,7 +339,7 @@ class TradingEngine:
             fill_quantity=None,
             fee=None,
             reason="limit order pending",
-            risk_decisions=[d.to_dict() for d in decisions],
+            risk_decisions=risk_result.risk_decisions,
             agent_review=agent_review_dict,
         )
 

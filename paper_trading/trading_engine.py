@@ -100,6 +100,7 @@ class TradingEngine:
         agent_reviewer: Optional[AgentRiskReviewer] = None,
         sltp_calculator: Optional[Any] = None,
         enable_auto_sltp: bool = True,
+        circuit_breaker: Optional[Any] = None,  # ① T2 integration
         on_trade_executed: Optional[Any] = None,
         on_signal_rejected: Optional[Any] = None,
     ):
@@ -156,6 +157,12 @@ class TradingEngine:
             position_mgr=self.position_mgr,
             fee_model=self.fee_model,
         )
+
+        # ① CircuitBreaker (T2 integration) — optional, defaults to disabled
+        if circuit_breaker is not None:
+            self.circuit_breaker = circuit_breaker
+        else:
+            self.circuit_breaker = None
 
     # ------------------------------------------------------------------
     # Signal submission
@@ -281,6 +288,31 @@ class TradingEngine:
                     fill_quantity=None,
                     fee=None,
                     reason=f"agent veto: {agent_review_dict.get('reason', '')}",
+                    risk_decisions=risk_result.risk_decisions,
+                    agent_review=agent_review_dict,
+                )
+
+        # ① CircuitBreaker check (T2 integration) — after RMS, before OMS.
+        if self.circuit_breaker is not None:
+            account = self.account_mgr.snapshot(account_id)
+            breaker_state = self.circuit_breaker.evaluate(
+                current_pnl=account.total_assets - account.initial_capital
+                    if hasattr(account, 'initial_capital') else 0.0,
+                initial_capital=getattr(account, 'initial_capital', account.total_assets),
+            )
+            if not self.circuit_breaker.allow_any_trade():
+                return TradeResult(
+                    signal_id=signal_id, order_id=None, side=side,
+                    code=signal.code, status="rejected",
+                    reason=f"breaker: {breaker_state.reason}",
+                    risk_decisions=risk_result.risk_decisions,
+                    agent_review=agent_review_dict,
+                )
+            if side == "buy" and not self.circuit_breaker.allow_new_position():
+                return TradeResult(
+                    signal_id=signal_id, order_id=None, side=side,
+                    code=signal.code, status="rejected",
+                    reason=f"breaker(soft): new positions blocked",
                     risk_decisions=risk_result.risk_decisions,
                     agent_review=agent_review_dict,
                 )

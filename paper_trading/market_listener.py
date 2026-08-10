@@ -353,6 +353,8 @@ class MarketListener:
         battle_plan_generator: Optional[Any] = None,
         content_generator: Optional[Any] = None,
         notifier: Optional[Any] = None,
+        quote_cache: Optional["SharedQuoteCache"] = None,  # ② T12 integration
+        signal_fusion: Optional["SignalFusionEngine"] = None,  # ④ T3 integration
     ):
         self.engine = engine
         self.fetcher = data_fetcher
@@ -365,6 +367,12 @@ class MarketListener:
         # P2-A: Optional daily-report content generator + notifier.
         self.content_generator = content_generator
         self.notifier = notifier
+
+        # ② QuoteCache (T12 integration) — optional dual-channel quote cache.
+        self._quote_cache = quote_cache
+
+        # ④ SignalFusionEngine (T3 integration) — optional multi-strategy fusion.
+        self._signal_fusion = signal_fusion
 
         self.rule_engine = RuleEngine()
         self._shutdown = threading.Event()
@@ -695,16 +703,35 @@ class MarketListener:
         return out
 
     def _fetch_latest_prices(self, codes: List[str]) -> Dict[str, float]:
-        """Fetch realtime quotes and return {code: latest_price}."""
+        """Fetch realtime quotes and return {code: latest_price}.
+
+        When quote_cache is configured (② T12 integration), fresh cached
+        quotes are returned directly without hitting the data fetcher.
+        """
         out: Dict[str, float] = {}
+
+        # ② Try cache first (SharedQuoteCache integration).
+        cache = self._quote_cache
+        missing: List[str] = []
+        for code in codes:
+            if cache is not None:
+                cached = cache.get(code)
+                if cached is not None:
+                    out[code] = cached.price
+                    continue
+            missing.append(code)
+
+        if not missing:
+            return out
+
         # Use bulk prefetch when >=5 codes (populates cache efficiently).
         try:
-            if len(codes) >= 5 and hasattr(self.fetcher, "prefetch_realtime_quotes"):
-                self.fetcher.prefetch_realtime_quotes(codes)
+            if len(missing) >= 5 and hasattr(self.fetcher, "prefetch_realtime_quotes"):
+                self.fetcher.prefetch_realtime_quotes(missing)
         except Exception as exc:
             logger.debug("[MarketListener] prefetch failed: %s", exc)
 
-        for code in codes:
+        for code in missing:
             try:
                 quote = self.fetcher.get_realtime_quote(code)
             except Exception as exc:
@@ -718,6 +745,21 @@ class MarketListener:
             price = getattr(quote, "price", None)
             if price is not None and float(price) > 0:
                 out[code] = float(price)
+                # ② Write back to cache.
+                if cache is not None:
+                    from paper_trading.quote_cache import CachedQuote
+                    from datetime import datetime
+                    cache.update(code, CachedQuote(
+                        price=float(price),
+                        volume=float(getattr(quote, "volume", 0) or 0),
+                        change_pct=float(getattr(quote, "change_pct", 0) or 0),
+                        high=float(getattr(quote, "high", 0) or 0),
+                        low=float(getattr(quote, "low", 0) or 0),
+                        open=float(getattr(quote, "open", 0) or 0),
+                        pre_close=float(getattr(quote, "pre_close", 0) or 0),
+                        timestamp=getattr(quote, "timestamp", datetime.now()),
+                        source=f"poll_{getattr(quote, 'fetcher_name', 'unknown')}",
+                    ))
         return out
 
     def _evaluate_strategies(
@@ -726,12 +768,19 @@ class MarketListener:
         latest_prices: Dict[str, float],
         market: str,
     ) -> None:
-        """Evaluate all strategies for each code; submit signals to engine."""
+        """Evaluate all strategies for each code; submit signals to engine.
+
+        When signal_fusion is configured (④ T3 integration), signals from
+        multiple strategies are fused per-code before submission.
+        """
+        fusion = self._signal_fusion
         for code in codes:
             price = latest_prices.get(code)
             if price is None or price <= 0:
                 continue
 
+            # Collect signals from all strategies for this code.
+            code_signals = []
             for strategy in self.strategies:
                 timeframes = strategy.timeframes or self.config.strategy_timeframes or ["1d"]
                 data = self._get_strategy_data(code, timeframes)
@@ -755,6 +804,30 @@ class MarketListener:
                     continue
                 if signal.side not in ("buy", "sell"):
                     continue
+                code_signals.append(signal)
+
+            if not code_signals:
+                continue
+
+            # ④ Fuse signals if fusion engine is configured.
+            targets: list = code_signals
+            if fusion is not None:
+                fused = fusion.fuse(code, code_signals)
+                if fused is None:
+                    continue  # no consensus → skip this code
+                # Wrap fused result as a signal for engine submission.
+                from paper_trading.strategies import Signal as S
+                targets = [S(
+                    side=fused.side, code=fused.code,
+                    name=",".join(fused.supporting_strategies),
+                    strategy_name="fusion",
+                    rule_name=fused.method.value,
+                    trigger_price=price,
+                    suggested_quantity=None,
+                    reason=f"fused({','.join(fused.supporting_strategies)}): conf={fused.confidence:.2f}",
+                )]
+
+            for signal in targets:
                 if not self._should_emit_signal(signal):
                     continue
                 try:
@@ -766,7 +839,7 @@ class MarketListener:
                     logger.info(
                         "[MarketListener] signal submitted: %s %s (strat=%s) "
                         "-> status=%s reason=%s",
-                        signal.side, code, strategy.name,
+                        signal.side, code, signal.strategy_name,
                         result.status, result.reason,
                     )
                 except Exception as exc:

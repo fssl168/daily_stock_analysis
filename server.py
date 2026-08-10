@@ -44,7 +44,16 @@ __all__ = ['app']
 
 
 if __name__ == "__main__":
-    import uvicorn
+    import uvicorn, os
+
+    # ③ HealthCheckDaemon (T6 integration) — optional, enabled via env.
+    if os.getenv("HEALTH_CHECK_ENABLED", "").strip().lower() in ("1", "true", "yes"):
+        from src.services.health_check import HealthCheckDaemon, check_ntp_sync
+        daemon = HealthCheckDaemon(
+            on_alert=lambda level, msg: logging.getLogger("health").warning("[%s] %s", level, msg),
+        )
+        daemon.register(check_ntp_sync)
+        daemon.start()
 
     uvicorn.run(
         "server:app",

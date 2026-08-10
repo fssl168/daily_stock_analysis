@@ -558,4 +558,13 @@ export const paperTradingApi = {
     );
     return toCamelCase<BacktestPaperComparisonResponse>(response.data);
   },
+
+  /** Get circuit breaker status for an account. */
+  getBreakerStatus: async (accountId: number): Promise<import("../types/paperTrading").BreakerStatusResponse> => {
+    const response = await apiClient.get<Record<string, unknown>>(
+      `/api/v1/paper-trading/accounts/${accountId}/breaker/status`
+    );
+    return toCamelCase<import("../types/paperTrading").BreakerStatusResponse>(response.data);
+  },
 };
+

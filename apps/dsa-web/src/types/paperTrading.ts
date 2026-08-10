@@ -515,3 +515,17 @@ export interface DailyReportResponse {
   usedFallback?: boolean;
   error?: string;
 }
+
+
+// ---------------------------------------------------------------------------
+// Breaker status (integration ①)
+// ---------------------------------------------------------------------------
+
+export interface BreakerStatusResponse {
+  accountId: number;
+  level: "normal" | "soft" | "hard" | "liquidate";
+  canTrade: boolean;
+  canOpenNew: boolean;
+  reason: string;
+  triggeredAt?: string;
+}

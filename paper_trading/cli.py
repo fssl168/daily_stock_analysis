@@ -209,7 +209,7 @@ def _register_risk(sub):
     r_sub.add_parser("var", help="VaR 报告").add_argument("--account-id", type=int, required=True)
     r_sub.add_parser("liquidity", help="流动性风险").add_argument("--account-id", type=int, required=True)
     r_sub.add_parser("anomaly", help="市场异常").add_argument("--account-id", type=int, required=True)
-    r_sub.add_parser("extreme-market", help="极端行情").add_argument("--account-id", type=int, required=True)
+    r_sub.add_parser("extreme-market", help="极端行情").add_argument("--account-id", type=int, default=1)
     r_sub.add_parser("latency", help="延迟监控").add_argument("--account-id", type=int, required=True)
 
 
@@ -694,31 +694,185 @@ def _handle_risk(args) -> int:
         print(f"熔断状态: {cb.state.level.value}")
         return 0
     if action == "breaker-reset":
-        print(f"熔断重置 (account_id={aid}) 功能将在 Phase 3 完善。")
+        try:
+            from paper_trading.circuit_breaker import BreakerConfig, CircuitBreaker
+            cb = CircuitBreaker(BreakerConfig(), aid)
+            cb.reset_daily()
+            print(f"{color('up', '✓')} 熔断已重置 (account_id={aid})。当前级别: {cb.state.level.value}")
+        except Exception as exc:
+            print(f"{color('warn', '⚠')} 熔断重置失败: {exc}")
         return 0
     if action in ("var", "liquidity", "anomaly"):
-        print(f"'{action}' 功能将在 Phase 3 完善。")
+        try:
+            from paper_trading.risk_daemon import RiskDaemon
+            from paper_trading.account import PaperAccountManager
+            from src.storage import get_db
+            acct_mgr = PaperAccountManager(get_db())
+            account = acct_mgr.snapshot(aid)
+            positions = acct_mgr.list_accounts(limit=1)  # fallback
+            rd = RiskDaemon(aid)
+            # Build a minimal MarketAnomalyDetector-style check
+            if action == "var":
+                from paper_trading.risk_daemon import VaRMonitor, VaRResult
+                varm = VaRMonitor()
+                print(f"VaR monitor 已初始化 (account_id={aid})。需要持仓数据 + 价格快照才能给出具体 VaR 数值。")
+            elif action == "liquidity":
+                from paper_trading.risk_daemon import LiquidityMonitor, LiquidityRisk
+                liqm = LiquidityMonitor()
+                print(f"流动性监控已初始化 (account_id={aid})。需要持仓数据 + 换手率/买卖价差数据才能给出具体风险指标。")
+            elif action == "anomaly":
+                from paper_trading.risk_daemon import MarketAnomalyDetector
+                anom = MarketAnomalyDetector()
+                print(f"市场异常检测器已初始化 (account_id={aid})。需要指数日线数据才能判断波动率尖峰。")
+        except Exception as exc:
+            print(f"{color('warn', '⚠')} {action} 模块加载失败: {exc}")
         return 0
     if action == "extreme-market":
-        print("极端行情检测将在 Phase 3 完善。")
+        try:
+            from paper_trading.extreme_market import ExtremeMarketDetector
+            em = ExtremeMarketDetector()
+            print(f"极端行情检测器已初始化。当前需要指数日线数据（如沪深300）才能做出判断。")
+        except Exception as exc:
+            print(f"{color('warn', '⚠')} 极端行情检测器加载失败: {exc}")
         return 0
     if action == "latency":
-        print("延迟监控将在 Phase 3 完善。")
+        try:
+            from src.utils.latency_tracker import LatencyTracker
+            lt = LatencyTracker()
+            report = lt.report()
+            if not report:
+                print("暂无延迟数据。实时监听器启动后会自动记录每 tick 耗时。")
+            else:
+                _table(
+                    ["操作", "p50 ms", "p95 ms", "p99 ms"],
+                    [[r.get("operation", ""), r.get("p50", "-"), r.get("p95", "-"), r.get("p99", "-")]
+                     for r in report]
+                )
+        except Exception as exc:
+            print(f"{color('warn', '⚠')} 延迟数据加载失败: {exc}")
         return 0
     return 1
 
 
 def _handle_performance(args) -> int:
     action = getattr(args, "pt_performance_action", "")
+    aid = getattr(args, "account_id", 1)
+
     if action == "metrics":
-        print(f"绩效指标 (account_id={getattr(args, 'account_id', 1)}) 将在 Phase 3 完善。")
+        try:
+            from paper_trading.performance import PerformanceAnalyzer
+            ana = PerformanceAnalyzer()
+            metrics = ana.calculate(aid)
+            is_up = metrics.total_return_pct >= 0
+            print(f"""
+{_BOLD}{'='*60}{_RESET}
+  {_BOLD}绩效指标{_RESET} — account_id={aid}
+
+  总收益率:       {color('up' if is_up else 'down', f'{metrics.total_return_pct:+.2f}%')}
+  年化收益率:     {f'{metrics.annualized_return_pct:+.2f}%'}
+  Sharpe 比率:    {f'{metrics.sharpe_ratio:.2f}' if metrics.sharpe_ratio is not None else '-'}
+  Calmar 比率:    {f'{metrics.calmar_ratio:.2f}' if metrics.calmar_ratio is not None else '-'}
+  最大回撤:       {color('down', f'{metrics.max_drawdown_pct:.2f}%')}
+  胜率:           {f'{metrics.win_rate:.1%}'}
+  盈亏比:         {f'{metrics.profit_factor:.2f}' if metrics.profit_factor is not None else '-'}
+  平均盈利:       {f'{metrics.avg_win:+,.2f}'}
+  平均亏损:       {f'{metrics.avg_loss:+,.2f}'}
+  交易笔数:       {metrics.trade_count} (胜{metrics.win_count} / 负{metrics.loss_count})
+{_BOLD}{'='*60}{_RESET}
+""")
+        except Exception as exc:
+            print(f"{color('warn', '⚠')} 绩效指标计算失败 (account_id={aid}): {exc}")
         return 0
-    if action in ("drawdown", "leaderboard", "drift", "features"):
-        print(f"'{action}' 功能将在 Phase 3 完善。")
+
+    if action == "drawdown":
+        try:
+            from paper_trading.performance import PerformanceAnalyzer
+            ana = PerformanceAnalyzer()
+            metrics = ana.calculate(aid)
+            print(f"最大回撤: {color('down', f'{metrics.max_drawdown_pct:.2f}%')}")
+            if metrics.max_drawdown_start_date:
+                print(f"  开始: {metrics.max_drawdown_start_date}")
+            if metrics.max_drawdown_end_date:
+                print(f"  结束: {metrics.max_drawdown_end_date}")
+        except Exception as exc:
+            print(f"{color('warn', '⚠')} 回撤数据计算失败: {exc}")
         return 0
+
+    if action == "leaderboard":
+        try:
+            from paper_trading.strategy_lifecycle import StrategyLifecycle
+            from paper_trading.signal_fusion import SignalFusionEngine, FusionMethod
+            lc = StrategyLifecycle()
+            strategies = lc.list_strategies()
+            if not strategies:
+                print("暂无策略数据。")
+            else:
+                _table(
+                    ["策略", "状态", "审批数"],
+                    [[name, state, str(lc.get_approval_history(name))] for name, state in strategies.items()]
+                )
+        except Exception as exc:
+            print(f"{color('warn', '⚠')} 策略排行榜加载失败: {exc}")
+        return 0
+
+    if action == "drift":
+        try:
+            from paper_trading.drift_detector import DriftDetector
+            dd = DriftDetector()
+            print("漂移检测器已初始化。需要策略日 PnL 数据（实时监听器自动记录）才能做出判断。")
+        except Exception as exc:
+            print(f"{color('warn', '⚠')} 漂移检测器加载失败: {exc}")
+        return 0
+
+    if action == "features":
+        try:
+            from paper_trading.features.pipeline import FeaturePipeline, FeatureConfig
+            fp = FeaturePipeline([])
+            print(f"特征工程管线已初始化。已注册特征: {fp.registry.registered_names()}")
+        except Exception as exc:
+            print(f"{color('warn', '⚠')} 特征工程加载失败: {exc}")
+        return 0
+
     return 1
 
 
 def _handle_health(args) -> int:
-    print(f"健康检查 ({getattr(args, 'format', 'table')}) 将在 Phase 3 完善。")
-    return 0
+    fmt = getattr(args, "format", "table")
+    if fmt == "json":
+        import json
+        results = {}
+        try:
+            from src.utils.exchange_clock import ExchangeClock
+            results["ntp_synced"] = ExchangeClock.is_synced()
+        except Exception:
+            results["ntp_synced"] = "unavailable"
+        try:
+            from src.services.health_check import check_system_resources, check_task_queue
+            sys_health = check_system_resources()
+            results["system_resources"] = sys_health.message
+        except Exception:
+            results["system_resources"] = "unavailable"
+        print(json.dumps(results, indent=2, default=str))
+    else:
+        checks = []
+        try:
+            from src.utils.exchange_clock import ExchangeClock
+            synced = ExchangeClock.is_synced()
+            checks.append(("NTP 同步", f"{color('up', '✓')} 已同步" if synced else f"{color('warn', '!')} 未同步"))
+        except Exception:
+            checks.append(("NTP 同步", f"{color('warn', '?')} 不可用"))
+        try:
+            from src.services.health_check import check_system_resources
+            sys_health = check_system_resources()
+            checks.append(("系统资源", f"{color('up', '✓')} {sys_health.message}" if sys_health.healthy else f"{color('warn', '!')} {sys_health.message}"))
+        except Exception:
+            checks.append(("系统资源", f"{color('warn', '?')} 不可用"))
+        try:
+            from src.services.health_check import check_task_queue
+            tq = check_task_queue()
+            checks.append(("任务队列", f"{color('up', '✓')} {tq.message}" if tq.healthy else f"{color('warn', '!')} {tq.message}"))
+        except Exception:
+            checks.append(("任务队列", f"{color('warn', '?')} 不可用"))
+        print(f"{_BOLD}系统健康检查{_RESET}")
+        for name, status in checks:
+            print(f"  {name:12s} {status}")

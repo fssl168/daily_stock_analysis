@@ -238,27 +238,57 @@ Web 工作台提供配置管理、任务监控、手动分析、历史报告、�
 
 **API 调用**：`POST /api/v1/stocks/extract-from-image`，表单字段 `file`，返回 `{ "codes": ["600519", "300750", ...] }`。详见 [完整指南](docs/full-guide.md)。
 
-### 📊 纸面交易（AI 基金经理）
+### 📊 纸面交易（AI 基金经理 — 毫秒级实时量化执行系统）
 
-内置一套完整的纸面交易系统，以 1000 元虚拟本金起步，通过程序化策略规则产生交易信号，可选启用 AI 基金经理 Agent 做二次确认与自主下单，所有交易自动复盘并影响后续决策。
+内置一套完整的**毫秒级实时量化交易执行系统**，以 1000 元虚拟本金起步，通过程序化策略规则产生交易信号，可选启用 AI 基金经理 Agent 做二次确认与自主下单，所有交易自动复盘并影响后续决策。同时支持接入东方财富真实券商接口，为实盘交易预留通路。
 
 **核心模块**：
 
 | 模块 | 说明 |
 |------|------|
 | 虚拟账户 | 初始本金可配置（默认 1000 CNY），支持现金/冻结资金/持仓市值/净值曲线 |
-| 订单状态机 | 限价/市价单，pending → partially_filled → filled / canceled / rejected，支持撤单与改单 |
+| 订单状态机 | 限价/市价/条件单，pending → partially_filled → filled / canceled / rejected，支持撤单与改单，乐观锁并发控制 |
 | 费用模型 | 佣金（0.025% min 5 元）+ 印花税（卖方 0.05%）+ 过户费（0.001%）+ 滑点（5 bps） |
+| 策略规则引擎 | YAML 定义指标（MA/EMA/RSI/MACD/BOLL/ATR/CCI/OBV/威廉/随机等）+ 规则匹配，15 种内置策略模板 |
+| 信号融合引擎 | 多策略加权投票（按 Sharpe SoftMax）、信号冲突仲裁（60% 共识阈值）、漂移检测自动降权 |
 | 风控前置 | 账户状态、资金充足性、持仓可用性（T+1）、单股集中度 ≤30%、最大 8 持仓、单笔买入 ≤50% 现金 |
-| 策略规则引擎 | YAML 定义指标（MA/EMA/RSI/MACD/BOLL）+ 规则匹配（`> < >= <= == cross_up cross_down`） |
+| **三级熔断机制** | Soft（日亏 3% 禁止开仓）→ Hard（5% 禁止交易）→ Liquidation（8% 强制平仓），24h 冷却期 |
+| **实时风控守护** | 独立线程监控 VaR（历史模拟法+参数法）、流动性风险（换手率/清仓天数）、市场异常（波动率尖峰） |
 | 智能止损止盈 | ATR + Fibonacci + 筹码峰三位一体自动计算止损/一止/二止三线 |
 | AI 基金经理 Agent | 自主调用工具分析并生成完整交易计划（入场/止损/止盈/仓位），支持自主下单/撤单/改单 |
 | Agent 风控增强层 | 复用现有 agent factory 对程序化信号做二次确认，再交给 TradingEngine 执行 |
-| 实时行情监听 | 守护线程生命周期，盘中按 tick 触发策略评估，per-(code,strategy,side) 冷却去重 |
+| 实时行情监听 | 守护线程生命周期，盘中按 tick 触发策略评估，per-(code,strategy,side) 冷却去重；支持 WebSocket 实时推送 |
+| **极端行情应对** | VIX-like 波动率检波，触发后暂停规则策略 buy 信号 + 禁用市价单开仓，30 分钟自动重检 |
 | 复盘反思系统 | 每笔交易完成后自动触发复盘，生成基金经理笔记并持久化，进入后续决策上下文 |
+| 策略漂移检测 | 滚动 Sharpe 趋势监控，连续亏损天数统计，自动降权/暂停/退役退化策略 |
+| 策略生命周期 | DRAFT → BACKTEST → PAPER → REVIEW → LIVE → PAUSED → RETIRED 七阶段状态机 + 审批记录 |
 | 次日作战卡 | 收盘后生成强势/中性/弱势三情景预案 + 候选标的 + 集合竞价/盘中触发条件 |
+| **完整回测引擎** | 逐 bar 历史回测（前后向防作弊）+ 滑点/手续费/涨跌停模拟 + Walk-forward 滚动优化 + 参数敏感性分析 |
+| **日终结算** | Mark-to-market 持仓市值重估 + 净值曲线计算 + 日终特征工程管线（SMA/RSI/量能/多头排列/买卖不平衡） |
+| **券商适配层** | 多源虚拟化抽象（PaperBroker / EastMoneyBroker），支持账户级别路由，券商断连自动 fallback |
+| **统一时钟源** | NTP 同步，按交易所时区自动校准，所有模块统一时间基准 |
+| **全链路延迟监控** | 行情→策略→风控→下单路径每步耗时打点，p50/p95/p99 百分位统计 |
+| **系统健康检查** | 独立守护线程监控 MarketListener 存活、数据源健康、任务队列积压、系统资源、NTP 同步、券商连接 |
+| **L2 深度行情** | 十档买卖盘快照 + 订单流信号（大单/冰山/幌骗检测），通过 WebSocket 实时推送 |
 | 通知集成 | 飞书/钉钉推送作战卡、复盘笔记、日报摘要 |
 | 内容生成 | 自动生成纸面交易日报（Markdown + 语音脚本） |
+
+### 毫秒级实时仪表板（Web 前端）
+
+所有实时量化能力通过 **15 个专用组件** 在前端可视化：
+
+| 组件 | 功能 |
+|------|------|
+| QuoteTicker + MarketStatusDashboard | 实时行情滚动条 + CN/HK/US 多市场连接状态 |
+| BreakerStatusBadge + RiskAlertToast | 熔断状态实时指示 + 风控告警即时 Toast 推送 |
+| LatencyPanel | tick 全链路延迟 p50/p95/p99 + 步骤级耗时拆分 |
+| EventLogFeed | Signal→Risk→Breaker→OMS→Trade 实时事件时间线 |
+| StrategyLeaderboard + DriftPanel | 策略 Sharpe 排行榜 + 漂移检测/降权状态 |
+| StrategyLifecyclePanel | DRAFT→LIVE→RETIRED 七阶段策略状态管理 |
+| ExtremeMarketBanner | 极端行情全宽红色警报横幅 |
+| FeaturesPanel | 特征工程计算查看 + 手动触发重算 |
+| CandlestickChart | K 线图（Close 线 + MA5 + MA20 + 成交量） |
+| PerformanceCard + BacktestComparisonPanel | 绩效指标（Sharpe/MaxDD/Calmar/胜率） + 回测 vs 纸面模拟对比 |
 
 **快速启用**：
 
@@ -268,12 +298,26 @@ Web 工作台提供配置管理、任务监控、手动分析、历史报告、�
 4. 启用 AI 基金经理（可选，需 LLM）：`PAPER_TRADING_ENABLE_PM_AGENT=true`
 5. 启用 Agent 风控二次确认（可选）：`PAPER_TRADING_ENABLE_AGENT_REVIEW=true`
 6. 启用盘中实时监听（可选）：`PAPER_TRADING_LISTENER_ENABLE_STRATEGIES=true`
+7. 启用健康检查：`HEALTH_CHECK_ENABLED=true`
 
-> 完整配置项详见 `.env.example` 中 `Paper Trading` 段落。所有模块均支持独立开关，未启用时不影响原有分析功能。
+> 完整配置项详见 `.env.example` 中 `Paper Trading` 段落。所有模块均支持独立开关，未启用时不影响原有分析功能。架构设计文档见 [实时量化系统设计](docs/architecture/realtime_quant_system_design.md)。
 
-**API 端点**：`/api/v1/paper-trading/*`，包含账户快照、持仓查询、订单管理、信号提交、作战卡生成、复盘笔记、日报等。
+**API 端点**：`/api/v1/paper-trading/*`，包含账户快照、持仓查询、订单管理、信号提交、作战卡生成、复盘笔记、性能指标、回测对比、延迟统计、漂移报告、极端行情状态、特征工程、策略管理等 50+ 端点。
 
 ## 🗺️ Roadmap
+
+### 纸面交易系统（已完成对齐）
+
+纸面交易系统已升级为**毫秒级实时量化执行系统**（v2），23 项后端 gap 全部闭合 + 15 个前端实时组件上线：
+
+- **P0 上线硬前置**：完整回测框架（滑点/手续费/涨跌停/Walk-forward）、券商适配层（PaperBroker + EastMoneyBroker）、NTP 时钟同步
+- **P1 上线必备**：WebSocket 行情双通道接入、三级熔断、实时风控守护、系统健康检查
+- **P2 规模化前提**：数据质量 Pipeline、行情持久化仓库、OMS/RMS 分离、全链路延迟监控、订单幂等化
+- **P3 竞争力差异**：L2 深度行情、信号融合与冲突仲裁、企业事件处理、特征工程管线、在线学习与模型漂移检测
+
+> 详细架构设计见 [实时量化系统设计](docs/architecture/realtime_quant_system_design.md) • 差距分析报告见 [v2 后报告](docs/realtime_quant_system_gap_analysis_v2.md) • 前端对齐报告见 [v2 报告](docs/frontend_quant_alignment_gap_analysis_v2.md)
+
+### 未来计划
 
 查看已支持的功能和未来规划：[更新日志](docs/CHANGELOG.md)
 

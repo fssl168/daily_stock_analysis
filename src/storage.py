@@ -843,6 +843,9 @@ class PaperOrder(Base):
     filled_at = Column(DateTime)
     # Trigger timestamp (P1): set when a conditional order is activated.
     triggered_at = Column(DateTime)
+    # Optimistic-lock version (T19): incremented on every state-changing operation.
+    # Applications can pass expected_version to detect concurrent modifications.
+    version = Column(Integer, default=0, nullable=False)
 
     __table_args__ = (
         Index('ix_paper_order_account_status', 'account_id', 'status'),

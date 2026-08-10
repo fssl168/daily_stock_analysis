@@ -265,16 +265,17 @@ class OrderManager:
                 session.expunge(order)
             return order
 
-    def cancel_order(self, order_id: int, reason: Optional[str] = None) -> PaperOrder:
+    def cancel_order(self, order_id: int, reason: Optional[str] = None,
+                      expected_version: Optional[int] = None) -> PaperOrder:  # T19
         """Cancel a pending or partially-filled order.
 
         Args:
             order_id: The id of the order to cancel.
             reason: Free-text cancel reason (recorded in cancel_reason).
+            expected_version: (T19) If provided and mismatch, returns None.
 
         Returns:
-            The canceled PaperOrder row (re-fetched from a fresh session so
-            it is safe to access attributes after this returns).
+            The canceled PaperOrder row, or None on version conflict.
 
         Raises:
             ValueError: If the order is not found or not in a cancellable status.
@@ -285,6 +286,11 @@ class OrderManager:
             ).scalar_one_or_none()
             if order is None:
                 raise ValueError(f"Order id={order_id} not found")
+            # T19: version check
+            if expected_version is not None and order.version != expected_version:
+                logger.warning("Order %d cancel version mismatch", order_id)
+                return None
+            order.version += 1
             if order.status not in (
                 OrderStatus.PENDING.value,
                 OrderStatus.CONDITIONAL.value,
@@ -460,12 +466,16 @@ class OrderManager:
         fill_price: float,
         fill_quantity: Optional[float] = None,
         fee: float = 0.0,
+        expected_version: Optional[int] = None,  # T19: optimistic lock
     ) -> PaperTrade:
         """Fill (part of) an order at the given price.
 
         - If fill_quantity is None, fill the entire remaining quantity.
         - Creates a PaperTrade row, updates the order's filled state,
           and returns the trade record.
+        - If expected_version is provided and does not match the order's
+          current version, the fill is skipped (returns None) — this allows
+          callers to detect concurrent modifications (T19).
         """
         if fill_price <= 0:
             raise ValueError(f"fill_price must be positive, got {fill_price}")
@@ -476,6 +486,16 @@ class OrderManager:
             ).scalar_one_or_none()
             if order is None:
                 raise ValueError(f"Order id={order_id} not found")
+
+            # T19: Optimistic-lock version check (skip on mismatch).
+            if expected_version is not None and order.version != expected_version:
+                logger.warning(
+                    "Order %d version mismatch: expected %d, actual %d; skipping fill",
+                    order_id, expected_version, order.version,
+                )
+                return None
+            order.version += 1  # T19: bump version on every state change
+
             if order.status not in (
                 OrderStatus.PENDING.value,
                 OrderStatus.PARTIALLY_FILLED.value,

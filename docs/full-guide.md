@@ -1442,6 +1442,8 @@ P5 在 Web `/decision-signals` 页面筛选区下方展示当前 outcome engine 
 | 持有/持有观察/震荡观望/洗盘观察/hold/hold and watch/range-bound watch/shakeout watch | long | not_down | 未显著下跌 |
 | 观望/等待/wait | cash | flat | 价格在中性带内 |
 
+> Paper Trading 系统（下文）的回测引擎支持更完整的 BacktestEngine 逐 bar 模拟，详见 [Paper Trading 文档](paper-trading/index.md)。
+
 ### 配置
 
 在 `.env` 中设置以下变量（均有默认值，可选）：
@@ -1470,6 +1472,112 @@ P5 在 Web `/decision-signals` 页面筛选区下方展示当前 outcome engine 
 | `take_profit_trigger_rate` | 止盈触发率（仅统计配置了止盈的记录） |
 
 ---
+
+## 纸面交易系统（Paper Trading）—— 毫秒级实时量化执行
+
+> 纸面交易系统已升级为完整的毫秒级实时量化执行系统。完整架构设计见 [实时量化系统设计](architecture/realtime_quant_system_design.md)。
+
+### 概述
+
+纸面交易系统以虚拟本金模拟真实交易，包含从行情接收、策略评估、风控检查到订单执行的完整交易链路，并支持 AI 经理代理二次确认与复盘决策。
+
+### 开启纸面交易
+
+```env
+# 基础开关
+PAPER_TRADING_ENABLED=true
+PAPER_TRADING_INITIAL_CAPITAL=1000.0
+PAPER_TRADING_WATCHED_CODES=600519,300750,000001
+
+# AI 基金经理（可选，需 LLM）
+PAPER_TRADING_ENABLE_PM_AGENT=true
+
+# Agent 风控二次确认（可选）
+PAPER_TRADING_ENABLE_AGENT_REVIEW=true
+
+# 盘中实时策略监听
+PAPER_TRADING_LISTENER_ENABLE_STRATEGIES=true
+
+# 熔断机制
+CIRCUIT_BREAKER_ENABLED=true
+CIRCUIT_BREAKER_SOFT_THRESHOLD_PCT=3.0
+CIRCUIT_BREAKER_HARD_THRESHOLD_PCT=5.0
+CIRCUIT_BREAKER_LIQUIDATION_THRESHOLD_PCT=8.0
+
+# 实时风控守护
+RISK_DAEMON_ENABLED=true
+
+# 系统健康检查
+HEALTH_CHECK_ENABLED=true
+
+# WebSocket 行情（可选，需 tickflow/longbridge）
+PAPER_TRADING_ENABLE_WEBSOCKET=false
+
+# 信号融合
+SIGNAL_FUSION_METHOD=weighted_vote
+
+# 券商适配（可选，Windows + 东方财富客户端）
+# BROKER_EASTMONEY_USER=your_account
+# BROKER_EASTMONEY_PASSWORD=your_password
+```
+
+### 核心功能总览
+
+| 功能 | 说明 |
+|------|------|
+| **多策略信号生成** | 15 种内置规则策略（均线金叉/缠论/波浪/趋势/底部放量/缩量回踩等），YAML 声明式编写，RuleEngine 实时评估 |
+| **信号融合与仲裁** | 多策略加权投票（按 Sharpe SoftMax）、冲突仲裁（60% 共识阈值）、漂移检测自动降权 |
+| **三级风控** | 前置风控检查（账户/资金/持仓）+ 三级熔断（SOFT/HARD/LIQUIDATION）+ 实时 VaR/流动性/异常监控 |
+| **AI 经理审查** | LLM ReAct Agent 对信号做二次确认/否决/修正，副作用：可取消/修改/卖出 |
+| **激励对齐工具** | BattlePlan 生成、ReflectionEngine 日常/交易复盘、PM Agent 自主决策 |
+| **完整回测** | 逐 bar 历史回测（前向防作弊）+ 滑点/手续费/涨跌停 + Walk-forward 滚动优化 |
+| **日终结算** | Mark-to-market 持仓重估 + 净值曲线 + 特征工程管线自动计算 |
+| **策略生命周期** | DRAFT → BACKTEST → PAPER → REVIEW → LIVE → PAUSED → RETIRED 七阶段状态机 |
+| **极端行情应对** | VIX-like 波动率检波，触发后暂停 buy 信号、禁用市价单，30 分钟自动重检 |
+
+### 订单执行流程
+
+```
+MarketListener._tick_market()  (每 tick, 500ms WS / 10s 轮询)
+  → RuleEngine.evaluate(code) → Signal(side='buy'/'sell')
+  → SignalFusionEngine.fuse() (多策略加权融合)
+  → TradingEngine.submit_signal()
+      ├── RMS.pre_trade_check()          ← 事前风控
+      ├── AgentRiskReviewer.review()      ← AI 二次确认
+      ├── CircuitBreaker.evaluate()       ← 三级熔断
+      └── OMS.create_order() / execute_market()
+            ├── FeeModel (滑点+佣金+印花税)
+            ├── OrderManager.fill_order()  ← version 乐观锁
+            ├── PaperAccountManager.settle()
+            └── PositionManager.apply()
+```
+
+### 关键 API 端点
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/v1/paper-trading/accounts` | GET | 列出所有虚拟账户 |
+| `/api/v1/paper-trading/accounts/{id}/positions` | GET | 当前持仓 |
+| `/api/v1/paper-trading/accounts/{id}/orders` | GET | 委托列表 |
+| `/api/v1/paper-trading/accounts/{id}/signals` | GET | 信号列表 |
+| `/api/v1/paper-trading/accounts/{id}/performance` | GET | 绩效指标 (Sharpe/MaxDD/Calmar/胜率) |
+| `/api/v1/paper-trading/accounts/{id}/breaker/status` | GET | 熔断状态 |
+| `/api/v1/paper-trading/accounts/{id}/latency` | GET | 延迟统计 (p50/p95/p99) |
+| `/api/v1/paper-trading/accounts/{id}/drift` | GET | 策略漂移报告 |
+| `/api/v1/paper-trading/accounts/{id}/extreme-market` | GET | 极端行情状态 |
+| `/api/v1/paper-trading/accounts/{id}/features` | GET/POST | 特征工程查看+触发 |
+| `/api/v1/paper-trading/accounts/{id}/strategies` | GET | 策略生命周期列表 |
+| `/api/v1/paper-trading/listener/start` | POST | 启动实时行情监听 |
+| `/api/v1/paper-trading/listener/status` | GET | 监听状态 |
+
+### 详细文档入口
+
+- [Paper Trading 模块导航](paper-trading/index.md) — 系统全景和模块入口
+- [实时量化系统架构设计](architecture/realtime_quant_system_design.md) — P0-P3 四层架构设计文档
+- [后端管线差距分析 v2](realtime_quant_system_gap_analysis_v2.md) — 23 项 gap 全部闭合后的审查报告
+- [前端实时仪表板差距分析 v2](frontend_quant_alignment_gap_analysis_v2.md) — 15 个前端组件 + WebSocket 基础设施
+- [前端毫秒级实施计划](frontend_quant_implementation_plan.md) — 18 项实施任务（三阶段）
+- [后端毫秒级实施计划](realtime_quant_system_implementation_plan.md) — P0-P3 全模块实施计划
 
 ## 本地 WebUI 管理界面
 

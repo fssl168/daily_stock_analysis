@@ -41,6 +41,12 @@
 
 | 文档 | 内容 |
 | --- | --- |
+| [Paper Trading 实时量化系统](paper-trading/index.md) | Paper Trading 全模块导航：交易引擎、策略、风控、熔断、信号融合、回测、券商适配等完整入口 |
+| [实时量化交易系统架构设计](architecture/realtime_quant_system_design.md) | v2 毫秒级实时量化执行系统 P0-P3 四层架构设计文档 |
+| [后端管线对齐审查报告 v2](realtime_quant_system_gap_analysis_v2.md) | 23 项 gap 全部闭合后的第二轮审查报告 |
+| [后端毫秒级实施计划](realtime_quant_system_implementation_plan.md) | P0-P3 全模块实施计划（含代码级改动说明） |
+| [前端实时仪表板差距分析 v2](frontend_quant_alignment_gap_analysis_v2.md) | 15 个前端组件 + WebSocket 基础设施的代码审计与修复验证报告 |
+| [前端毫秒级实施计划](frontend_quant_implementation_plan.md) | 前端 18 项实施任务（WS/面板/打磨三阶段） |
 | [Bot 命令与接入](bot-command.md) | Bot 命令、Webhook、平台接入和回调说明 |
 | [Bot 平台配置](bot/) | 飞书、钉钉、Discord 等 Bot 配置截图和补充说明 |
 | [实时告警中心](alerts.md) | EventMonitor 基线、Web 规则管理、通知结果、冷却状态和 Phase 边界 |

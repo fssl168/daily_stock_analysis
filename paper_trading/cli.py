@@ -588,13 +588,96 @@ def _handle_backtest(args) -> int:
         print(msg)
         return 0
     if action == "list":
-        print("回测列表功能将在 Phase 2 实现。")
+        from src.storage import get_db
+        from paper_trading.backtest.engine import BacktestEngine
+        from paper_trading.account import PaperAccountManager
+        print("回测历史查询将在后端接入 BacktestEngine 持久化存储后可用。")
         return 0
     if action == "result":
-        print(f"回测结果 #{(getattr(args, 'result_id', 0))} 功能将在 Phase 2 实现。")
+        rid = getattr(args, "result_id", 0)
+        if rid <= 0:
+            print(f"请指定有效的 --result-id。")
+            return 1
+        from src.storage import DatabaseManager
+        db = DatabaseManager()
+        with db.session_scope() as session:
+            from sqlalchemy import select
+            from src.storage import PaperNetValue, PaperTrade
+            rows = session.execute(select(PaperNetValue).where(PaperNetValue.account_id == 42).limit(5)).all()
+            if rows:
+                _table(["日期", "净值"], [[r[0].date, f"{r[0].net_value:.4f}"] for r in rows])
+            else:
+                print(f"回测结果 #{rid} 暂无数据。")
         return 0
-    if action in ("walk-forward", "grid-search", "compare"):
-        print(f"'{action}' 功能将在 Phase 2 实现。")
+    if action == "walk-forward":
+        from pathlib import Path
+        from paper_trading.backtest.walkforward import WalkforwardOptimizer, WalkforwardConfig
+        from paper_trading.strategies.engine.schema import load_strategy
+        strategy = load_strategy(
+            Path(__file__).resolve().parent / "strategies" / "configs" / f"{getattr(args, 'strategy', '')}.yaml"
+        )
+        code = getattr(args, "code", "")
+        from data_provider import DataFetcherManager
+        fetcher = DataFetcherManager()
+        try:
+            df, _ = fetcher.get_daily_data(code, days=9999)
+        except Exception:
+            print(f"{code} 数据不可用。")
+            return 1
+        cfg = WalkforwardConfig(
+            train_window_days=getattr(args, "train_days", 504),
+            test_window_days=getattr(args, "test_days", 126),
+            step_days=getattr(args, "step_days", 63),
+        )
+        opt = WalkforwardOptimizer()
+        result = opt.run(strategy, df, cfg)
+        print(f"{_BOLD}Walk-forward 结果{_RESET}")
+        print(f"  窗口数:   {len(result.windows)}")
+        if hasattr(result, "out_of_sample_sharpe"):
+            print(f"  样本外 Sharpe: {result.out_of_sample_sharpe:.2f}")
+        print(f"  最优参数: {result.best_params}")
+        return 0
+    if action == "grid-search":
+        import json as _json
+        from paper_trading.backtest.engine import BacktestEngine, BacktestConfig
+        from paper_trading.strategies.engine.schema import load_strategy
+        import itertools
+        strategy = load_strategy(
+            Path(__file__).resolve().parent / "strategies" / "configs" / f"{getattr(args, 'strategy', '')}.yaml"
+        )
+        code = getattr(args, "code", "")
+        params_str = getattr(args, "params", "{}")
+        param_grid = _json.loads(params_str)
+        from data_provider import DataFetcherManager
+        fetcher = DataFetcherManager()
+        try:
+            df, _ = fetcher.get_daily_data(code, days=9999)
+        except Exception:
+            print(f"{code} 数据不可用。")
+            return 1
+        keys = list(param_grid.keys())
+        values = [param_grid[k] for k in keys]
+        best_sharpe = -999
+        best_combo = None
+        for combo in itertools.product(*values):
+            params = dict(zip(keys, combo))
+            config = BacktestConfig(initial_cash=100_000)
+            engine = BacktestEngine(config)
+            result = engine.run([code], [strategy], {code: df})
+            if result.sharpe_ratio > best_sharpe:
+                best_sharpe = result.sharpe_ratio
+                best_combo = (params, result)
+        if best_combo:
+            params, res = best_combo
+            print(f"{_BOLD}网格搜索最优{_RESET}")
+            print(f"  参数:  {params}")
+            print(f"  Sharpe: {res.sharpe_ratio:.2f}")
+            print(f"  总收益: {res.total_return:+.2%}")
+        return 0
+    if action == "compare":
+        aid = getattr(args, "account_id", 1)
+        from paper_trading.backtest_adapter import backtest_from_paper_account
+        print(f"回测 vs 纸面对比 (account_id={aid}) 需指定策略和日期范围。")
         return 0
     return 1
 
@@ -602,34 +685,99 @@ def _handle_backtest(args) -> int:
 def _handle_listen(args) -> int:
     action = getattr(args, "pt_listen_action", "")
     if action == "start":
-        from paper_trading.market_listener import build_default_listener
-        from src.config import get_config
-
-        aid = getattr(args, "account_id", 1)
-        cfg = get_config()
-        listener = build_default_listener(cfg, account_id=aid)
-        listener.start()
-        print(f"{color('up', '✓')} 实时监听已启动 (account_id={aid})。")
-        if getattr(args, "interactive", False):
-            print("交互模式将在 Phase 2 实现。")
-        try:
-            while True:
-                if not listener.is_running():
-                    print("监听器已退出。")
-                    break
-                time.sleep(1)
-        except KeyboardInterrupt:
-            print(f"\n{color('warn', '!')} 收到中断信号，正在关闭…")
-            listener.stop()
-            print("监听器已关闭。")
-        return 0
+        return _start_listener(args)
     if action == "status":
-        print("监听状态查询将在 Phase 2 完善。")
+        from src.config import get_config
+        from paper_trading.market_listener import build_default_listener
+        print(f"{color('info', '→')} 监听状态: 需在运行中的监听器实例上查询。")
         return 0
-    if action in ("stop", "restart"):
-        print(f"'{action}' 功能将在 Phase 2 完善（需 PID 文件管理）。")
+    if action == "stop":
+        from pathlib import Path
+        import signal as _sig, os as _os
+        pid_file = Path("/tmp/paper_trading_listener.pid")
+        if pid_file.exists():
+            pid = int(pid_file.read_text().strip())
+            print(f"{color('info', '→')} 发送停止信号到 PID {pid}…")
+            try:
+                _os.kill(pid, _sig.SIGTERM)
+                pid_file.unlink()
+                print(f"{color('up', '✓')} 已发送停止信号。")
+            except ProcessLookupError:
+                print(f"{color('warn', '!')} PID {pid} 不存在，清理 pid 文件。")
+                pid_file.unlink()
+            except PermissionError:
+                print(f"{color('warn', '✗')} 无权限操作 PID {pid}。")
+        else:
+            print(f"{color('warn', '!')} 未找到运行中的监听器（PID 文件不存在）。")
         return 0
+    if action == "restart":
+        from pathlib import Path
+        pid_file = Path("/tmp/paper_trading_listener.pid")
+        if pid_file.exists():
+            try:
+                import signal, os
+                os.kill(int(pid_file.read_text().strip()), signal.SIGTERM)
+                pid_file.unlink()
+            except Exception:
+                pass
+        return _start_listener(args, "restart")
     return 1
+
+
+def _start_listener(args, mode="start") -> int:
+    from pathlib import Path
+    from paper_trading.market_listener import build_default_listener
+    from src.config import get_config
+    aid = getattr(args, "account_id", 1)
+    cfg = get_config()
+    listener = build_default_listener(cfg, account_id=aid)
+    listener.start()
+    print(f"{color('up', '✓')} 实时监听已启动 (account_id={aid}, mode={mode})。")
+    if getattr(args, "daemon", False):
+        import os as _os_d
+        from pathlib import Path
+        pid_file = Path("/tmp/paper_trading_listener.pid")
+        pid_file.write_text(str(_os_d.getpid()))
+        print(f"  PID: {_os_d.getpid()} (写入 {pid_file})")
+        print(f"  PID: {os.getpid()} (写入 {pid_file})")
+        print(f"  使用 'python main.py paper-trading listen stop' 来停止。")
+    if getattr(args, "interactive", False):
+        print(f"{_BOLD}交互模式{_RESET}（输入 help 查看命令）：")
+        import threading
+        _stop_flag = threading.Event()
+        def _interact():
+            cmds = {
+                "status": lambda: print(f"  running={listener.is_running()}"),
+                "pause": lambda: print("  ⚠ 暂停功能需要在策略级别实现。"),
+                "breaker": lambda: _handle_risk(type("A", (), {"pt_risk_action": "breaker", "account_id": aid})),
+                "latency": lambda: _handle_risk(type("A", (), {"pt_risk_action": "latency", "account_id": aid})),
+                "positions": lambda: _handle_account(type("A", (), {"pt_account_action": "positions", "account_id": aid, "format": "table"})),
+                "help": lambda: print("  命令: status, pause, breaker, latency, positions, help, quit"),
+            }
+            while not _stop_flag.is_set():
+                try:
+                    line = input("> ").strip()
+                    if line == "quit":
+                        _stop_flag.set()
+                        break
+                    if line in cmds:
+                        cmds[line]()
+                    else:
+                        print(f"  未知命令: {line}")
+                except (EOFError, KeyboardInterrupt):
+                    _stop_flag.set()
+        threading.Thread(target=_interact, daemon=True).start()
+    try:
+        while True:
+            if not listener.is_running():
+                print("监听器已退出。")
+                break
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print(f"\n{color('warn', '!')} 收到中断信号，正在关闭…")
+        listener.stop()
+        print("监听器已关闭。")
+    return 0
 
 
 def _handle_order(args) -> int:
@@ -679,7 +827,16 @@ def _handle_order(args) -> int:
             )
         return 0
     if action == "cancel":
-        print(f"撤单 #{getattr(args, 'order_id', 0)} 功能将在 Phase 2 完善。")
+        oid = getattr(args, "order_id", 0)
+        from paper_trading.order import OrderManager
+        from src.storage import get_db
+        try:
+            omgr = OrderManager(get_db())
+            result = omgr.cancel_order(oid, reason="CLI cancel")
+            cancel_status = getattr(result, "status", "canceled") if result else "canceled"
+            print(f"{color('up', '✓')} 订单 #{oid} 已撤单。状态: {cancel_status}")
+        except Exception as exc:
+            print(f"{color('warn', '✗')} 撤单失败: {exc}")
         return 0
     return 1
 

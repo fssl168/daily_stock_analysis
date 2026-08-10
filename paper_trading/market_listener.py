@@ -507,8 +507,9 @@ class MarketListener:
         if self.config.enable_strategies and self.strategies:
             self._evaluate_strategies(codes, latest_prices, market)
 
-        # 5) P1-C: Periodically trigger PM agent decision cycle.
-        self._maybe_trigger_pm_decision(market)
+        # 5) P1-C: PM agent decision now runs via AISignalWorker (T20)
+        # — decoupled from the rule-engine tick to avoid blocking.
+        # self._maybe_trigger_pm_decision(market)
 
     def _consume_ai_signals(self, latest_prices: Dict[str, float]) -> None:
         """Consume AI-generated signals from the shared queue and submit them to the trading engine.

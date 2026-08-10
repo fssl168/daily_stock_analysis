@@ -137,6 +137,16 @@ class TradingEngine:
         self._on_trade_executed = on_trade_executed
         self._on_signal_rejected = on_signal_rejected
 
+        # T18-A: Pre-trade RMS (Risk Management System) — delegated risk checks
+        from paper_trading.rms_mgmt import RiskManagementSystem
+
+        self.rms = RiskManagementSystem(
+            risk_checker=self.risk,
+            account_manager=self.account_mgr,
+            position_manager=self.position_mgr,
+            agent_reviewer=self.agent_reviewer,
+        )
+
     # ------------------------------------------------------------------
     # Signal submission
     # ------------------------------------------------------------------
@@ -203,16 +213,14 @@ class TradingEngine:
         else:
             ref_price = float(signal.trigger_price)
 
-        # Run risk checks.
-        if side == "buy":
-            decisions = self.risk.check_buy(account_id, signal.code, ref_price, quantity)
-        else:
-            decisions = self.risk.check_sell(account_id, signal.code, ref_price, quantity)
-        overall = self.risk.evaluate(decisions)
+        # Run risk checks (delegated to RMS — T18-A).
+        risk_result = self.rms.pre_trade_check(
+            account_id, signal.code, ref_price, quantity, side
+        )
 
-        if not overall.passed:
+        if not risk_result.passed:
             self._update_signal_status(
-                signal_id, "rejected", reason=overall.reason
+                signal_id, "rejected", reason=risk_result.reason
             )
             return TradeResult(
                 signal_id=signal_id,
@@ -223,57 +231,35 @@ class TradingEngine:
                 fill_price=None,
                 fill_quantity=None,
                 fee=None,
-                reason=overall.reason,
-                risk_decisions=[d.to_dict() for d in decisions],
+                reason=risk_result.reason,
+                risk_decisions=risk_result.risk_decisions,
             )
 
-        # Optional Agent risk-control review (Phase 4).
-        # When agent_reviewer is configured, the signal is sent to the agent
-        # for a yes/no confirmation. A veto rejects the signal before any
-        # order is created. The verdict is persisted to PaperSignal for audit.
-        agent_review_dict: Optional[Dict[str, Any]] = None
-        if self.agent_reviewer is not None:
-            try:
-                account_snap = self.account_mgr.snapshot(account_id)
-                position_row = self.position_mgr.get_position(account_id, signal.code)
-                verdict = self.agent_reviewer.review_signal(
-                    signal=signal,
-                    account_snapshot=account_snap,
-                    position=position_row,
-                )
-                agent_review_dict = verdict.to_dict()
-                self._persist_agent_verdict(signal_id, verdict)
-            except Exception as exc:
-                # Reviewer raised despite its own fallback (e.g., fallback disabled).
-                logger.error(
-                    "Agent review raised for signal=%s code=%s: %s",
-                    signal_id, signal.code, exc, exc_info=True,
-                )
-                agent_review_dict = {
-                    "approved": False,
-                    "reason": f"agent review raised: {exc}",
-                    "used_fallback": True,
-                    "error": str(exc),
-                }
-                verdict = AgentReviewResult(
-                    approved=False,
-                    reason=f"agent review raised: {exc}",
-                    error=str(exc),
-                    used_fallback=True,
-                )
-                self._persist_agent_verdict(signal_id, verdict)
+        # Optional Agent risk-control review (delegated to RMS — T18-A).
+        # Verdict is persisted to PaperSignal for audit.
+        agent_review_dict: Optional[Dict[str, Any]] = self.rms.agent_review(
+            account_id, signal=signal,
+        )
 
-            # P0-C / R2: Map agent verdict to order actions (cancel/sell/modify).
+        # P0-C / R2: Map agent verdict to order actions (cancel/sell/modify).
+        if agent_review_dict is not None:
+            from paper_trading.agent_risk import AgentReviewResult
+            verdict = AgentReviewResult(
+                approved=agent_review_dict.get("approved", False),
+                reason=agent_review_dict.get("reason", ""),
+                error=agent_review_dict.get("error", ""),
+                used_fallback=agent_review_dict.get("used_fallback", False),
+            )
             self._maybe_trigger_order_action(account_id, verdict, signal)
 
-            if not verdict.approved:
+            if not agent_review_dict.get("approved", True):
                 self._update_signal_status(
                     signal_id, "rejected",
-                    reason=f"agent veto: {verdict.reason}",
+                    reason=f"agent veto: {agent_review_dict.get('reason', '')}",
                 )
                 logger.info(
                     "Signal vetoed by agent: signal_id=%s code=%s reason=%s",
-                    signal_id, signal.code, verdict.reason,
+                    signal_id, signal.code, agent_review_dict.get("reason", ""),
                 )
                 return TradeResult(
                     signal_id=signal_id,
@@ -284,8 +270,8 @@ class TradingEngine:
                     fill_price=None,
                     fill_quantity=None,
                     fee=None,
-                    reason=f"agent veto: {verdict.reason}",
-                    risk_decisions=[d.to_dict() for d in decisions],
+                    reason=f"agent veto: {agent_review_dict.get('reason', '')}",
+                    risk_decisions=risk_result.risk_decisions,
                     agent_review=agent_review_dict,
                 )
 

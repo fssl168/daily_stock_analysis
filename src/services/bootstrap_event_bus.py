@@ -23,6 +23,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -31,13 +33,41 @@ from src.services.event_bus import EventSeverity, SystemEvent, SystemEventBus, S
 
 logger = logging.getLogger(__name__)
 
-# 事件落盘路径（相对项目根目录）
-DEFAULT_LOG_PATH = Path("data") / "event_bus_log.jsonl"
+# 事件落盘路径（相对项目根目录；可用 EVENT_BUS_LOG_PATH 环境变量覆盖）
+DEFAULT_LOG_PATH = Path(
+    os.getenv("EVENT_BUS_LOG_PATH", "").strip() or "data/event_bus_log.jsonl"
+)
+
+# 轮转/自动落盘配置（环境变量可覆盖；不配置也可运行）
+_DEFAULT_MAX_LOG_MB = 10
+_DEFAULT_MAX_LOG_FILES = 5
+_DEFAULT_FLUSH_INTERVAL_SECONDS = 300  # 5 分钟自动落盘一次
 
 # 模块级观察者引用（由 bootstrap_event_bus() 填充，供 get_event_bus_stats 读取）
 _META_OBSERVER: Optional["MetaCognitiveObserver"] = None
 _L3_CONFIG_OBSERVER: Optional["L3ConfigObserver"] = None
 _BOOTSTRAPPED = False
+_FLUSH_THREAD: Optional[threading.Thread] = None
+_FLUSH_STOP = threading.Event()
+
+
+def _env_int(name: str, default: int) -> int:
+    """读取环境变量整数，非法/缺失时回退默认值。"""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return max(int(raw), 0)
+    except (TypeError, ValueError):
+        return default
+
+
+def _event_bus_config_from_env() -> Dict[str, Any]:
+    """从环境变量读取事件总线落盘配置。"""
+    return {
+        "max_log_bytes": _env_int("EVENT_BUS_LOG_MAX_MB", _DEFAULT_MAX_LOG_MB) * 1024 * 1024,
+        "max_log_files": max(_env_int("EVENT_BUS_LOG_MAX_FILES", _DEFAULT_MAX_LOG_FILES), 1),
+    }
 
 
 # ===================================================================
@@ -141,9 +171,14 @@ def bootstrap_event_bus(log_path: Optional[Path] = None) -> SystemEventBus:
     Returns:
         初始化完成的 SystemEventBus 单例。
     """
-    global _META_OBSERVER, _L3_CONFIG_OBSERVER, _BOOTSTRAPPED
+    global _META_OBSERVER, _L3_CONFIG_OBSERVER, _BOOTSTRAPPED, _FLUSH_THREAD
 
-    bus = SystemEventBus.instance(log_path=log_path or DEFAULT_LOG_PATH)
+    cfg = _event_bus_config_from_env()
+    bus = SystemEventBus.instance(
+        log_path=log_path or DEFAULT_LOG_PATH,
+        max_log_bytes=cfg["max_log_bytes"],
+        max_log_files=cfg["max_log_files"],
+    )
 
     if _BOOTSTRAPPED:
         logger.info("EventBus already bootstrapped; returning existing singleton")
@@ -167,9 +202,66 @@ def bootstrap_event_bus(log_path: Optional[Path] = None) -> SystemEventBus:
     except Exception:
         logger.exception("Failed to attach L3 ConfigObserver; EventBus still usable")
 
+    # 启动自动落盘线程（周期 flush + 轮转；失败仅日志，不影响主流程）
+    try:
+        _start_auto_flush(bus)
+    except Exception:
+        logger.exception("Failed to start EventBus auto-flush thread; events kept in memory only")
+
     _BOOTSTRAPPED = True
-    logger.info("EventBus bootstrapped: L4 observer + L3 config observer registered")
+    logger.info(
+        "EventBus bootstrapped: L4 observer + L3 config observer + auto-flush "
+        "(max_log_bytes=%d, max_log_files=%d)",
+        cfg["max_log_bytes"],
+        cfg["max_log_files"],
+    )
     return bus
+
+
+def _start_auto_flush(bus: SystemEventBus) -> None:
+    """启动后台自动落盘线程：每 EVENT_BUS_LOG_FLUSH_INTERVAL 秒 flush 一次。"""
+    global _FLUSH_THREAD
+    if _FLUSH_THREAD is not None and _FLUSH_THREAD.is_alive():
+        return
+
+    interval = _env_int("EVENT_BUS_LOG_FLUSH_INTERVAL", _DEFAULT_FLUSH_INTERVAL_SECONDS)
+    if interval <= 0:
+        logger.info("EventBus auto-flush disabled (EVENT_BUS_LOG_FLUSH_INTERVAL<=0)")
+        return
+
+    _FLUSH_STOP.clear()
+
+    def _flush_loop():
+        while not _FLUSH_STOP.is_set():
+            _FLUSH_STOP.wait(timeout=interval)
+            if _FLUSH_STOP.is_set():
+                break
+            try:
+                bus.flush_to_disk()
+            except Exception:
+                logger.debug("EventBus auto-flush failed (observe-only)", exc_info=True)
+
+    _FLUSH_THREAD = threading.Thread(
+        target=_flush_loop,
+        daemon=True,
+        name="event-bus-auto-flush",
+    )
+    _FLUSH_THREAD.start()
+    logger.info("EventBus auto-flush thread started (interval=%ss)", interval)
+
+
+def stop_event_bus() -> None:
+    """停止自动落盘线程并做最后一次 flush（进程退出时调用，尽力而为）。"""
+    global _FLUSH_THREAD
+    _FLUSH_STOP.set()
+    thread = _FLUSH_THREAD
+    if thread is not None and thread.is_alive():
+        thread.join(timeout=2.0)
+    _FLUSH_THREAD = None
+    try:
+        SystemEventBus.instance().flush_to_disk()
+    except Exception:
+        logger.debug("final EventBus flush failed (observe-only)", exc_info=True)
 
 
 def publish_system_lifecycle(bus: SystemEventBus, phase: str, reason: str = "") -> None:

@@ -305,6 +305,13 @@ async def app_lifespan(app: FastAPI):
                 publish_system_lifecycle(event_bus, "shutdown", reason="api_server")
             except Exception:
                 logger.warning("EventBus shutdown 事件发布失败", exc_info=True)
+        # 停止自动落盘线程并做最终 flush
+        try:
+            from src.services.bootstrap_event_bus import stop_event_bus
+
+            stop_event_bus()
+        except Exception:
+            logger.warning("EventBus stop 失败（观测层尽力而为）", exc_info=True)
         refresh_task = getattr(app.state, "stock_index_refresh_task", None)
         if refresh_task is not None and not refresh_task.done():
             refresh_task.cancel()

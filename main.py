@@ -1632,6 +1632,13 @@ def main() -> int:
                 publish_system_lifecycle(_event_bus, "shutdown", reason="main")
             except Exception as _event_bus_exc:
                 logger.warning("EventBus shutdown 事件发布失败: %s", _event_bus_exc)
+        # 停止自动落盘线程并做最终 flush（尽力而为）
+        try:
+            from src.services.bootstrap_event_bus import stop_event_bus
+
+            stop_event_bus()
+        except Exception as _stop_exc:
+            logger.warning("EventBus stop 失败（观测层尽力而为）: %s", _stop_exc)
 
 
 if __name__ == "__main__":

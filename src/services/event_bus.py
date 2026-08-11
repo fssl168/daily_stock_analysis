@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import shutil
 import threading
 import time
 from collections import deque
@@ -184,7 +186,12 @@ class SystemEventBus:
     _instance: Optional["SystemEventBus"] = None
     _instance_lock = threading.Lock()
 
-    def __init__(self, log_path: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        log_path: Optional[Path] = None,
+        max_log_bytes: int = 10 * 1024 * 1024,
+        max_log_files: int = 5,
+    ) -> None:
         self._subscriptions: Dict[SystemEventType, List[Callable[[SystemEvent], None]]] = {}
         self._wildcard_subscriptions: List[Callable[[SystemEvent], None]] = []
 
@@ -193,6 +200,10 @@ class SystemEventBus:
         self._log_path = log_path
         self._lock = threading.RLock()
 
+        # 日志轮转配置：单文件大小上限 + 保留归档文件数
+        self._max_log_bytes = max_log_bytes
+        self._max_log_files = max(max_log_files, 1)
+
         # 事件计数
         self._event_counter = 0
 
@@ -200,12 +211,21 @@ class SystemEventBus:
         self._recent_batch_callbacks: List[Callable[[List[SystemEvent]], None]] = []
 
     @classmethod
-    def instance(cls, log_path: Optional[Path] = None) -> "SystemEventBus":
+    def instance(
+        cls,
+        log_path: Optional[Path] = None,
+        max_log_bytes: int = 10 * 1024 * 1024,
+        max_log_files: int = 5,
+    ) -> "SystemEventBus":
         """获取全局唯一实例。"""
         if cls._instance is None:
             with cls._instance_lock:
                 if cls._instance is None:
-                    cls._instance = cls(log_path=log_path)
+                    cls._instance = cls(
+                        log_path=log_path,
+                        max_log_bytes=max_log_bytes,
+                        max_log_files=max_log_files,
+                    )
         return cls._instance
 
     @classmethod
@@ -361,7 +381,12 @@ class SystemEventBus:
     # ==================================================================
 
     def flush_to_disk(self) -> Optional[Path]:
-        """将事件日志持久化到磁盘。"""
+        """将事件日志持久化到磁盘（JSONL，每行一个事件）。
+
+        轮转策略：写前检查当前日志文件大小，超过 ``max_log_bytes`` 时
+        将旧文件重命名为带时间戳的归档（``*.jsonl.N``），再写入新文件；
+        超过 ``max_log_files`` 的旧归档会被清理，防止磁盘无限堆积。
+        """
         if not self._log_path:
             return None
 
@@ -370,26 +395,99 @@ class SystemEventBus:
 
         try:
             self._log_path.parent.mkdir(parents=True, exist_ok=True)
-            self._log_path.write_text(
-                json.dumps(events_data, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            self._rotate_if_needed()
+            self._prune_archives()
+            # JSONL 追加写（每行一个事件；全新写入时清空旧内容）
+            if not self._log_path.exists() or self._log_path.stat().st_size == 0:
+                lines = "\n".join(
+                    json.dumps(e, ensure_ascii=False) for e in events_data
+                )
+                self._log_path.write_text(
+                    (lines + "\n") if lines else "",
+                    encoding="utf-8",
+                )
+            else:
+                with self._log_path.open("a", encoding="utf-8") as f:
+                    for e in events_data:
+                        f.write(json.dumps(e, ensure_ascii=False) + "\n")
             return self._log_path
         except Exception:
             logger.exception("Failed to flush event log to %s", self._log_path)
             return None
 
+    def _rotate_if_needed(self) -> None:
+        """日志轮转：文件超过大小上限时归档。"""
+        if not self._log_path or not self._log_path.exists():
+            return
+        try:
+            size = self._log_path.stat().st_size
+        except OSError:
+            return
+        if size < self._max_log_bytes:
+            return
+
+        # 归档当前文件：event_bus_log.jsonl -> event_bus_log.jsonl.<ns>（纳秒精度避免同秒冲突）
+        try:
+            archive = self._log_path.with_name(
+                f"{self._log_path.name}.{time.time_ns()}"
+            )
+            shutil.move(str(self._log_path), str(archive))
+            logger.info(
+                "Event log rotated: %s -> %s (size=%d bytes)",
+                self._log_path.name,
+                archive.name,
+                size,
+            )
+        except Exception:
+            logger.exception("Failed to rotate event log %s", self._log_path)
+
+    def _prune_archives(self) -> None:
+        """清理超过 ``max_log_files`` 的旧归档（按 mtime，保留最新 N 个）。"""
+        if not self._log_path or not self._log_path.parent.exists():
+            return
+        try:
+            archives = sorted(
+                self._log_path.parent.glob(f"{self._log_path.name}.*"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            for old in archives[self._max_log_files - 1:]:
+                try:
+                    old.unlink()
+                    logger.info("Pruned old event log archive: %s", old.name)
+                except OSError:
+                    logger.warning("Failed to prune event log archive: %s", old.name)
+        except Exception:
+            logger.exception("Failed to prune event log archives")
+
     def load_from_disk(self) -> int:
-        """从磁盘加载事件日志。"""
+        """从磁盘加载事件日志（兼容 JSONL 与旧版 JSON 数组）。"""
         if not self._log_path or not self._log_path.exists():
             return 0
 
         try:
-            data = json.loads(self._log_path.read_text(encoding="utf-8"))
+            raw = self._log_path.read_text(encoding="utf-8").strip()
+            if not raw:
+                return 0
+            # 新格式：JSONL（每行一个事件）
+            if "\n" in raw:
+                data = [
+                    json.loads(line)
+                    for line in raw.splitlines()
+                    if line.strip()
+                ]
+            else:
+                # 旧格式：整个文件是一个 JSON 数组
+                data = json.loads(raw)
+                if not isinstance(data, list):
+                    return 0
             with self._lock:
                 for item in data:
-                    event = SystemEvent.from_dict(item)
-                    self._event_log.append(event)
+                    try:
+                        event = SystemEvent.from_dict(item)
+                        self._event_log.append(event)
+                    except Exception:
+                        logger.debug("Skipping malformed event entry in log")
             return len(data)
         except Exception:
             logger.exception("Failed to load event log from %s", self._log_path)

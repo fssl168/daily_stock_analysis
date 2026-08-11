@@ -1,3 +1,13 @@
+import os
+import sys
+
+# 可选：通过 DSA_VENV_LIB 环境变量注入额外的 site-packages 路径。
+# 避免在源码中硬编码本机绝对路径（AGENTS.md「不写死路径」）。
+# 未设置时保持默认 sys.path，不影响正常启动。
+_extra_lib = os.getenv("DSA_VENV_LIB", "").strip()
+if _extra_lib:
+    sys.path.insert(0, _extra_lib)
+
 # -*- coding: utf-8 -*-
 """
 ===================================

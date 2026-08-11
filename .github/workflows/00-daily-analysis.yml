@@ -250,6 +250,15 @@ jobs:
           LLM_OLLAMA_ENABLED: ${{ vars.LLM_OLLAMA_ENABLED || secrets.LLM_OLLAMA_ENABLED }}
           LLM_OLLAMA_EXTRA_HEADERS: ${{ vars.LLM_OLLAMA_EXTRA_HEADERS || secrets.LLM_OLLAMA_EXTRA_HEADERS }}
 
+          # LAAP 认知引擎（本地运行，需启动 LAAP Brain API）
+          LLM_LAAP_PROTOCOL: ${{ vars.LLM_LAAP_PROTOCOL || secrets.LLM_LAAP_PROTOCOL }}
+          LLM_LAAP_BASE_URL: ${{ vars.LLM_LAAP_BASE_URL || secrets.LLM_LAAP_BASE_URL }}
+          LLM_LAAP_API_KEY: ${{ secrets.LLM_LAAP_API_KEY }}
+          LLM_LAAP_API_KEYS: ${{ secrets.LLM_LAAP_API_KEYS }}
+          LLM_LAAP_MODELS: ${{ vars.LLM_LAAP_MODELS || secrets.LLM_LAAP_MODELS }}
+          LLM_LAAP_ENABLED: ${{ vars.LLM_LAAP_ENABLED || secrets.LLM_LAAP_ENABLED }}
+          LLM_LAAP_EXTRA_HEADERS: ${{ vars.LLM_LAAP_EXTRA_HEADERS || secrets.LLM_LAAP_EXTRA_HEADERS }}
+
           # ==========================================
           # 数据源
           # ==========================================

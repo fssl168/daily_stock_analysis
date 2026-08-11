@@ -843,7 +843,6 @@ class LocalCliGenerationBackend(GenerationBackend):
                             stderr=stderr_handle,
                             cwd=cwd,
                             env=child_env,
-                            text=True,
                             shell=False,
                             **_popen_session_kwargs(),
                         )

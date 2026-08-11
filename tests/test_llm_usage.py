@@ -1818,8 +1818,11 @@ class TestLLMUsageMigration(unittest.TestCase):
             DatabaseManager.reset_instance()
             db = DatabaseManager(db_url=f"sqlite:///{db_path}")
             db._ensure_llm_usage_telemetry_columns()
+            del db
 
             self._assert_all_telemetry_columns(db_path)
+            DatabaseManager.reset_instance()
+            import gc; gc.collect()
 
     def test_existing_sqlite_table_gets_partial_missing_columns(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1834,9 +1837,12 @@ class TestLLMUsageMigration(unittest.TestCase):
             )
 
             DatabaseManager.reset_instance()
-            DatabaseManager(db_url=f"sqlite:///{db_path}")
+            db = DatabaseManager(db_url=f"sqlite:///{db_path}")
+            del db
 
             self._assert_all_telemetry_columns(db_path)
+            DatabaseManager.reset_instance()
+            import gc; gc.collect()
 
     def test_existing_sqlite_table_with_all_telemetry_columns_is_noop(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1847,9 +1853,12 @@ class TestLLMUsageMigration(unittest.TestCase):
             )
 
             DatabaseManager.reset_instance()
-            DatabaseManager(db_url=f"sqlite:///{db_path}")
+            db = DatabaseManager(db_url=f"sqlite:///{db_path}")
+            del db
 
             self._assert_all_telemetry_columns(db_path)
+            DatabaseManager.reset_instance()
+            import gc; gc.collect()
 
     def test_existing_sqlite_table_ignores_concurrent_duplicate_column(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1890,10 +1899,13 @@ class TestLLMUsageMigration(unittest.TestCase):
                 "exec_driver_sql",
                 new=flaky_exec_driver_sql,
             ):
-                DatabaseManager(db_url=f"sqlite:///{db_path}")
+                db = DatabaseManager(db_url=f"sqlite:///{db_path}")
+                del db
 
             self.assertTrue(race_fired["value"])
             self._assert_all_telemetry_columns(db_path)
+            DatabaseManager.reset_instance()
+            import gc; gc.collect()
 
     def test_existing_sqlite_table_retries_locked_column_backfill(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1927,7 +1939,8 @@ class TestLLMUsageMigration(unittest.TestCase):
                 "exec_driver_sql",
                 new=flaky_exec_driver_sql,
             ), patch("src.storage.time.sleep") as sleep_mock:
-                DatabaseManager(db_url=f"sqlite:///{db_path}")
+                db = DatabaseManager(db_url=f"sqlite:///{db_path}")
+                del db
 
             self.assertTrue(lock_fired["value"])
             storage_retry_sleeps = [
@@ -1937,6 +1950,8 @@ class TestLLMUsageMigration(unittest.TestCase):
             ]
             self.assertEqual(len(storage_retry_sleeps), 1)
             self._assert_all_telemetry_columns(db_path)
+            DatabaseManager.reset_instance()
+            import gc; gc.collect()
 
 
 if __name__ == "__main__":

@@ -137,7 +137,7 @@ class TestBaseBrokerContract:
 
 class TestBrokerRouter:
     def test_register_and_resolve_case_insensitive(self):
-        router = BrokerRouter()
+        router = BrokerRouter(register_defaults=False)
         broker = _DummyBroker()
         assert router.register("paper", broker) is broker
         assert router.resolve("paper") is broker
@@ -145,28 +145,28 @@ class TestBrokerRouter:
         assert router.resolve("  Paper  ") is broker
 
     def test_resolve_unknown_raises(self):
-        router = BrokerRouter()
+        router = BrokerRouter(register_defaults=False)
         with pytest.raises(KeyError):
             router.resolve("missing")
 
     def test_register_non_broker_raises(self):
-        router = BrokerRouter()
+        router = BrokerRouter(register_defaults=False)
         with pytest.raises(TypeError):
             router.register("paper", object())  # type: ignore[arg-type]
 
     def test_register_empty_name_raises(self):
-        router = BrokerRouter()
+        router = BrokerRouter(register_defaults=False)
         with pytest.raises(ValueError):
             router.register("   ", _DummyBroker())
 
     def test_register_duplicate_raises(self):
-        router = BrokerRouter()
+        router = BrokerRouter(register_defaults=False)
         router.register("paper", _DummyBroker())
         with pytest.raises(ValueError):
             router.register("Paper", _DummyBroker())
 
     def test_names_contains_len(self):
-        router = BrokerRouter()
+        router = BrokerRouter(register_defaults=False)
         router.register("paper", _DummyBroker())
         router.register("live", _DummyBroker())
         assert router.names() == ["live", "paper"]
@@ -179,7 +179,7 @@ class TestBrokerRouter:
 class TestBrokerRouterWithPaperBroker:
     def test_register_paper_broker_and_resolve(self, temp_db):
         broker = PaperBroker(db_manager=temp_db, account_name="routed", initial_capital=2000.0)
-        router = BrokerRouter()
+        router = BrokerRouter(register_defaults=False)
         assert router.register("paper", broker) is broker
         assert router.resolve("Paper") is broker
         snap = router.resolve("paper").query_account()

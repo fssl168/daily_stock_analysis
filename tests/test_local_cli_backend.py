@@ -353,8 +353,11 @@ print(json.dumps({{"type": "step_finish", "reason": "stop"}}))
     assert "--attach" not in argv
     assert "--dangerously-skip-permissions" not in argv
     assert probe["prompt"] == "prompt from dsa"
-    assert probe["prompt_mode"] == 0o600
-    assert probe["cwd_mode"] == 0o700
+    # On Windows, chmod has no effect so we accept either 0o600 (Unix) or 0o666 (Windows default)
+    expected_prompt_mode = 0o600 if os.name != "nt" else 0o666
+    assert probe["prompt_mode"] == expected_prompt_mode
+    expected_cwd_mode = 0o700 if os.name != "nt" else 0o777
+    assert probe["cwd_mode"] == expected_cwd_mode
     for tool_name in local_cli_backend_module._OPENCODE_DISABLED_TOOL_NAMES:
         assert opencode_config["tools"][tool_name] is False
     assert opencode_config["tools"]["websearch"] is False
@@ -398,7 +401,9 @@ def test_opencode_preset_accepts_free_text_without_json_validator(tmp_path: Path
     script = _script(
         tmp_path,
         f"""
-import json
+import io, json, sys
+# Force UTF-8 stdout on Windows (like real OpenCode CLI does)
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 print(json.dumps({{"type": "step_start"}}))
 print(json.dumps({{"type": "text", "part": {{"text": {review!r}}}}}, ensure_ascii=False))
 print(json.dumps({{"type": "step_finish", "reason": "stop"}}))

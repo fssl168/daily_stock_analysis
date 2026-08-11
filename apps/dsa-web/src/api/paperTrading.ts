@@ -627,6 +627,7 @@ export const paperTradingApi = {
   },
 
   /** Get all strategies with lifecycle + performance. */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   getStrategies: async <T = unknown[]>(_accountId: number): Promise<T> => {
     try {
       const response = await apiClient.get<Record<string, unknown>>(

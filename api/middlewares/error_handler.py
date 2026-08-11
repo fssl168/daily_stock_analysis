@@ -78,32 +78,52 @@ def add_error_handlers(app) -> None:
     """
     from fastapi import HTTPException
     from fastapi.exceptions import RequestValidationError
-    
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException):
-    """处理 HTTP 异常"""
-    # Build standardized response with timestamp
-    from datetime import datetime
-    
-    # If detail is already a rich ErrorResponse dict with "error" and "message", use it directly
-    if isinstance(exc.detail, dict) and "error" in exc.detail:
-        response_data = exc.detail.copy()
-        # Ensure timestamp exists
-        if "timestamp" not in response_data:
-            response_data["timestamp"] = datetime.now().isoformat()
+
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request: Request, exc: HTTPException):
+        """处理 HTTP 异常"""
+        # Build standardized response with timestamp
+        from datetime import datetime
+
+        # If detail is already a rich ErrorResponse dict with "error" and "message", use it directly
+        if isinstance(exc.detail, dict) and "error" in exc.detail:
+            response_data = exc.detail.copy()
+            # Ensure timestamp exists
+            if "timestamp" not in response_data:
+                response_data["timestamp"] = datetime.now().isoformat()
+            return JSONResponse(
+                status_code=exc.status_code,
+                content=response_data
+            )
+
+        # Otherwise wrap in standardized format
+        message = exc.detail if exc.detail else str(exc)
         return JSONResponse(
             status_code=exc.status_code,
-            content=response_data
+            content={
+                "error": "http_error",
+                "message": message,
+                "detail": None,
+                "timestamp": datetime.now().isoformat()
+            }
         )
-    
-    # Otherwise wrap in standardized format
-    message = exc.detail if exc.detail else str(exc)
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "error": "http_error",
-            "message": message,
-            "detail": None,
-            "timestamp": datetime.now().isoformat()
-        }
-    )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        """处理请求验证异常"""
+        from datetime import datetime
+        errors = exc.errors()
+        # Flatten error messages for concise response
+        messages = [
+            f"{e['loc'][-1]}: {e['msg']}"
+            for e in errors
+        ]
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": "validation_error",
+                "message": "; ".join(messages),
+                "detail": errors,
+                "timestamp": datetime.now().isoformat()
+            }
+        )

@@ -82,6 +82,12 @@ WEB_SETTINGS_HIDDEN_FROM_UI = {
     "USE_PROXY",
     "PROXY_HOST",
     "PROXY_PORT",
+    # Paper trading internal flags — handled by paper-trading module directly
+    "PAPER_TRADING_AI_MIN_CONFIDENCE",
+    "PAPER_TRADING_ENABLE_AI_SOURCE",
+    "PAPER_TRADING_INCLUDE_TGT_WHEN_NS",
+    "PAPER_TRADING_SYNC_STOCK_LIST",
+    "PAPER_TRADING_USE_NOTIFICATION_SERVICE",
 }
 
 _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {

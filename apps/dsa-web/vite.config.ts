@@ -107,6 +107,10 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',  // 允许公网访问
     port: 5173,       // 默认端口
+    watch: {
+      // 排除 .npm-cache 目录，防止文件监听器因过多文件描述符而崩溃
+      ignored: ['**/.npm-cache/**'],
+    },
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:8000',

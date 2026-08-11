@@ -33,6 +33,8 @@ from api.v1.schemas.system_config import (
     ValidateSystemConfigResponse,
 )
 from src.auth import COOKIE_NAME, is_auth_enabled, refresh_auth_state, verify_session
+
+from src.permissions import require_admin
 from src.services.system_config_service import (
     ConfigConflictError,
     ConfigImportError,
@@ -326,6 +328,7 @@ def test_generation_backend(
     },
     summary="Update system configuration",
     description="Update key-value pairs in .env. Mask token preserves existing secret values.",
+    dependencies=[Depends(require_admin())],
 )
 def update_system_config(
     request: UpdateSystemConfigRequest,
@@ -431,6 +434,7 @@ def export_system_config(
     },
     summary="Import env backup",
     description="Merge raw .env text into the saved configuration with config version conflict protection.",
+dependencies=[Depends(require_admin())],
 )
 def import_system_config(
     request: ImportSystemConfigRequest,

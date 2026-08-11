@@ -116,9 +116,9 @@ def _register_strategy(sub):
     s_sub.add_parser("list", help="列出所有策略")
     s_sub.add_parser("show", help="查看策略详情").add_argument("--name", required=True)
     s_sub.add_parser("scaffold", help="创建策略模板").add_argument("--name", required=True)
-    s_sub.add_parser("evaluate", help="评估策略") \
-        .add_argument("--name", required=True); \
-    s_sub.add_parser("evaluate", help="评估策略").add_argument("--code", required=True)
+    eval_parser = s_sub.add_parser("evaluate", help="评估策略")
+    eval_parser.add_argument("--name", required=True)
+    eval_parser.add_argument("--code", required=True)
     s_sub.add_parser("import", help="导入策略").add_argument("--file", required=True)
     s_sub.add_parser("lifecycle", help="策略生命周期").add_argument("--account-id", type=int, required=True)
 

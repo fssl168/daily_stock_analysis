@@ -241,6 +241,18 @@ LITELLM_MODEL=openai/hermes-agent
 
 Hermes 是保留渠道名，只支持本机 loopback `/v1` OpenAI-compatible generation。Phase 3 只验证普通分析与 JSON 输出；不支持 Stream/SSE、Tools、Vision、Agent tools、远程 Hermes 或进程生命周期管理。Hermes API Key 只能使用单个 `LLM_HERMES_API_KEY`，不要配置 `LLM_HERMES_API_KEYS` 或 `LLM_HERMES_EXTRA_HEADERS`。如果 Hermes 配置非法，系统会阻止 legacy provider silent fallback，避免错误地改用外部模型。Web 设置页保存 reserved Hermes 渠道时，会显式清空旧的 `LLM_HERMES_API_KEYS` / `LLM_HERMES_EXTRA_HEADERS` 并返回 warning；如需恢复旧值，请从 `.env` 备份、Git 历史或桌面端导出备份手动还原，但 Phase 3 仍会拒绝非空的多 Key / Extra Headers 配置。
 
+### 示例：LAAP 认知引擎（Zero-LLM，OpenAI Compatible）
+```env
+LLM_CHANNELS=laap
+LLM_LAAP_PROTOCOL=openai
+LLM_LAAP_BASE_URL=http://localhost:11546/v1
+LLM_LAAP_API_KEY=laap-brain
+LLM_LAAP_MODELS=laap-core
+LITELLM_MODEL=openai/laap-core
+```
+
+LAAP（Living Agent Application Protocol）是 Zero-LLM 认知架构，通过 OpenAI-compatible API 对外提供认知能力。需要先克隆并启动 LAAP Brain API（`python aris_brain/laap_brain_api.py --port 11546`），然后在 DSA 中配置上述渠道即可将 LAAP 作为 LLM provider 使用。API Key 可填任意值（如 `laap-brain`），模型名固定为 `laap-core`。详见 [LAAP AGI](https://github.com/lorryjovens-hub/laap-AGI)。
+
 ### MiniMax 渠道模型填写说明
 
 - 如果你通过 OpenAI Compatible 渠道接 MiniMax，请在渠道模型里直接填写 `minimax/<模型名>`，例如 `minimax/MiniMax-M1`。

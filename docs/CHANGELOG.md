@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- [文档] 新增 L1/L2 架构回头望归纳文档 `docs/L1_L2_RETROSPECTIVE.md`
+- [文档] L1/L2 Retrospective 整改：修正 14 个模块归属（TaskQueue/RuntimeScheduler/SystemConfigService/AgentModelService/GenerationBackendStatusService/StockIndexRemoteService/StockCodeUtils/MarketSymbolUtils/NameToCodeResolver/StockListParser/ImportParser/RunDiagnostics/RunFlow/NotificationDiagnostics 从 L2 移至 L1）+ 补充 Agent/LLM/NotificationSender 三个整层遗漏 + L2 关键设计特征重审（Agent 故障→L3 修复 / Agent 认知偏差→L4 反思）
+- [新功能] L3 架构自修复系统 (Phase 1-4 全部完成)：SelfHealingAction 抽象基类（检测→修复→验证→启动模板方法 + 升级链）+ ModuleRestartAgent 模块重启引擎（健康检查 + 优雅 SIGTERM/SIGKILL + 启动验证 + 冷却期 + 数据库/网络线程保护）+ RepairEffectivenessLog 修复效果日志（fault_pattern 匹配 + 成功率统计 + 降级原因归因 + 160 tests）+ CodeAwareRepairAgent AST 级代码感知修复（10 种 FaultCategory + None guard / KeyError .get() / ImportError 诊断 三种启发式策略 + 合约校验 + LLM 辅助修复 + SelfHealingAction 适配器，51 tests）
+- [新功能] ConfigAutoRollback 自动配置回滚引擎：config.json → shadow_temp.json 原子写入 + checksum 校验 + 应用验证 + 失败自动 restore + 31 tests
+- [新功能] GracefulDegradation 优雅降级调度器：能力树遍历 + 降级策略优先级链 + 健康检查门控 + 回滚恢复 + 30 tests
+- [新功能] EventBus 本地事件总线：fire-and-forget 异步发布 + 内存缓冲 + 自动重连 + 32 tests
+- [新功能] Agent 新增 search_papers 学术论文搜索工具：接入 arXiv API（https，直连/本地代理 fallback，纯标准库），支持英文关键词，中文关键词空结果时附提示；已注册进 Agent 工具注册表（19 个工具）
+- [新功能] search_papers 支持中英文论文资料查询：新增 source 参数（arxiv / openalex / crossref / auto）与 language 参数（all/zh/en）；中文关键词自动路由 Crossref（收录中文期刊，如《电子通信与计算机科学》《教育研究》），OpenAlex 免费额度耗尽时自动降级 Crossref，英文优先 arXiv 失败再降级；JATS 摘要标签清洗、DOI 链接、期刊名与年份字段
+- [新功能] 全面接入 LAAP 认知引擎（Zero-LLM Cognitive Architecture）：新增渠道预设、.env.example 模板、Web 设置页快捷添加、中英文配置指南
 - [新功能] 实时量化交易系统 v2 全面对齐：23 项后端 gap 全部闭合，覆盖 P0（回测引擎/券商适配/NTP 时钟）→ P1（WebSocket 行情/三级熔断/实时风控守护/健康检查）→ P2（数据质量 Pipeline/行情持久化/OMS 与 RMS 分离/全链路延迟监控/订单幂等化）→ P3（L2 深度行情/信号融合与冲突仲裁/企业事件处理/特征工程管线/策略漂移检测）
 - [新功能] Paper Trading 毫秒级实时仪表板：15 个前端组件（QuoteTicker、RiskAlertToast、EventLogFeed、LatencyPanel、ExtremeMarketBanner、DriftPanel、StrategyLifecyclePanel、StrategyLeaderboard、FeaturesPanel、MarketStatusDashboard、CandlestickChart 等），WebSocket 共享单例基础架构
 - [新功能] 三级熔断机制（soft 3% / hard 5% / liquidation 8%）+ 24h 冷却期 + VaR 联动

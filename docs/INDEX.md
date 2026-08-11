@@ -72,6 +72,16 @@
 | [API 规格](architecture/api_spec.json) | FastAPI OpenAPI 规格产物 |
 | [贡献指南](CONTRIBUTING.md) | Issue、PR、测试、文档同步和协作要求 |
 
+## 架构设计
+
+| 文档 | 内容 |
+| --- | --- |
+| [L1/L2 基础数据层与业务执行层回望](L1_L2_RETROSPECTIVE.md) | 从已实现的 L3/L4 反向推演 L1/L2 的架构定义、模块清单与分层边界 |
+| [L3 架构审计报告](L3_ARCHITECTURE_AUDIT.md) | L3 操作级守护 vs 架构级自修复的全量审计（12-layer agent stack 框架） |
+| [L3 架构升级计划](L3_ARCHITECTURE_UPGRADE_PLAN.md) | L3 从操作级到架构级自修复的四阶段升级路线 |
+| [L3/L4 函数级实施计划](L3_L4_IMPLEMENTATION_PLAN.md) | L3 Phase 1-4 + L4 MetaCognitiveEngine 的完整实施计划 |
+| [实时量化系统架构设计](architecture/realtime_quant_system_design.md) | Paper Trading v2 毫秒级实时量化执行系统 P0-P3 架构设计 |
+
 ## 多语言
 
 | 文档 | 内容 |

@@ -138,14 +138,18 @@ def extract_from_image(
 
     表单字段请使用 file 上传图片。优先级：Gemini / Anthropic / OpenAI（首个可用）。
     """
+    # 1. 文件存在性检查
     if not file or not file.filename:
+        logger.warning("extract_from_image: no file uploaded")
         raise HTTPException(
             status_code=400,
-            detail={"error": "bad_request", "message": "未提供文件，请使用表单字段 file 上传图片"},
+            detail={"error": "bad_request", "message": "未提供文件，请使用表单字段 file 上传图片"}
         )
 
+    # 2. 内容类型检查
     content_type = (file.content_type or "").split(";")[0].strip().lower()
     if content_type not in ALLOWED_MIME:
+        logger.warning(f"extract_from_image: unsupported content type {content_type} from {file.filename}")
         raise HTTPException(
             status_code=400,
             detail={
@@ -154,12 +158,29 @@ def extract_from_image(
             },
         )
 
+    # 3. 读取并验证文件大小
     try:
-        # 先读取限定大小，再检查是否还有剩余（语义清晰：超出则拒绝）
-        data = file.file.read(MAX_SIZE_BYTES)
-        if file.file.read(1):
+        # Check size first by reading partial data
+        file.file.seek(0)
+        partial = file.file.read(MAX_SIZE_BYTES)
+        rest = file.file.read(1)
+        if rest:
+            logger.warning(f"extract_from_image: file too large {file.filename}")
             raise HTTPException(
-                status_code=400,
+                status_code=413,
+                detail={
+                    "error": "file_too_large",
+                    "message": f"图片超过 {MAX_SIZE_BYTES // (1024 * 1024)}MB 限制",
+                },
+            )
+        file.file.seek(0)
+        data = file.file.read()
+        
+        # Final check
+        if len(data) > MAX_SIZE_BYTES:
+            logger.warning(f"extract_from_image: actual size exceeded for {file.filename}")
+            raise HTTPException(
+                status_code=413,
                 detail={
                     "error": "file_too_large",
                     "message": f"图片超过 {MAX_SIZE_BYTES // (1024 * 1024)}MB 限制",
@@ -168,32 +189,55 @@ def extract_from_image(
     except HTTPException:
         raise
     except Exception as e:
-        logger.warning(f"读取上传文件失败: {e}")
+        logger.error(f"extract_from_image: file read error: {e}", exc_info=True)
         raise HTTPException(
             status_code=400,
             detail={"error": "read_failed", "message": "读取上传文件失败"},
         )
 
+    # 4. 调用 Vision LLM 提取股票代码
     try:
         items, raw_text = extract_stock_codes_from_image(data, content_type)
+        
+        if not items:
+            logger.info(f"extract_from_image: no stock codes found in {file.filename}")
+            return ExtractFromImageResponse(codes=[], items=[], raw_text=raw_text if include_raw else None)
+        
         extract_items = [
-            ExtractItem(code=code, name=name, confidence=conf) for code, name, conf in items
+            ExtractItem(code=code, name=name, confidence=conf) 
+            for code, name, conf in items
         ]
         codes = [i.code for i in extract_items]
+        
+        logger.info(f"extract_from_image: successfully extracted {len(codes)} codes from {file.filename}: {codes}")
         return ExtractFromImageResponse(
             codes=codes,
             items=extract_items,
             raw_text=raw_text if include_raw else None,
         )
+    
     except ValueError as e:
-        raise HTTPException(status_code=400, detail={"error": "extract_failed", "message": str(e)})
-    except Exception as e:
-        logger.error(f"图片提取失败: {e}", exc_info=True)
+        logger.error(f"extract_from_image: extraction failed: {e}")
         raise HTTPException(
-            status_code=500,
-            detail={"error": "internal_error", "message": "图片提取失败"},
+            status_code=400,
+            detail={"error": "extract_failed", "message": str(e)}
         )
-
+    except Exception as e:
+        logger.exception(f"extract_from_image: unexpected error: {e}")
+        error_str = str(e).lower()
+        if any(keyword in error_str for keyword in ["api key", "unauthorized", "rate limit", "quota", "invalid"]):
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "vision_api_unavailable",
+                    "message": "Vision API 暂时不可用，请检查 API Key 配置或稍后重试"
+                }
+            )
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "internal_error", "message": "图片识别过程中发生内部错误"}
+            )
 
 @router.post(
     "/parse-import",

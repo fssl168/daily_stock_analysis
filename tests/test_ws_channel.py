@@ -27,13 +27,15 @@ from paper_trading.ws_reconnect import ReconnectPolicy, exponential_backoff
 class FakeWS:
     """模拟 websockets 连接对象：可发送/关闭，并按预设消息序列迭代."""
 
-    def __init__(self, messages=None, block=False, fail_iter=None):
+    def __init__(self, messages=None, block=False, fail_iter=None, fail_close=None, close_delay=0.0):
         self.sent = []
         self.closed = False
         self._messages = list(messages or [])
         self._release = asyncio.Event()
         self._block = block
         self._fail_iter = fail_iter
+        self._fail_close = fail_close
+        self._close_delay = close_delay
 
     async def send(self, data):
         self.sent.append(data)
@@ -41,6 +43,10 @@ class FakeWS:
     async def close(self):
         self.closed = True
         self._release.set()
+        if self._close_delay:
+            await asyncio.sleep(self._close_delay)
+        if self._fail_close is not None:
+            raise self._fail_close
 
     def __aiter__(self):
         return self._iterate()
@@ -52,6 +58,7 @@ class FakeWS:
             await self._release.wait()
             return
         for message in self._messages:
+            await asyncio.sleep(0)  # 让事件循环有机会处理 stop 调度
             yield message
 
 
@@ -359,6 +366,14 @@ class TestWebSocketChannelLoop(unittest.IsolatedAsyncioTestCase):
         assert fake.closed is True
         assert disconnects == ["dc"]
 
+    async def test_close_error_is_silent(self):
+        fake = FakeWS(fail_close=RuntimeError("close failed"))
+        channel = WebSocketChannel(reconnect_policy=ReconnectPolicy(max_retries=0))
+        channel._url = "wss://example.com/ws"
+        with patch("websockets.connect", side_effect=_connect_ok(fake)):
+            await asyncio.wait_for(channel._run_loop(), timeout=5.0)
+        assert channel.connected is False
+
     async def test_stop_while_connected_exits_without_disconnect_callback(self):
         disconnects = []
         blocking = FakeWS(block=True)
@@ -373,6 +388,47 @@ class TestWebSocketChannelLoop(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(asyncio.gather(channel._run_loop(), _stop()), timeout=5.0)
         assert blocking.closed is True
         assert disconnects == []
+
+    async def test_stop_inside_message_handler_breaks_consume(self):
+        received = []
+        disconnects = []
+
+        def on_message(msg):
+            received.append(msg)
+            channel.stop()
+
+        fake = FakeWS(messages=["a", "b"])
+        channel = WebSocketChannel(
+            on_message=on_message,
+            on_disconnect=lambda: disconnects.append("dc"),
+        )
+        channel._url = "wss://example.com/ws"
+        with patch("websockets.connect", side_effect=_connect_ok(fake)):
+            await asyncio.wait_for(channel._run_loop(), timeout=5.0)
+        # stop 一旦落地，后续消息不再派发（"b" 被丢弃），循环立即退出
+        assert received == ["a"]
+        assert disconnects == []
+        assert fake.closed is True
+
+    async def test_stop_inside_disconnect_callback_stops_retry(self):
+        attempts = {"n": 0}
+
+        async def _connect(url, **kwargs):
+            attempts["n"] += 1
+            raise ConnectionError("down")
+
+        async def on_disconnect():
+            channel.stop()
+            await asyncio.sleep(0)  # 让 stop 的线程安全调度先落地
+
+        channel = WebSocketChannel(
+            on_disconnect=on_disconnect,
+            reconnect_policy=ReconnectPolicy(initial_backoff=1.0),
+        )
+        channel._url = "wss://example.com/ws"
+        with patch("websockets.connect", side_effect=_connect):
+            await asyncio.wait_for(channel._run_loop(), timeout=5.0)
+        assert attempts["n"] == 1
 
     async def test_stop_wakes_backoff_sleep(self):
         channel = WebSocketChannel(reconnect_policy=ReconnectPolicy())  # 默认退避 1s
@@ -398,28 +454,51 @@ class TestWebSocketChannelLoop(unittest.IsolatedAsyncioTestCase):
                 fake._fail_iter = ConnectionError("drop after first connect")
             return fake
 
+        # 用 max_retries 终止循环，避免依赖 stop 定时器（窗口太小在 CI 下会抖动）
         channel = WebSocketChannel(
             watched_codes=["600519"],
-            reconnect_policy=ReconnectPolicy(initial_backoff=0.01),
+            reconnect_policy=ReconnectPolicy(
+                initial_backoff=0.01, max_retries=1, reset_on_success=False
+            ),
         )
         channel._url = "wss://example.com/ws"
-
-        async def _stop():
-            await asyncio.sleep(0.03)
-            print(f"[dbg-stop] stop_event_before={channel._stop_event.is_set()} shutdown={channel._shutdown.is_set()}", flush=True)
-            channel.stop()
-
-        print(f"[dbg-start] stop_event={channel._stop_event.is_set()} shutdown={channel._shutdown.is_set()} url={channel._url}", flush=True)
         with patch("websockets.connect", side_effect=_connect):
-            await asyncio.wait_for(asyncio.gather(channel._run_loop(), _stop()), timeout=5.0)
-        print(f"[dbg-end] fakes={len(sent_per_ws)} stop_event={channel._stop_event.is_set()} shutdown={channel._shutdown.is_set()}", flush=True)
+            await asyncio.wait_for(channel._run_loop(), timeout=5.0)
 
         # 每次连接都应自动发送订阅消息（含重连后的补订阅）
-        assert len(sent_per_ws) >= 2
+        assert len(sent_per_ws) == 2
         for fake in sent_per_ws:
             assert len(fake.sent) == 1
             payload = json.loads(fake.sent[0])
             assert payload["codes"] == ["600519"]
+
+    async def test_run_loop_cancelled_during_connect(self):
+        gate = asyncio.Event()
+
+        async def _connect(url, **kwargs):
+            await gate.wait()  # 连接挂起，等待外部取消
+
+        channel = WebSocketChannel()
+        channel._url = "wss://example.com/ws"
+        with patch("websockets.connect", side_effect=_connect):
+            task = asyncio.create_task(channel._run_loop())
+            await asyncio.sleep(0.02)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        assert channel.connected is False
+
+    async def test_run_loop_cancelled_during_consume(self):
+        blocking = FakeWS(block=True)
+        channel = WebSocketChannel()
+        channel._url = "wss://example.com/ws"
+        with patch("websockets.connect", side_effect=_connect_ok(blocking)):
+            task = asyncio.create_task(channel._run_loop())
+            await asyncio.sleep(0.02)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        assert channel.connected is False
 
 
 # ----------------------------------------------------------------------
@@ -434,20 +513,24 @@ class TestWebSocketChannelRunForever:
 
     def test_stop_before_run_forever_then_restart(self):
         attempts = {"n": 0}
+        seen_headers = []
 
         async def _connect(url, **kwargs):
             attempts["n"] += 1
+            seen_headers.append(kwargs.get("extra_headers"))
             raise ConnectionError("down")
 
         channel = WebSocketChannel(reconnect_policy=ReconnectPolicy(max_retries=0))
         channel.stop()  # 先 stop，随后 run_forever 应重置状态仍能启动
         with patch("websockets.connect", side_effect=_connect):
-            channel.run_forever("wss://example.com/ws")
+            channel.run_forever("wss://example.com/ws", auth_token="tok")
         assert attempts["n"] == 1
+        assert seen_headers == [{"Authorization": "Bearer tok"}]
 
     def test_run_forever_in_thread_stop_from_main(self):
         attempts = {"n": 0}
-        blocking = FakeWS(block=True)
+        # close 带延迟，确保 run_forever 收尾时会清理仍在挂起的关闭任务
+        blocking = FakeWS(block=True, close_delay=0.05)
 
         async def _connect(url, **kwargs):
             attempts["n"] += 1

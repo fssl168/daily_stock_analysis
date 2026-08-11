@@ -234,6 +234,18 @@ LITELLM_MODEL=openai/hermes-agent
 
 `hermes` is a reserved channel name for local loopback `/v1` OpenAI-compatible generation. Phase 3 only verifies regular analysis and JSON output. It does not support Stream/SSE, tools, Vision, Agent tools, remote Hermes, or process lifecycle management. Use exactly one `LLM_HERMES_API_KEY`; do not configure `LLM_HERMES_API_KEYS` or `LLM_HERMES_EXTRA_HEADERS`. If enabled Hermes config is invalid, DSA blocks legacy provider silent fallback so requests do not unexpectedly switch to an external model. When the Web settings page saves the reserved Hermes channel, it explicitly clears stale `LLM_HERMES_API_KEYS` / `LLM_HERMES_EXTRA_HEADERS` values and returns a warning. To recover previous values, restore them from a `.env` backup, Git history, or a desktop export backup, but Phase 3 will still reject non-empty multi-key or extra-header Hermes settings.
 
+### Example: LAAP Cognitive Engine (Zero-LLM, OpenAI Compatible)
+```env
+LLM_CHANNELS=laap
+LLM_LAAP_PROTOCOL=openai
+LLM_LAAP_BASE_URL=http://localhost:11546/v1
+LLM_LAAP_API_KEY=laap-brain
+LLM_LAAP_MODELS=laap-core
+LITELLM_MODEL=openai/laap-core
+```
+
+LAAP (Living Agent Application Protocol) is a Zero-LLM cognitive architecture that exposes cognitive capabilities through an OpenAI-compatible API. Clone and start the LAAP Brain API first (`python aris_brain/laap_brain_api.py --port 11546`), then configure the channel above in DSA to use LAAP as an LLM provider. Any API key value works (e.g. `laap-brain`); the model name is always `laap-core`. See [LAAP AGI](https://github.com/lorryjovens-hub/laap-AGI) for details.
+
 ### MiniMax Model Naming in Channel Mode
 
 - If you access MiniMax through an OpenAI-compatible channel, enter the model as `minimax/<model-name>` in the channel model list, for example `minimax/MiniMax-M1`.

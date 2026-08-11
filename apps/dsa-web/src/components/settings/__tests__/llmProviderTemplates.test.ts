@@ -25,6 +25,7 @@ describe('llmProviderTemplates', () => {
       'anthropic',
       'openai',
       'ollama',
+      'laap',
       'custom',
     ]);
   });

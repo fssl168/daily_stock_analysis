@@ -79,50 +79,31 @@ def add_error_handlers(app) -> None:
     from fastapi import HTTPException
     from fastapi.exceptions import RequestValidationError
     
-    @app.exception_handler(HTTPException)
-    async def http_exception_handler(request: Request, exc: HTTPException):
-        """处理 HTTP 异常"""
-        # 如果 detail 已经是 ErrorResponse 格式的 dict，直接使用
-        if isinstance(exc.detail, dict) and "error" in exc.detail and "message" in exc.detail:
-            return JSONResponse(
-                status_code=exc.status_code,
-                content=exc.detail
-            )
-        # 否则将 detail 包装成 ErrorResponse 格式
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """处理 HTTP 异常"""
+    # Build standardized response with timestamp
+    from datetime import datetime
+    
+    # If detail is already a rich ErrorResponse dict with "error" and "message", use it directly
+    if isinstance(exc.detail, dict) and "error" in exc.detail:
+        response_data = exc.detail.copy()
+        # Ensure timestamp exists
+        if "timestamp" not in response_data:
+            response_data["timestamp"] = datetime.now().isoformat()
         return JSONResponse(
             status_code=exc.status_code,
-            content={
-                "error": "http_error",
-                "message": str(exc.detail) if exc.detail else "HTTP Error",
-                "detail": None
-            }
+            content=response_data
         )
     
-    @app.exception_handler(RequestValidationError)
-    async def validation_exception_handler(request: Request, exc: RequestValidationError):
-        """处理请求验证异常"""
-        return JSONResponse(
-            status_code=422,
-            content={
-                "error": "validation_error",
-                "message": "请求参数验证失败",
-                "detail": exc.errors()
-            }
-        )
-    
-    @app.exception_handler(Exception)
-    async def general_exception_handler(request: Request, exc: Exception):
-        """处理通用异常"""
-        logger.error(
-            f"未处理的异常: {exc}\n"
-            f"请求路径: {request.url.path}\n"
-            f"堆栈: {traceback.format_exc()}"
-        )
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": "internal_error",
-                "message": "服务器内部错误",
-                "detail": None
-            }
-        )
+    # Otherwise wrap in standardized format
+    message = exc.detail if exc.detail else str(exc)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": "http_error",
+            "message": message,
+            "detail": None,
+            "timestamp": datetime.now().isoformat()
+        }
+    )

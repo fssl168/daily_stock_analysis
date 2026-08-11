@@ -71,6 +71,7 @@ class TaskInfo:
     stock_name: Optional[str] = None
     status: TaskStatus = TaskStatus.PENDING
     progress: int = 0
+    progress_stage: Optional[str] = None
     message: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
@@ -100,6 +101,7 @@ class TaskInfo:
             "message": self.message,
             "report_type": self.report_type,
             "analysis_phase": self.analysis_phase,
+            "progress_stage": self.progress_stage,
             "created_at": self.created_at.isoformat(),
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,

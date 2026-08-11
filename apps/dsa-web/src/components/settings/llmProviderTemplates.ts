@@ -200,6 +200,19 @@ export const LLM_PROVIDER_TEMPLATES: LLMProviderTemplate[] = [
     officialSources: [{ label: 'Ollama API', url: 'https://github.com/ollama/ollama/blob/main/docs/api.md' }],
   },
   {
+    channelId: 'laap',
+    label: 'LAAP（认知引擎）',
+    protocol: 'openai',
+    baseUrl: 'http://localhost:11546/v1',
+    placeholderModels: 'laap-core',
+    capabilities: ['openai-compatible', 'local-runtime'],
+    configHint: '需要先启动 LAAP Brain API（默认端口 11546），见 https://github.com/lorryjovens-hub/laap-AGI。',
+    officialSources: [
+      { label: 'LAAP AGI', url: 'https://github.com/lorryjovens-hub/laap-AGI' },
+      { label: 'LAAP 官网', url: 'https://laap-agi.netlify.app' },
+    ],
+  },
+  {
     channelId: 'custom',
     label: '自定义渠道',
     protocol: 'openai',

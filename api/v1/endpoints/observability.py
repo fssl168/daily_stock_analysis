@@ -287,6 +287,135 @@ def meta_stats() -> Dict[str, Any]:
         raise _internal_error("Meta stats failed", exc)
 
 
+# ===================================================================
+# L4 干预调整（门控，白名单软参数）
+# ===================================================================
+
+
+@router.get(
+    "/adjustments",
+    summary="调整历史（L4 干预）",
+)
+def adjustment_history() -> Dict[str, Any]:
+    from src.services.adjustment_engine import get_adjustment_engine
+
+    try:
+        history = get_adjustment_engine().history()
+        return {
+            "items": [
+                {
+                    "param_name": c.param_name,
+                    "param_value": str(c.param_value),
+                    "reason": c.reason,
+                    "applied": c.applied,
+                    "auto_applied": c.auto_applied,
+                    "rejected": c.rejected,
+                }
+                for c in history
+            ],
+            "count": len(history),
+        }
+    except Exception as exc:
+        raise _internal_error("Adjustment history failed", exc)
+
+
+@router.post(
+    "/adjustments/apply",
+    summary="应用一条调整提案（人工确认）",
+)
+def _validate_adjustment_value(param_name: str, param_value: Any) -> Any:
+    """校验并归一化调整参数值；非法抛 HTTPException 400。
+
+    - AGENT_MAX_STEPS: int 或数字字符串
+    - AGENT_CONTEXT_COMPRESSION_PROFILE: aggressive/balanced/conservative
+    - AGENT_SKILLS: list[str]
+    """
+    if param_name == "AGENT_MAX_STEPS":
+        try:
+            return int(param_value)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "invalid_value", "message": "AGENT_MAX_STEPS must be an integer"},
+            )
+    if param_name == "AGENT_CONTEXT_COMPRESSION_PROFILE":
+        val = str(param_value).strip().lower()
+        if val not in ("aggressive", "balanced", "conservative"):
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "invalid_value", "message": "profile must be aggressive/balanced/conservative"},
+            )
+        return val
+    if param_name == "AGENT_SKILLS":
+        if not isinstance(param_value, (list, tuple)):
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "invalid_value", "message": "AGENT_SKILLS must be a list"},
+            )
+        return list(param_value)
+    raise HTTPException(
+        status_code=400,
+        detail={"error": "unsafe_param", "message": f"{param_name} not in safe whitelist"},
+    )
+
+
+def adjustment_apply(body: Dict[str, Any]) -> Dict[str, Any]:
+    """人工应用一条调整指令。
+
+    Body: {param_name, param_value, reason?}
+    仅接受白名单内参数；参数类型/值非法返回 400。
+    """
+    from src.services.adjustment_engine import (
+        SAFE_PARAMS,
+        AdjustmentCommand,
+        get_adjustment_engine,
+    )
+
+    try:
+        param_name = str(body.get("param_name", ""))
+        if param_name not in SAFE_PARAMS:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "unsafe_param", "message": f"{param_name} not in safe whitelist"},
+            )
+        normalized_value = _validate_adjustment_value(param_name, body.get("param_value"))
+        cmd = AdjustmentCommand(
+            param_name=param_name,
+            param_value=normalized_value,
+            reason=str(body.get("reason", "manual apply")),
+        )
+        ok = get_adjustment_engine().apply(cmd, actor="webui")
+        return {"ok": ok, "param_name": param_name}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _internal_error("Adjustment apply failed", exc)
+
+
+@router.post(
+    "/adjustments/reject",
+    summary="拒绝一条调整提案（人工确认）",
+)
+def adjustment_reject(body: Dict[str, Any]) -> Dict[str, Any]:
+    from src.services.adjustment_engine import (
+        SAFE_PARAMS,
+        AdjustmentCommand,
+        get_adjustment_engine,
+    )
+
+    try:
+        param_name = str(body.get("param_name", ""))
+        cmd = AdjustmentCommand(
+            param_name=param_name if param_name in SAFE_PARAMS else "_unknown_",
+            param_value=body.get("param_value"),
+            reason=str(body.get("reason", "manual reject")),
+        )
+        ok = get_adjustment_engine().reject(cmd, actor="webui")
+        return {"ok": ok, "param_name": param_name}
+    except Exception as exc:
+        raise _internal_error("Adjustment reject failed", exc)
+
+
 @router.post(
     "/meta/reflect",
     summary="触发一次反思（dry_run，仅产出报告）",
@@ -294,17 +423,35 @@ def meta_stats() -> Dict[str, Any]:
 def meta_reflect() -> Dict[str, Any]:
     """触发 MetaCognitiveEngine.force_reflection()。
 
-    dry_run 语义：仅生成内省报告，不调整任何策略、不触发任何修复。
+    反射后自动将内省建议交给 AdjustmentEngine.propose() 产出调整提案：
+    - 默认仅提案（awaiting_confirmation=true），不自动应用
+    - ADJUSTMENT_AUTO_APPLY=true 时自动应用白名单内软参数
+    任何调整都不触及订单/仓位/风控路径。
     """
     try:
         engine = get_meta_cognitive_engine()
         if engine is None:
             raise _not_found("MetaCognitiveEngine not bootstrapped")
         report = engine.force_reflection()
+        # 触发调整提案（安全门控）
+        from src.services.adjustment_engine import get_adjustment_engine
+
+        hints = list(getattr(report, "improvement_hints", []) or [])
+        reflection_id = str(getattr(report, "generated_at", ""))
+        proposed = get_adjustment_engine().propose(hints, reflection_id=reflection_id)
         return {
             "ok": True,
             "report": _introspection_to_dict(report),
-            "note": "observe-only: no policy adjustment applied",
+            "proposed_adjustments": [
+                {
+                    "param_name": c.param_name,
+                    "param_value": str(c.param_value),
+                    "reason": c.reason,
+                    "applied": c.applied,
+                }
+                for c in proposed
+            ],
+            "note": "adjustments gated by whitelist; observe-only unless ADJUSTMENT_AUTO_APPLY",
         }
     except HTTPException:
         raise

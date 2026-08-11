@@ -172,5 +172,44 @@ class HealthTrendTestCase(unittest.TestCase):
             self.assertIn("unhealthy_count", item)
 
 
+class AdjustmentApiTestCase(unittest.TestCase):
+    """REV-203: 调整端点类型校验 + 白名单门控。"""
+
+    def setUp(self) -> None:
+        self.bus = _reset_bus()
+
+    def test_apply_unsafe_param_400(self):
+        """白名单外参数（如 ORDER_SIZE）应返回 400。"""
+        from fastapi import HTTPException
+
+        with self.assertRaises(HTTPException) as ctx:
+            observability.adjustment_apply({"param_name": "ORDER_SIZE", "param_value": 1000})
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_apply_invalid_max_steps_400(self):
+        """AGENT_MAX_STEPS 非整数应返回 400。"""
+        from fastapi import HTTPException
+
+        with self.assertRaises(HTTPException) as ctx:
+            observability.adjustment_apply({"param_name": "AGENT_MAX_STEPS", "param_value": "abc"})
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_apply_invalid_profile_400(self):
+        """AGENT_CONTEXT_COMPRESSION_PROFILE 非法档位应返回 400。"""
+        from fastapi import HTTPException
+
+        with self.assertRaises(HTTPException) as ctx:
+            observability.adjustment_apply(
+                {"param_name": "AGENT_CONTEXT_COMPRESSION_PROFILE", "param_value": "extreme"}
+            )
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_apply_valid_max_steps_ok(self):
+        """AGENT_MAX_STEPS=12 应成功应用（归一化为 int）。"""
+        result = observability.adjustment_apply({"param_name": "AGENT_MAX_STEPS", "param_value": "12"})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["param_name"], "AGENT_MAX_STEPS")
+
+
 if __name__ == "__main__":
     unittest.main()

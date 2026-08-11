@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { observabilityApi } from '../../api/observability';
 import { Card, EmptyState, InlineAlert } from '../common';
 import type {
+  AdjustmentHistoryItem,
+  AdjustmentProposal,
   EventStatsResponse,
   HealthTrendResponse,
   IntrospectionResponse,
@@ -88,12 +90,23 @@ export const EventStatsOverview: React.FC = () => {
 
 // ============ MetaIntrospectionPanel ============
 
-/** 最新内省报告 + 触发反思（dry_run）。 */
+/** 最新内省报告 + 触发反思 + 调整提案门控。 */
 export const MetaIntrospectionPanel: React.FC = () => {
   const [report, setReport] = useState<IntrospectionResponse['report']>(null);
+  const [proposals, setProposals] = useState<AdjustmentProposal[]>([]);
+  const [history, setHistory] = useState<AdjustmentHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [reflecting, setReflecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const loadHistory = useCallback(async () => {
+    try {
+      const resp = await observabilityApi.getAdjustmentHistory();
+      setHistory(resp.items ?? []);
+    } catch {
+      // 历史加载失败不阻断面板
+    }
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -108,7 +121,10 @@ export const MetaIntrospectionPanel: React.FC = () => {
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+    void loadHistory();
+  }, [load, loadHistory]);
 
   const triggerReflect = async () => {
     if (reflecting) return;
@@ -117,6 +133,8 @@ export const MetaIntrospectionPanel: React.FC = () => {
     try {
       const resp: ReflectResponse = await observabilityApi.triggerReflect();
       setReport(resp.report);
+      setProposals(resp.proposed_adjustments ?? []);
+      void loadHistory();
     } catch (e) {
       setError(e instanceof Error ? e.message : '反思触发失败');
     } finally {
@@ -124,8 +142,30 @@ export const MetaIntrospectionPanel: React.FC = () => {
     }
   };
 
+  const handleApply = async (p: AdjustmentProposal) => {
+    setError(null);
+    try {
+      await observabilityApi.applyAdjustment(p.param_name, p.param_value, p.reason);
+      setProposals((prev) => prev.map((x) => x.param_name === p.param_name ? { ...x, applied: true } : x));
+      void loadHistory();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '调整应用失败');
+    }
+  };
+
+  const handleReject = async (p: AdjustmentProposal) => {
+    setError(null);
+    try {
+      await observabilityApi.rejectAdjustment(p.param_name, p.param_value);
+      setProposals((prev) => prev.filter((x) => x.param_name !== p.param_name));
+      void loadHistory();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '调整拒绝失败');
+    }
+  };
+
   return (
-    <Card title="L4 内省报告" subtitle="元认知 · dry-run 观察模式">
+    <Card title="L4 内省报告" subtitle="元认知 · 门控干预模式">
       <div className="mb-2 flex items-center justify-between">
         <button
           type="button"
@@ -159,6 +199,57 @@ export const MetaIntrospectionPanel: React.FC = () => {
             ) : null}
           </div>
         ) : <EmptyState title="尚无内省报告" description="点击「触发反思」生成第一份报告" />
+      )}
+
+      {/* 调整提案（门控干预） */}
+      {proposals.length > 0 && (
+        <div className="mt-3 space-y-2 border-t border-border pt-3">
+          <div className="text-xs font-medium text-muted-foreground">调整提案（白名单 · 需人工确认）</div>
+          {proposals.map((p) => (
+            <div key={p.param_name} className="rounded-lg bg-elevated p-2">
+              <div className="flex items-center justify-between">
+                <span className="font-mono text-xs font-semibold">{p.param_name}</span>
+                <span className="text-xs text-muted-foreground">{p.param_value}</span>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">{p.reason}</p>
+              <div className="mt-1.5 flex gap-2">
+                <button
+                  type="button"
+                  className="btn-primary !px-2 !py-0.5 text-xs"
+                  disabled={p.applied}
+                  onClick={() => void handleApply(p)}
+                >
+                  {p.applied ? '已应用' : '应用'}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary !px-2 !py-0.5 text-xs"
+                  disabled={p.applied}
+                  onClick={() => void handleReject(p)}
+                >
+                  忽略
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 调整历史 */}
+      {history.length > 0 && (
+        <div className="mt-3 border-t border-border pt-2">
+          <div className="text-xs font-medium text-muted-foreground">调整历史</div>
+          <ul className="mt-1 space-y-1">
+            {history.slice(0, 5).map((h, i) => (
+              <li key={i} className="flex items-center justify-between text-xs">
+                <span className="font-mono">{h.param_name}</span>
+                <span className={h.applied ? 'text-success' : h.rejected ? 'text-danger' : 'text-muted-foreground'}>
+                  {h.applied ? '已应用' : h.rejected ? '已拒绝' : '待确认'}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </Card>
   );

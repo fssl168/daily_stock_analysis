@@ -1,5 +1,6 @@
 import apiClient from './index';
 import type {
+  AdjustmentHistoryResponse,
   EventCorrelationResponse,
   EventListResponse,
   EventStatsResponse,
@@ -66,6 +67,31 @@ export const observabilityApi = {
   triggerReflect: async (): Promise<ReflectResponse> => {
     const { data } = await apiClient.post('/observability/meta/reflect');
     return data as ReflectResponse;
+  },
+
+  /** 调整历史（L4 干预） */
+  getAdjustmentHistory: async (): Promise<AdjustmentHistoryResponse> => {
+    const { data } = await apiClient.get('/observability/adjustments');
+    return data as AdjustmentHistoryResponse;
+  },
+
+  /** 应用一条调整提案（人工确认） */
+  applyAdjustment: async (paramName: string, paramValue: unknown, reason?: string): Promise<{ ok: boolean; param_name: string }> => {
+    const { data } = await apiClient.post('/observability/adjustments/apply', {
+      param_name: paramName,
+      param_value: paramValue,
+      reason,
+    });
+    return data as { ok: boolean; param_name: string };
+  },
+
+  /** 拒绝一条调整提案（人工确认） */
+  rejectAdjustment: async (paramName: string, paramValue?: unknown): Promise<{ ok: boolean; param_name: string }> => {
+    const { data } = await apiClient.post('/observability/adjustments/reject', {
+      param_name: paramName,
+      param_value: paramValue,
+    });
+    return data as { ok: boolean; param_name: string };
   },
 
   /** 修复记录列表 */

@@ -121,6 +121,28 @@ export interface ReflectResponse {
   ok: boolean;
   report: IntrospectionReport;
   note: string;
+  proposed_adjustments?: AdjustmentProposal[];
+}
+
+export interface AdjustmentProposal {
+  param_name: string;
+  param_value: string;
+  reason: string;
+  applied: boolean;
+}
+
+export interface AdjustmentHistoryItem {
+  param_name: string;
+  param_value: string;
+  reason: string;
+  applied: boolean;
+  auto_applied: boolean;
+  rejected: boolean;
+}
+
+export interface AdjustmentHistoryResponse {
+  items: AdjustmentHistoryItem[];
+  count: number;
 }
 
 export interface MetaObservation {

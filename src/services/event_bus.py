@@ -64,6 +64,11 @@ class SystemEventType(str, Enum):
     CIRCULARITY_DETECTED = "circularity_detected"
     OUTCOME_DEVIATION = "outcome_deviation"
 
+    # L4 干预调整事件（2026-08-12 干预模式新增）
+    ADJUSTMENT_PROPOSED = "adjustment_proposed"
+    ADJUSTMENT_APPLIED = "adjustment_applied"
+    ADJUSTMENT_REJECTED = "adjustment_rejected"
+
     # 系统级事件
     SYSTEM_STARTUP = "system_startup"
     SYSTEM_SHUTDOWN = "system_shutdown"

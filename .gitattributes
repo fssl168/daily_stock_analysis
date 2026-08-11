@@ -35,6 +35,40 @@ Makefile text eol=lf
 # 环境变量文件（如果被 shell 直接 source 使用）
 .env text eol=lf
 
+# === 统一行尾策略：常见文本类型强制 LF（跨平台一致，避免 CRLF 警告） ===
+# 后端 Python
+*.py text eol=lf
+*.pyi text eol=lf
+*.pyw text eol=lf
+
+# 前端 Web / 桌面端
+*.ts text eol=lf
+*.tsx text eol=lf
+*.js text eol=lf
+*.jsx text eol=lf
+*.json text eol=lf
+*.vue text eol=lf
+*.css text eol=lf
+*.scss text eol=lf
+*.html text eol=lf
+
+# 文档 / 配置 / 数据
+*.md text eol=lf
+*.markdown text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.ini text eol=lf
+*.cfg text eol=lf
+*.example text eol=lf
+*.csv text eol=lf
+*.txt text eol=lf
+
+# 脚本
+*.ps1 text eol=lf
+*.bat text eol=lf
+*.cmd text eol=lf
+
 # === 新增：二进制文件（禁止 Git 修改换行/编码） ===
 # 证书、密钥等（如果有）
 *.pem binary

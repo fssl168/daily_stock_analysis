@@ -385,6 +385,27 @@ class StockAnalysisPipeline:
             AnalysisResult 或 None（如果分析失败）
         """
         stock_name = code
+        _pipeline_started = __import__("time").time()
+        # 发布 PIPELINE_STARTED（全主动观察；失败仅记录，不影响分析流程）
+        try:
+            from src.services.event_bus import (
+                EventSeverity, SystemEvent, SystemEventBus, SystemEventType,
+            )
+            SystemEventBus.instance().publish(SystemEvent(
+                event_id=f"pipe_start_{code}_{int(_pipeline_started * 1000)}",
+                event_type=SystemEventType.PIPELINE_STARTED,
+                severity=EventSeverity.INFO,
+                source="pipeline",
+                payload={
+                    "stock_code": code,
+                    "report_type": report_type.value,
+                    "query_id": query_id,
+                    "start_ts": _pipeline_started,
+                },
+                correlation_id=str(query_id),
+            ))
+        except Exception:
+            logger.debug("publish PIPELINE_STARTED failed (observe-only)", exc_info=True)
         try:
             portfolio_context = getattr(self, "portfolio_context", None)
             if not isinstance(portfolio_context, dict):
@@ -829,11 +850,53 @@ class StockAnalysisPipeline:
                     )
                     logger.warning(f"{stock_name}({code}) 保存分析历史失败: {e}")
 
+            # 发布 PIPELINE_COMPLETED（观察型）
+            try:
+                from src.services.event_bus import (
+                    EventSeverity, SystemEvent, SystemEventBus, SystemEventType,
+                )
+                SystemEventBus.instance().publish(SystemEvent(
+                    event_id=f"pipe_end_{code}_{int(__import__('time').time() * 1000)}",
+                    event_type=SystemEventType.PIPELINE_COMPLETED,
+                    severity=EventSeverity.INFO,
+                    source="pipeline",
+                    payload={
+                        "stock_code": code,
+                        "query_id": query_id,
+                        "success": bool(result and result.success),
+                        "duration_ms": int((__import__("time").time() - _pipeline_started) * 1000),
+                        "stock_name": stock_name,
+                    },
+                    correlation_id=str(query_id),
+                ))
+            except Exception:
+                logger.debug("publish PIPELINE_COMPLETED failed (observe-only)", exc_info=True)
+
             return result
 
         except Exception as e:
             logger.error(f"{stock_name}({code}) 分析失败: {e}")
             logger.exception(f"{stock_name}({code}) 详细错误信息:")
+            # 发布 PIPELINE_FAILED（观察型）
+            try:
+                from src.services.event_bus import (
+                    EventSeverity, SystemEvent, SystemEventBus, SystemEventType,
+                )
+                SystemEventBus.instance().publish(SystemEvent(
+                    event_id=f"pipe_fail_{code}_{int(__import__('time').time() * 1000)}",
+                    event_type=SystemEventType.PIPELINE_FAILED,
+                    severity=EventSeverity.ERROR,
+                    source="pipeline",
+                    payload={
+                        "stock_code": code,
+                        "query_id": query_id,
+                        "error": str(e)[:500],
+                        "duration_ms": int((__import__("time").time() - _pipeline_started) * 1000),
+                    },
+                    correlation_id=str(query_id),
+                ))
+            except Exception:
+                logger.debug("publish PIPELINE_FAILED failed (observe-only)", exc_info=True)
             return None
     
     def _enhance_context(

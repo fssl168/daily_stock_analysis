@@ -2681,6 +2681,41 @@ class NotificationService(
             dedup_key=dedup_key,
             cooldown_key=cooldown_key,
         )
+
+        # 发布通知发送结果事件（全主动观察；失败仅记录，不影响通知返回）
+        try:
+            from src.services.event_bus import (
+                EventSeverity, SystemEvent, SystemEventBus, SystemEventType,
+            )
+            _channels = [
+                {
+                    "channel": getattr(c, "channel", "?"),
+                    "success": getattr(c, "success", False),
+                }
+                for c in getattr(result, "channel_results", [])
+            ]
+            _event_type = (
+                SystemEventType.NOTIFICATION_SENT
+                if result.success
+                else SystemEventType.NOTIFICATION_FAILED
+            )
+            SystemEventBus.instance().publish(SystemEvent(
+                event_id=f"notif_{'ok' if result.success else 'fail'}_{int(__import__('time').time() * 1000)}",
+                event_type=_event_type,
+                severity=EventSeverity.INFO if result.success else EventSeverity.WARNING,
+                source="notification_service",
+                payload={
+                    "success": bool(result.success),
+                    "dispatched": bool(getattr(result, "dispatched", False)),
+                    "status": getattr(result, "status", ""),
+                    "route_type": route_type,
+                    "severity": severity,
+                    "channels": _channels[:20],
+                },
+            ))
+        except Exception:
+            logger.debug("publish notification event failed (observe-only)", exc_info=True)
+
         return bool(result.success)
 
     def save_report_to_file(

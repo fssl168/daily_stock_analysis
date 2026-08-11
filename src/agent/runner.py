@@ -580,6 +580,28 @@ def run_agent_loop(
                 [tc.name for tc in response.tool_calls],
             )
 
+            # 发布 AGENT_TOOL_CALL 事件（全主动观察；失败仅记录，不影响 Agent 执行）
+            try:
+                from src.services.event_bus import (
+                    EventSeverity, SystemEvent, SystemEventBus, SystemEventType,
+                )
+                _tool_names = [tc.name for tc in response.tool_calls]
+                SystemEventBus.instance().publish(SystemEvent(
+                    event_id=f"tool_call_{step + 1}_{int(__import__('time').time() * 1000)}",
+                    event_type=SystemEventType.AGENT_TOOL_CALL,
+                    severity=EventSeverity.INFO,
+                    source="agent_runner",
+                    payload={
+                        "tool_names": _tool_names,
+                        "tool_count": len(_tool_names),
+                        "step": step + 1,
+                        "stock_scope": stock_scope,
+                        "task": (task[:200] if isinstance(task, str) else str(task))[:200],
+                    },
+                ))
+            except Exception:
+                logger.debug("publish AGENT_TOOL_CALL failed (observe-only)", exc_info=True)
+
             # Append assistant message (with tool_calls) to history
             assistant_msg: Dict[str, Any] = {
                 "role": "assistant",
@@ -746,6 +768,28 @@ def _execute_tools(
             ok = False
             logger.warning("Tool '%s' failed: %s", tc_item.name, e)
         dur = round(time.time() - t0, 2)
+
+        # 发布 AGENT_TOOL_RESULT 事件（全主动观察；失败仅记录，不影响 Agent 执行）
+        try:
+            from src.services.event_bus import (
+                EventSeverity, SystemEvent, SystemEventBus, SystemEventType,
+            )
+            SystemEventBus.instance().publish(SystemEvent(
+                event_id=f"tool_res_{tc_item.name}_{int(time.time() * 1000)}",
+                event_type=SystemEventType.AGENT_TOOL_RESULT,
+                severity=EventSeverity.WARNING if not ok else EventSeverity.INFO,
+                source="agent_runner",
+                payload={
+                    "tool_name": tc_item.name,
+                    "success": ok,
+                    "duration_ms": int(dur * 1000),
+                    "step": step,
+                    "result_preview": (res_str[:200] if isinstance(res_str, str) else str(res_str))[:200],
+                },
+            ))
+        except Exception:
+            logger.debug("publish AGENT_TOOL_RESULT failed (observe-only)", exc_info=True)
+
         return tc_item, res_str, ok, dur, False, None
 
     results: List[Dict[str, Any]] = []

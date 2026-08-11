@@ -100,6 +100,8 @@ class HealthCheckDaemon:
         """执行全部注册检查，返回本轮状态列表。
 
         检查项抛异常时记录日志并跳过，不影响其他检查项。
+        每轮检查完成后发布 HEALTH_CHECK_COMPLETED 事件到 SystemEventBus
+        （全主动观察：L4 元认知订阅健康趋势，第一版不触发自动修复）。
         """
         statuses: List[HealthStatus] = []
         for check in tuple(self._checks):
@@ -117,7 +119,45 @@ class HealthCheckDaemon:
                 )
                 if self._past_failures[status.component] >= self._alert_threshold:
                     self._on_alert("CRITICAL", f"[{status.component}] {status.message}")
+
+        # 发布健康检查聚合事件（观察型；失败仅记录，不影响健康检查本身）
+        try:
+            self._publish_health_event(statuses)
+        except Exception as exc:
+            logger.debug("publish health event failed (observe-only): %s", exc)
+
         return statuses
+
+    def _publish_health_event(self, statuses: List[HealthStatus]) -> None:
+        """发布 HEALTH_CHECK_COMPLETED 事件（尽力而为）。"""
+        from dataclasses import asdict
+        from src.services.event_bus import EventSeverity, SystemEvent, SystemEventType
+        from src.services.event_bus import SystemEventBus
+
+        bus = SystemEventBus.instance()
+        payload_statuses = []
+        for s in statuses:
+            d = asdict(s)
+            d["last_checked"] = s.last_checked.isoformat()
+            payload_statuses.append(d)
+
+        unhealthy = [s.component for s in statuses if not s.healthy]
+        severity = EventSeverity.CRITICAL if len(unhealthy) >= self._alert_threshold else (
+            EventSeverity.WARNING if unhealthy else EventSeverity.INFO
+        )
+
+        bus.publish(SystemEvent(
+            event_id=f"health_{int(__import__('time').time() * 1000)}",
+            event_type=SystemEventType.HEALTH_CHECK_COMPLETED,
+            severity=severity,
+            source="health_check_daemon",
+            payload={
+                "component_statuses": payload_statuses,
+                "unhealthy_components": unhealthy,
+                "unhealthy_count": len(unhealthy),
+                "alert_threshold": self._alert_threshold,
+            },
+        ))
 
 
 def check_system_resources() -> HealthStatus:

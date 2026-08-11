@@ -1361,6 +1361,28 @@ class DataFetcherManager:
                                 f"rows={len(df)}, elapsed={elapsed:.2f}s"
                             )
                             self._record_daily_source_success(fetcher, market)
+                            # 发布 DATA_SOURCE_FALLBACK（仅当存在兜底链，即本次为 fallback 成功；
+                            # 全主动观察，失败仅记录）
+                            if fallback_to is not None:
+                                try:
+                                    from src.services.event_bus import (
+                                        EventSeverity, SystemEvent, SystemEventBus, SystemEventType,
+                                    )
+                                    SystemEventBus.instance().publish(SystemEvent(
+                                        event_id=f"ds_fb_{stock_code}_{fetcher.name}_{int(time.time() * 1000)}",
+                                        event_type=SystemEventType.DATA_SOURCE_FALLBACK,
+                                        severity=EventSeverity.INFO,
+                                        source="data_fetcher_manager",
+                                        payload={
+                                            "stock_code": stock_code,
+                                            "market": market,
+                                            "used_source": fetcher.name,
+                                            "primary_source": source_order[0],
+                                            "fallback_chain": source_order,
+                                        },
+                                    ))
+                                except Exception:
+                                    logger.debug("publish DATA_SOURCE_FALLBACK failed (observe-only)", exc_info=True)
                             df = self._normalize_timestamps(df, stock_code)
                             return df, fetcher.name
                         duration_ms = int((time.time() - attempt_start) * 1000)
@@ -1397,6 +1419,28 @@ class DataFetcherManager:
                         )
                         self._record_daily_source_failure(fetcher, market, error_reason)
                         errors.append(error_msg)
+                        # 发布 DATA_FETCH_FAILED（全主动观察；失败仅记录，不影响 fallback 流程）
+                        try:
+                            from src.services.event_bus import (
+                                EventSeverity, SystemEvent, SystemEventBus, SystemEventType,
+                            )
+                            SystemEventBus.instance().publish(SystemEvent(
+                                event_id=f"df_fail_{stock_code}_{fetcher.name}_{int(time.time() * 1000)}",
+                                event_type=SystemEventType.DATA_FETCH_FAILED,
+                                severity=EventSeverity.WARNING,
+                                source="data_fetcher_manager",
+                                payload={
+                                    "stock_code": stock_code,
+                                    "market": market,
+                                    "fetcher": fetcher.name,
+                                    "error_type": error_type,
+                                    "error_reason": error_reason[:300],
+                                    "fallback_to": fallback_to,
+                                    "attempt": attempt,
+                                },
+                            ))
+                        except Exception:
+                            logger.debug("publish DATA_FETCH_FAILED failed (observe-only)", exc_info=True)
                     break
 
             error_summary = f"{market_label} {stock_code} 获取失败:\n" + "\n".join(errors)
@@ -1442,6 +1486,28 @@ class DataFetcherManager:
                         f"rows={len(df)}, elapsed={elapsed:.2f}s"
                     )
                     self._record_daily_source_success(fetcher, market)
+                    # 发布 DATA_SOURCE_FALLBACK（通用循环；本次为 fallback 成功时；
+                    # 全主动观察，失败仅记录）
+                    if attempt < total_fetchers:
+                        try:
+                            from src.services.event_bus import (
+                                EventSeverity, SystemEvent, SystemEventBus, SystemEventType,
+                            )
+                            SystemEventBus.instance().publish(SystemEvent(
+                                event_id=f"ds_fb_{stock_code}_{fetcher.name}_{int(time.time() * 1000)}",
+                                event_type=SystemEventType.DATA_SOURCE_FALLBACK,
+                                severity=EventSeverity.INFO,
+                                source="data_fetcher_manager",
+                                payload={
+                                    "stock_code": stock_code,
+                                    "market": market,
+                                    "used_source": fetcher.name,
+                                    "primary_source": fetchers[0].name if fetchers else "",
+                                    "fallback_chain": [f.name for f in fetchers],
+                                },
+                            ))
+                        except Exception:
+                            logger.debug("publish DATA_SOURCE_FALLBACK failed (observe-only)", exc_info=True)
                     df = self._normalize_timestamps(df, stock_code)
                     return df, fetcher.name
                 duration_ms = int((time.time() - attempt_start) * 1000)
@@ -1479,6 +1545,28 @@ class DataFetcherManager:
                 )
                 self._record_daily_source_failure(fetcher, market, error_reason)
                 errors.append(error_msg)
+                # 发布 DATA_FETCH_FAILED（通用数据源循环；全主动观察，失败仅记录）
+                try:
+                    from src.services.event_bus import (
+                        EventSeverity, SystemEvent, SystemEventBus, SystemEventType,
+                    )
+                    SystemEventBus.instance().publish(SystemEvent(
+                        event_id=f"df_fail_{stock_code}_{fetcher.name}_{int(time.time() * 1000)}",
+                        event_type=SystemEventType.DATA_FETCH_FAILED,
+                        severity=EventSeverity.WARNING,
+                        source="data_fetcher_manager",
+                        payload={
+                            "stock_code": stock_code,
+                            "market": market,
+                            "fetcher": fetcher.name,
+                            "error_type": error_type,
+                            "error_reason": error_reason[:300],
+                            "fallback_to": fetchers[attempt].name if attempt < total_fetchers else None,
+                            "attempt": attempt,
+                        },
+                    ))
+                except Exception:
+                    logger.debug("publish DATA_FETCH_FAILED failed (observe-only)", exc_info=True)
                 if attempt < total_fetchers:
                     next_fetcher = fetchers[attempt]
                     logger.info(f"[数据源切换] {stock_code}: [{fetcher.name}] -> [{next_fetcher.name}]")

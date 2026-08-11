@@ -278,9 +278,33 @@ async def app_lifespan(app: FastAPI):
         runtime_scheduler=app.state.runtime_scheduler_service,
     )
     _schedule_stock_index_background_refresh(app, "startup")
+
+    # --- 系统事件总线初始化（全主动观察 L1/L2/L3/L4 装配）---
+    # 观测基建失败不得拖垮 API 服务：任何异常仅记录并继续。
+    try:
+        from src.services.bootstrap_event_bus import (
+            bootstrap_event_bus,
+            publish_system_lifecycle,
+        )
+        _api_event_bus = bootstrap_event_bus()
+        publish_system_lifecycle(_api_event_bus, "startup", reason="api_server")
+        app.state.event_bus = _api_event_bus
+        logger.info("EventBus started for API server (reason=api_server)")
+    except Exception as _event_bus_exc:
+        logger.warning("EventBus 初始化失败（观测层降级，不影响 API 服务）: %s", _event_bus_exc)
+
     try:
         yield
     finally:
+        # 发布系统关闭事件（观测层尽力而为）
+        event_bus = getattr(app.state, "event_bus", None)
+        if event_bus is not None:
+            try:
+                from src.services.bootstrap_event_bus import publish_system_lifecycle
+
+                publish_system_lifecycle(event_bus, "shutdown", reason="api_server")
+            except Exception:
+                logger.warning("EventBus shutdown 事件发布失败", exc_info=True)
         refresh_task = getattr(app.state, "stock_index_refresh_task", None)
         if refresh_task is not None and not refresh_task.done():
             refresh_task.cancel()

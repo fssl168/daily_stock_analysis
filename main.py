@@ -1246,6 +1246,19 @@ def main() -> int:
     # 解析命令行参数
     args = parse_arguments()
 
+    # --- 系统事件总线初始化（全主动观察 L1/L2/L3/L4 装配）---
+    # 观测基建失败不得拖垮主流程：任何异常仅记录并继续。
+    _event_bus = None
+    try:
+        from src.services.bootstrap_event_bus import (
+            bootstrap_event_bus,
+            publish_system_lifecycle,
+        )
+        _event_bus = bootstrap_event_bus()
+        publish_system_lifecycle(_event_bus, "startup", reason="main")
+    except Exception as _event_bus_exc:
+        logger.warning("EventBus 初始化失败（观测层降级，不影响主流程）: %s", _event_bus_exc)
+
     # --- Paper Trading CLI 快捷入口 ---
     if getattr(args, "pt_command", None):
         _bootstrap_environment()
@@ -1611,6 +1624,14 @@ def main() -> int:
     except Exception as e:
         logger.exception(f"程序执行失败: {e}")
         return 1
+
+    finally:
+        # 发布系统关闭事件（观测层尽力而为，失败不影响退出码）
+        if _event_bus is not None:
+            try:
+                publish_system_lifecycle(_event_bus, "shutdown", reason="main")
+            except Exception as _event_bus_exc:
+                logger.warning("EventBus shutdown 事件发布失败: %s", _event_bus_exc)
 
 
 if __name__ == "__main__":

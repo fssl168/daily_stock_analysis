@@ -2021,6 +2021,46 @@ class SystemConfigService:
             mask_token=mask_token,
         )
 
+        # 配置回归观察（第一版 · 全主动观察：只做快照 + 信号检测，不自动回滚）
+        # pre_change 快照在 apply_updates 前创建；post_change 快照在写入后创建；
+        # 检出回归时发布 CONFIG_REGRESSION_DETECTED 事件（由 L3ConfigObserver 记录），
+        # 绝不调用 auto_rollback_if_needed（回滚保持人工触发）。
+        try:
+            from src.services.config_rollback import ConfigAutoRollback
+            from src.services.event_bus import (
+                EventSeverity, SystemEvent, SystemEventBus, SystemEventType,
+            )
+            _rollback_engine = ConfigAutoRollback()
+            _snapshot_before = _rollback_engine.pre_change_hook()
+            _snapshot_after = _rollback_engine.create_snapshot(trigger="post_change")
+            _regression = _rollback_engine.detect_regression(
+                _snapshot_before,
+                _snapshot_after.snapshot_id,
+                {},  # 观察型阶段健康指标留空；后续由 HealthCheckDaemon 事件填充
+            )
+            if _regression is not None:
+                SystemEventBus.instance().publish(SystemEvent(
+                    event_id=f"cfg_reg_{int(__import__('time').time() * 1000)}",
+                    event_type=SystemEventType.CONFIG_REGRESSION_DETECTED,
+                    severity=(
+                        EventSeverity.CRITICAL
+                        if _regression.severity == "critical"
+                        else EventSeverity.WARNING
+                    ),
+                    source="system_config_service",
+                    payload={
+                        "snapshot_before": _regression.snapshot_before,
+                        "snapshot_after": _regression.snapshot_after,
+                        "severity": _regression.severity,
+                        "indicators": _regression.indicators,
+                        "regression_signals": _regression.indicators,
+                        "auto_rollback_eligible": _regression.auto_rollback_eligible,
+                        "note": "observe-only: no auto rollback in Phase 1",
+                    },
+                ))
+        except Exception:
+            logger.debug("config regression observation skipped (observe-only)", exc_info=True)
+
         warnings: List[str] = []
         reload_triggered = False
         if reload_now:
@@ -2066,6 +2106,27 @@ class SystemConfigService:
             except Exception as exc:  # pragma: no cover - defensive branch
                 logger.error("Runtime scheduler reconcile failed: %s", exc, exc_info=True)
                 warnings.append("Configuration updated but runtime scheduler reconcile failed")
+
+        # 发布 CONFIG_CHANGED（全主动观察；失败仅记录，不影响配置保存）
+        try:
+            from src.services.event_bus import (
+                EventSeverity, SystemEvent, SystemEventBus, SystemEventType,
+            )
+            SystemEventBus.instance().publish(SystemEvent(
+                event_id=f"cfg_chg_{int(__import__('time').time() * 1000)}",
+                event_type=SystemEventType.CONFIG_CHANGED,
+                severity=EventSeverity.INFO,
+                source="system_config_service",
+                payload={
+                    "config_version": new_version,
+                    "applied_keys": list(updated_keys)[:50],
+                    "applied_count": len(updated_keys),
+                    "skipped_masked_count": len(skipped_masked_keys),
+                    "reload_triggered": reload_triggered,
+                },
+            ))
+        except Exception:
+            logger.debug("publish CONFIG_CHANGED failed (observe-only)", exc_info=True)
 
         return {
             "success": True,

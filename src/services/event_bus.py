@@ -67,6 +67,34 @@ class SystemEventType(str, Enum):
     SYSTEM_SHUTDOWN = "system_shutdown"
     HEALTH_CHECK_COMPLETED = "health_check_completed"
 
+    # ---- L1 基础设施事件（2026-08-12 集成实施方案新增） ----
+    DATA_SOURCE_FALLBACK = "data_source_fallback"
+    DATA_FETCH_FAILED = "data_fetch_failed"
+    DATA_QUALITY_ALERT = "data_quality_alert"
+    CIRCUIT_OPEN = "circuit_open"
+    CIRCUIT_CLOSED = "circuit_closed"
+    CONFIG_CHANGED = "config_changed"
+    CLOCK_DEGRADED = "clock_degraded"
+    LATENCY_SUMMARY = "latency_summary"
+    LLM_BACKEND_SWITCHED = "llm_backend_switched"
+    LLM_USAGE = "llm_usage"
+    STORAGE_ERROR = "storage_error"
+
+    # ---- L2 业务执行事件（2026-08-12 集成实施方案新增） ----
+    PIPELINE_STARTED = "pipeline_started"
+    PIPELINE_COMPLETED = "pipeline_completed"
+    PIPELINE_FAILED = "pipeline_failed"
+    MARKET_REVIEW_COMPLETED = "market_review_completed"
+    BACKTEST_STARTED = "backtest_started"
+    BACKTEST_COMPLETED = "backtest_completed"
+    AGENT_TOOL_CALL = "agent_tool_call"
+    AGENT_TOOL_RESULT = "agent_tool_result"
+    AGENT_LOOP_DETECTED = "agent_loop_detected"
+    NO_TRADE_DECISION = "no_trade_decision"
+    NOTIFICATION_SENT = "notification_sent"
+    NOTIFICATION_FAILED = "notification_failed"
+    SERVICE_ERROR = "service_error"
+
 
 class EventSeverity(str, Enum):
     """事件严重程度。"""

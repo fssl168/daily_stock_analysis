@@ -222,7 +222,12 @@ _ARXIV_MAX_RESULTS = 10
 
 
 def _fetch_url(url: str, timeout: int = 30) -> bytes:
-    """直连优先，失败走本地代理；返回响应字节。带 User-Agent（OpenAlex 要求，否则 429）。"""
+    """直连优先，失败走环境变量配置的代理；返回响应字节。带 User-Agent（OpenAlex 要求，否则 429）。
+
+    代理从标准环境变量读取（HTTP_PROXY/HTTPS_PROXY，兼容小写变体），与 src/config.py 的约定一致；
+    未配置代理时仅直连。
+    """
+    import os
     import time
     import urllib.request
 
@@ -230,12 +235,23 @@ def _fetch_url(url: str, timeout: int = 30) -> bytes:
         "User-Agent": "DSA-Agent/1.0 (https://github.com/fssl168/daily_stock_analysis; academic paper search)",
         "Accept": "application/json, application/atom+xml, text/xml, */*",
     }
+    http_proxy = (
+        os.getenv("HTTP_PROXY")
+        or os.getenv("http_proxy")
+        or os.getenv("HTTPS_PROXY")
+        or os.getenv("https_proxy")
+        or ""
+    )
     last_err = None
-    for proxy in (None, "http://127.0.0.1:7897"):
+    # 直连优先，失败再走代理（避免代理不可用时拖垮直连路径）
+    proxies = [None]
+    if http_proxy:
+        proxies.append(http_proxy)
+    for proxy in proxies:
         try:
             if proxy:
                 opener = urllib.request.build_opener(
-                    urllib.request.ProxyHandler({"http": proxy})
+                    urllib.request.ProxyHandler({"http": proxy, "https": proxy})
                 )
             else:
                 opener = urllib.request.build_opener()

@@ -22,6 +22,7 @@ from api.v1.endpoints import (
     health,
     history,
     intelligence,
+    observability,
     paper_trading,
     portfolio,
     stocks,
@@ -120,4 +121,10 @@ router.include_router(
     paper_trading.router,
     prefix="/paper-trading",
     tags=["PaperTrading"]
+)
+
+router.include_router(
+    observability.router,
+    prefix="/observability",
+    tags=["Observability"]
 )

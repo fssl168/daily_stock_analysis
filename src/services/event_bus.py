@@ -318,6 +318,13 @@ class SystemEventBus:
                     h for h in self._subscriptions[event_type] if h is not handler
                 ]
 
+    def unsubscribe_all(self, handler: Callable[[SystemEvent], None]) -> None:
+        """取消通配订阅（subscribe_all 的对称方法）。"""
+        with self._lock:
+            self._wildcard_subscriptions = [
+                h for h in self._wildcard_subscriptions if h is not handler
+            ]
+
     def on(self, event_type: SystemEventType):
         """装饰器形式的订阅。
 

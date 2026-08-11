@@ -46,6 +46,7 @@ _DEFAULT_FLUSH_INTERVAL_SECONDS = 300  # 5 分钟自动落盘一次
 # 模块级观察者引用（由 bootstrap_event_bus() 填充，供 get_event_bus_stats 读取）
 _META_OBSERVER: Optional["MetaCognitiveObserver"] = None
 _L3_CONFIG_OBSERVER: Optional["L3ConfigObserver"] = None
+_REPAIR_LOG: Optional["Any"] = None  # RepairEffectivenessLog 单例（REV-008）
 _BOOTSTRAPPED = False
 _FLUSH_THREAD: Optional[threading.Thread] = None
 _FLUSH_STOP = threading.Event()
@@ -171,7 +172,7 @@ def bootstrap_event_bus(log_path: Optional[Path] = None) -> SystemEventBus:
     Returns:
         初始化完成的 SystemEventBus 单例。
     """
-    global _META_OBSERVER, _L3_CONFIG_OBSERVER, _BOOTSTRAPPED, _FLUSH_THREAD
+    global _META_OBSERVER, _L3_CONFIG_OBSERVER, _BOOTSTRAPPED, _FLUSH_THREAD, _REPAIR_LOG
 
     cfg = _event_bus_config_from_env()
     bus = SystemEventBus.instance(
@@ -201,6 +202,17 @@ def bootstrap_event_bus(log_path: Optional[Path] = None) -> SystemEventBus:
         logger.info("L3 ConfigObserver attached (CONFIG_REGRESSION_DETECTED)")
     except Exception:
         logger.exception("Failed to attach L3 ConfigObserver; EventBus still usable")
+
+    # RepairEffectivenessLog 单例（REV-008：避免每次 new 导致内存记录丢失）
+    try:
+        from src.services.repair_effectiveness_log import RepairEffectivenessLog
+
+        _REPAIR_LOG = RepairEffectivenessLog(
+            persist_path=Path("data/repair_effectiveness.json"),
+        )
+        logger.info("RepairEffectivenessLog singleton attached (persist=data/repair_effectiveness.json)")
+    except Exception:
+        logger.exception("Failed to init RepairEffectivenessLog singleton")
 
     # 启动自动落盘线程（周期 flush + 轮转；失败仅日志，不影响主流程）
     try:
@@ -312,3 +324,13 @@ def get_meta_cognitive_engine() -> Optional["Any"]:
     if _META_OBSERVER is not None:
         return _META_OBSERVER.engine()
     return None
+
+
+def get_repair_effectiveness_log() -> Optional["Any"]:
+    """获取 RepairEffectivenessLog 单例（供 L3 修复效果查询）。"""
+    return _REPAIR_LOG
+
+
+def get_l3_config_observer() -> Optional["L3ConfigObserver"]:
+    """获取 L3 配置回归观察者单例（供配置回归记录查询）。"""
+    return _L3_CONFIG_OBSERVER

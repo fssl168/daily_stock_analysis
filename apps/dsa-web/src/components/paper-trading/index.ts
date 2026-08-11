@@ -13,3 +13,4 @@ export { StrategyLeaderboard } from './StrategyLeaderboard';
 export { FeaturesPanel } from './FeaturesPanel';
 export { CandlestickChart } from './CandlestickChart';
 export { MarketStatusDashboard } from './MarketStatusDashboard';
+export { L2DepthPanel } from './L2DepthPanel';

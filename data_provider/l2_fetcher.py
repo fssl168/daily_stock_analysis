@@ -222,6 +222,23 @@ class L2Fetcher(BaseFetcher):
         """L2Fetcher does not serve daily bars."""
         return None
 
+    def _fetch_raw_data(
+        self, stock_code: str, start_date: str, end_date: str
+    ) -> "pd.DataFrame":
+        """BaseFetcher abstract-method stub: L2 does not fetch daily frames.
+
+        L2 data is ingested via ``ingest_l2_quote`` (WebSocket push) instead.
+        """
+        import pandas as pd
+
+        return pd.DataFrame()
+
+    def _normalize_data(
+        self, df: "pd.DataFrame", stock_code: str
+    ) -> "pd.DataFrame":
+        """BaseFetcher abstract-method stub (see ``_fetch_raw_data``)."""
+        return df
+
     def get_minute_data(self, stock_code: str, **kwargs: Any) -> None:
         """L2Fetcher does not serve minute bars."""
         return None

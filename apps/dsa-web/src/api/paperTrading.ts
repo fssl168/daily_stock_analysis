@@ -627,10 +627,10 @@ export const paperTradingApi = {
   },
 
   /** Get all strategies with lifecycle + performance. */
-  getStrategies: async <T = unknown[]>(accountId: number): Promise<T> => {
+  getStrategies: async <T = unknown[]>(_accountId: number): Promise<T> => {
     try {
       const response = await apiClient.get<Record<string, unknown>>(
-        `/api/v1/paper-trading/accounts/${accountId}/strategies`
+        `/api/v1/paper-trading/strategies/lifecycle`
       );
       const data = response.data;
       const items = Array.isArray(data) ? data : (data as Record<string, unknown>).items;
@@ -638,6 +638,15 @@ export const paperTradingApi = {
     } catch {
       return [] as T;
     }
+  },
+
+  /** Transition a strategy to a target lifecycle state. */
+  transitionStrategy: async <T = unknown>(name: string, newState: string): Promise<T> => {
+    const response = await apiClient.post<Record<string, unknown>>(
+      `/api/v1/paper-trading/strategies/lifecycle/${encodeURIComponent(name)}/transition`,
+      { new_state: newState, operator: 'webui' },
+    );
+    return response.data as T;
   },
 
   /** Get strategy performance leaderboard. */
@@ -663,6 +672,18 @@ export const paperTradingApi = {
       return response.data as T;
     } catch {
       return { as_of: "", features: [], skipped_codes: [] } as T;
+    }
+  },
+
+  /** Get L2 ten-level order book for a stock code. */
+  getL2Depth: async <T = unknown>(code: string): Promise<T> => {
+    try {
+      const response = await apiClient.get<Record<string, unknown>>(
+        `/api/v1/paper-trading/l2/${encodeURIComponent(code)}`
+      );
+      return response.data as T;
+    } catch {
+      return { code, bids: [], asks: [], source: "error" } as T;
     }
   },
 

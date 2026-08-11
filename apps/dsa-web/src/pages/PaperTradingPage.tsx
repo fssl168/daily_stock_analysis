@@ -8,6 +8,7 @@ import { QuoteTicker } from '../components/paper-trading/QuoteTicker';
 import { ExtremeMarketBanner } from '../components/paper-trading/ExtremeMarketBanner';
 import { RiskAlertToast } from '../components/paper-trading/RiskAlertToast';
 import { LatencyPanel } from '../components/paper-trading/LatencyPanel';
+import { L2DepthPanel } from '../components/paper-trading/L2DepthPanel';
 import { MarketStatusDashboard } from '../components/paper-trading/MarketStatusDashboard';
 import { StrategyLeaderboard } from '../components/paper-trading/StrategyLeaderboard';
 import { StrategyLifecyclePanel } from '../components/paper-trading/StrategyLifecyclePanel';
@@ -2228,6 +2229,7 @@ const PaperTradingPage: React.FC = () => {
             <div className="mt-2 space-y-2">
               <MarketStatusDashboard accountId={accountId} />
               <LatencyPanel accountId={accountId} />
+              <L2DepthPanel code={positions?.[0]?.code} pollMs={10_000} />
             </div>
           </Card>
 
@@ -2288,7 +2290,12 @@ const PaperTradingPage: React.FC = () => {
               <div className="space-y-4">
                 <StrategyLeaderboard accountId={accountId} />
                 <DriftPanel accountId={accountId} />
-                <StrategyLifecyclePanel accountId={accountId} />
+                <StrategyLifecyclePanel
+                  accountId={accountId}
+                  onTransition={async (name, newState) => {
+                    await paperTradingApi.transitionStrategy(name, newState);
+                  }}
+                />
               </div>
             )}
             {activeTab === 'features' && <FeaturesPanel accountId={accountId} />}

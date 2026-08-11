@@ -674,3 +674,77 @@ class BreakerStatusResponse(BaseModel):
     can_open_new: bool = Field(True, description="Whether new positions can be opened")
     reason: str = Field("", description="Breaker reason if engaged")
     triggered_at: Optional[str] = Field(None, description="ISO timestamp of trigger")
+
+# ---------------------------------------------------------------------------
+# Daily bars (A-01 frontend CandlestickChart)
+# ---------------------------------------------------------------------------
+
+class DailyBarItem(BaseModel):
+    """One OHLC daily bar."""
+    date: str = Field(..., description="Trading date (YYYY-MM-DD)")
+    open: float = Field(..., description="Open price")
+    high: float = Field(..., description="High price")
+    low: float = Field(..., description="Low price")
+    close: float = Field(..., description="Close price")
+    volume: float = Field(0.0, description="Trading volume")
+    amount: float = Field(0.0, description="Trading amount")
+
+
+class DailyBarsResponse(BaseModel):
+    """Daily OHLC bars for a stock code."""
+    code: str = Field(..., description="Stock code")
+    source: str = Field("", description="Data source that served the bars")
+    days: int = Field(0, description="Number of bars")
+    bars: List[DailyBarItem] = Field(default_factory=list, description="OHLC bars (newest last)")
+
+
+# ---------------------------------------------------------------------------
+# Strategy lifecycle (A-04)
+# ---------------------------------------------------------------------------
+
+class StrategyLifecycleItem(BaseModel):
+    """Strategy lifecycle state for frontend."""
+    name: str = Field(..., description="Strategy name")
+    state: str = Field("DRAFT", description="Lifecycle state: DRAFT/BACKTEST/PAPER/REVIEW/LIVE/PAUSED/RETIRED")
+    is_live: bool = Field(False, description="Whether strategy is LIVE")
+
+
+class StrategyLifecycleListResponse(BaseModel):
+    """All strategy lifecycle states."""
+    items: List[StrategyLifecycleItem] = Field(default_factory=list)
+
+
+class StrategyTransitionRequest(BaseModel):
+    """Request to transition a strategy to a target state."""
+    new_state: str = Field(..., description="Target state: DRAFT/BACKTEST/PAPER/REVIEW/LIVE/PAUSED/RETIRED")
+    operator: str = Field("", description="Operator name (audit trail)")
+
+
+class StrategyTransitionResponse(BaseModel):
+    """Result of a strategy lifecycle transition."""
+    name: str = Field(..., description="Strategy name")
+    from_state: str = Field(..., description="Previous state")
+    to_state: str = Field(..., description="New state")
+    ok: bool = Field(True, description="Whether transition succeeded")
+    message: str = Field("", description="Error message if failed")
+
+
+# ---------------------------------------------------------------------------
+# L2 depth quotes (A-05)
+# ---------------------------------------------------------------------------
+
+class L2DepthLevel(BaseModel):
+    """One level of the order book."""
+    price: float = Field(..., description="Price at this level")
+    volume: int = Field(..., description="Volume at this level")
+
+
+class L2DepthResponse(BaseModel):
+    """Ten-level order-book snapshot."""
+    code: str = Field(..., description="Stock code")
+    timestamp: str = Field("", description="ISO timestamp of snapshot")
+    bids: List[L2DepthLevel] = Field(default_factory=list, description="Bids best-first (up to 10)")
+    asks: List[L2DepthLevel] = Field(default_factory=list, description="Asks best-first (up to 10)")
+    bid_ask_imbalance: float = Field(0.0, description="Bid/ask imbalance")
+    depth_weighted_spread: float = Field(0.0, description="Depth-weighted spread")
+    source: str = Field("", description="L2 provider")

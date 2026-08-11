@@ -50,10 +50,14 @@ from api.v1.schemas.paper_trading import (
     BreakerStatusResponse,
     ConditionalOrderCreateRequest,
     ConditionalOrderItem,
+    DailyBarItem,
+    DailyBarsResponse,
     DailyReflectionRequest,
     DailyReportResponse,
     DrawdownItem,
     HoldingPlanItem,
+    L2DepthLevel,
+    L2DepthResponse,
     ListenerControlResponse,
     ListenerStartRequest,
     ListenerStatusResponse,
@@ -79,6 +83,10 @@ from api.v1.schemas.paper_trading import (
     RiskMetricsResponse,
     SignalItem,
     SignalListResponse,
+    StrategyLifecycleItem,
+    StrategyLifecycleListResponse,
+    StrategyTransitionRequest,
+    StrategyTransitionResponse,
     TradeItem,
     TradeListResponse,
     TradeResultResponse,
@@ -2126,3 +2134,204 @@ def get_breaker_status(
     except Exception as exc:
         logger.error("[paper_trading] breaker status failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ===================================================================
+# A-01: Daily bars (frontend CandlestickChart)
+# ===================================================================
+
+
+@router.get(
+    "/accounts/{account_id}/daily-bars/{code}",
+    response_model=Dict[str, Any],
+    summary="Daily OHLC bars for a stock code",
+)
+def get_daily_bars(
+    account_id: int,
+    code: str,
+    days: int = Query(90, ge=1, le=500, description="Number of daily bars"),
+    service: PaperTradingService = Depends(get_paper_trading_service),
+) -> Dict[str, Any]:
+    """Return daily OHLC bars from the shared data fetcher.
+
+    Matches the frontend contract ``getDailyBars`` (returns ``{items: [...]}``).
+    Uses MarketListener.fetcher if available, else falls back to a fresh
+    DataFetcherManager. On fetch failure returns an empty items list instead
+    of raising (frontend shows empty state).
+    """
+    try:
+        fetcher = None
+        listener = service.get_listener()
+        if listener is not None and getattr(listener, "fetcher", None) is not None:
+            fetcher = listener.fetcher
+
+        if fetcher is None:
+            from data_provider.base import DataFetcherManager
+
+            fetcher = DataFetcherManager()
+
+        df, source = fetcher.get_daily_data(code, days=days)
+        bars: List[Dict[str, Any]] = []
+        if df is not None and not df.empty:
+            for _, row in df.iterrows():
+                bars.append({
+                    "date": str(getattr(row, "date", row.get("date", ""))),
+                    "open": float(getattr(row, "open", row.get("open", 0))),
+                    "high": float(getattr(row, "high", row.get("high", 0))),
+                    "low": float(getattr(row, "low", row.get("low", 0))),
+                    "close": float(getattr(row, "close", row.get("close", 0))),
+                    "volume": float(getattr(row, "volume", row.get("volume", 0))),
+                    "amount": float(getattr(row, "amount", row.get("amount", 0))),
+                })
+        return {
+            "code": code,
+            "source": str(source),
+            "days": len(bars),
+            "items": bars,
+        }
+    except Exception as exc:
+        logger.warning("[paper_trading] daily-bars failed for %s: %s", code, exc)
+        return {"code": code, "source": "error", "days": 0, "items": []}
+
+
+# ===================================================================
+# A-04: Strategy lifecycle
+# ===================================================================
+
+
+def _load_strategy_names() -> List[str]:
+    """Load strategy names from the strategies configs directory."""
+    from pathlib import Path
+
+    from paper_trading.strategies import load_strategies_from_dir
+
+    strategy_dir = Path("paper_trading/strategies/configs")
+    try:
+        strategies = load_strategies_from_dir(strategy_dir)
+        return [s.name for s in strategies if s.name]
+    except Exception as exc:
+        logger.warning("[paper_trading] failed to load strategy names: %s", exc)
+        return []
+
+
+def _get_lifecycle() -> "Any":
+    """Get the shared StrategyLifecycle (module-level singleton)."""
+    from paper_trading.strategy_lifecycle import StrategyLifecycle
+
+    return StrategyLifecycle()
+
+
+@router.get(
+    "/strategies/lifecycle",
+    response_model=StrategyLifecycleListResponse,
+    summary="List all strategies with lifecycle states",
+)
+def list_strategy_lifecycle(
+    service: PaperTradingService = Depends(get_paper_trading_service),
+) -> StrategyLifecycleListResponse:
+    """Return strategy lifecycle states for all configured strategies.
+
+    Pre-seeds known strategy names from the YAML configs so the UI can
+    render them even before any transition happened.
+    """
+    try:
+        lc = _get_lifecycle()
+        names = _load_strategy_names()
+        items = []
+        for name in names:
+            state = lc.get_state(name)
+            items.append(StrategyLifecycleItem(
+                name=name,
+                state=state.value if hasattr(state, "value") else str(state),
+                is_live=lc.is_live(name),
+            ))
+        return StrategyLifecycleListResponse(items=items)
+    except Exception as exc:
+        logger.error("[paper_trading] strategy lifecycle list failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post(
+    "/strategies/lifecycle/{name}/transition",
+    response_model=StrategyTransitionResponse,
+    summary="Transition a strategy to a target lifecycle state",
+)
+def transition_strategy(
+    name: str,
+    request: StrategyTransitionRequest,
+    service: PaperTradingService = Depends(get_paper_trading_service),
+) -> StrategyTransitionResponse:
+    """Transition a strategy lifecycle state. Illegal transitions return 400."""
+    from paper_trading.strategy_lifecycle import LifecycleTransitionError
+
+    try:
+        lc = _get_lifecycle()
+        # Validate target state enum
+        lc.get_state(name)  # ensure strategy registered (DRAFT default)
+        current = lc.get_state(name)
+        new_state = lc.transition(name, request.new_state, operator=request.operator)
+        return StrategyTransitionResponse(
+            name=name,
+            from_state=current.value if hasattr(current, "value") else str(current),
+            to_state=new_state.value if hasattr(new_state, "value") else str(new_state),
+            ok=True,
+            message="",
+        )
+    except LifecycleTransitionError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_transition", "message": str(exc)},
+        )
+    except Exception as exc:
+        logger.error("[paper_trading] strategy transition failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ===================================================================
+# A-05: L2 depth quotes
+# ===================================================================
+
+
+@router.get(
+    "/l2/{code}",
+    response_model=L2DepthResponse,
+    summary="Ten-level order-book snapshot for a stock code",
+)
+def get_l2_depth(
+    code: str,
+    service: PaperTradingService = Depends(get_paper_trading_service),
+) -> L2DepthResponse:
+    """Return the latest L2 ten-level order book.
+
+    Uses the shared L2Fetcher if available; otherwise returns an empty
+    order book with a marker so the frontend can show "L2 not available".
+    """
+    try:
+        from data_provider.l2_fetcher import L2Fetcher
+
+        fetcher = L2Fetcher()
+        quote = fetcher.get_level2_quote(code)
+        if quote is None:
+            return L2DepthResponse(code=code, timestamp="", bids=[], asks=[], source="no-data")
+        bids = [
+            L2DepthLevel(price=float(quote.bid_prices[i]), volume=int(quote.bid_volumes[i]))
+            for i in range(min(10, len(quote.bid_prices)))
+            if quote.bid_prices[i] > 0
+        ]
+        asks = [
+            L2DepthLevel(price=float(quote.ask_prices[i]), volume=int(quote.ask_volumes[i]))
+            for i in range(min(10, len(quote.ask_prices)))
+            if quote.ask_prices[i] > 0
+        ]
+        return L2DepthResponse(
+            code=code,
+            timestamp=quote.timestamp.isoformat(),
+            bids=bids,
+            asks=asks,
+            bid_ask_imbalance=quote.bid_ask_imbalance,
+            depth_weighted_spread=quote.depth_weighted_spread,
+            source="tickflow",
+        )
+    except Exception as exc:
+        logger.warning("[paper_trading] l2 depth failed for %s: %s", code, exc)
+        return L2DepthResponse(code=code, timestamp="", bids=[], asks=[], source="error")

@@ -9,6 +9,7 @@ import type {
   AlertRuleListQuery,
   AlertRuleListResponse,
   AlertRuleTestResponse,
+  AlertRuleUpdateRequest,
   AlertTriggerListQuery,
   AlertTriggerListResponse,
 } from '../types/alerts';
@@ -100,6 +101,14 @@ export const alertsApi = {
   async deleteRule(ruleId: number): Promise<AlertDeleteResponse> {
     const response = await apiClient.delete<Record<string, unknown>>(`/api/v1/alerts/rules/${ruleId}`);
     return toCamelCase<AlertDeleteResponse>(response.data);
+  },
+
+  async updateRule(ruleId: number, payload: AlertRuleUpdateRequest): Promise<AlertRuleItem> {
+    const response = await apiClient.patch<Record<string, unknown>>(
+      `/api/v1/alerts/rules/${ruleId}`,
+      toSnakeRulePayload(payload as AlertRuleCreateRequest),
+    );
+    return toCamelCase<AlertRuleItem>(response.data);
   },
 
   async enableRule(ruleId: number): Promise<AlertRuleItem> {

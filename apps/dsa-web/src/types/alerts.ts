@@ -79,6 +79,16 @@ export interface AlertRuleCreateRequest {
   enabled?: boolean;
 }
 
+export interface AlertRuleUpdateRequest {
+  name?: string;
+  targetScope?: AlertTargetScope;
+  target?: string;
+  alertType?: AlertType;
+  parameters?: AlertRuleParameters;
+  severity?: AlertSeverity;
+  enabled?: boolean;
+}
+
 export interface AlertDeleteResponse {
   deleted: number;
 }

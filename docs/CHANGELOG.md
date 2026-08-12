@@ -82,3 +82,7 @@ All notable changes to this project will be documented in this file.
 - [改进] 固收数据源在线获取超时（12s）→ 自动降级离线 stub，避免 akshare 挂起阻塞 API
 - [新功能] 前端固收分析页面 `/fixed-income`（收益率曲线 / 久期凸性 / 信用利差 / 回购利率），接入路由与侧边导航（`api/fixedIncome.ts`、`pages/FixedIncomePage.tsx`）
 - [文档] 实盘切换检查单逐项核验报告 `docs/live-trading-switch-checklist-review.md`（22 项中 18 通过 / 4 缺口，缺口为券商 sandbox、日终对账、实盘确认流程、风控参数校准）
+- [新功能] 券商订单状态映射模块 `paper_trading/broker/order_status.py`（easytrader 中文委托状态 → 纸面 pending/partially_filled/filled/canceled/rejected）
+- [测试] 券商契约测试 `tests/test_broker_contract.py`（mock easytrader 客户端，submit/query 契约 + 状态映射，11 项）
+- [文档] 券商 sandbox 接入验证方案 `docs/broker-sandbox-verification.md`（easytrader Windows 环境限制、真实 sandbox 单笔闭环步骤、验收标准）
+- [修复] 纸面交易页左下角"实时事件流"悬浮遮挡左侧栏底部内容 → 左侧栏 lg+ 预留底部空间（`lg:pb-80`）

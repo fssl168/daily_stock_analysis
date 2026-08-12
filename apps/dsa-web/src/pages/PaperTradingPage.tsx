@@ -2177,7 +2177,7 @@ const PaperTradingPage: React.FC = () => {
       {/* Main content */}
       <main className="flex-1 flex overflow-hidden p-3 gap-3 max-sm:flex-col max-sm:p-2 max-sm:gap-2">
         {/* Left sidebar */}
-        <div className="flex flex-col gap-3 w-80 flex-shrink-0 overflow-y-auto max-sm:w-full max-sm:flex-shrink max-sm:order-2">
+        <div className="flex flex-col gap-3 w-80 flex-shrink-0 overflow-y-auto max-sm:w-full max-sm:flex-shrink max-sm:order-2 lg:pb-80">
           {/* Account summary */}
           <Card variant="gradient" padding="md">
             <span className="label-uppercase">

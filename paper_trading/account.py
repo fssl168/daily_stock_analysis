@@ -211,9 +211,10 @@ class PaperAccountManager:
         """Update paper account metadata.
 
         - ``name`` renames the account (must be unique).
-        - ``initial_capital`` only updates the stored initial capital;
-          it does NOT reset live cash/positions. Use ``reset_account``
-          to reinitialize live state.
+        - ``initial_capital`` updates the stored initial capital AND syncs
+          live cash by the same delta, so the edited initial amount is
+          reflected immediately in cash and net value. Positions are kept;
+          use ``reset_account`` to fully reinitialize live state.
         """
         with self.db.session_scope() as session:
             account = session.execute(
@@ -231,7 +232,12 @@ class PaperAccountManager:
                 account.name = name
 
             if initial_capital is not None:
-                account.initial_capital = float(initial_capital)
+                new_cap = float(initial_capital)
+                old_cap = float(account.initial_capital or 0.0)
+                account.initial_capital = new_cap
+                # Sync cash by the delta so editing the initial capital
+                # moves cash (and thus net value) accordingly.
+                account.cash = float(account.cash or 0.0) + (new_cap - old_cap)
 
             session.flush()
             account_id = account.id

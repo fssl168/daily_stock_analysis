@@ -360,6 +360,7 @@ class MarketListener:
         feature_pipeline: Optional[Any] = None,  # ⑥ T13: feature pipeline
         extreme_market_response: Optional[Any] = None,  # ⑦ T11: extreme market
         drift_detector: Optional[Any] = None,  # ⑧ T10: drift detector
+        latency_tracker: Optional[Any] = None,  # ⑨ T-005: tick latency aggregation
     ):
         self.engine = engine
         self.fetcher = data_fetcher
@@ -387,9 +388,13 @@ class MarketListener:
 
         # ⑦ ExtremeMarketResponse (T11 integration) — VIX-like volatility response.
         self._extreme_market_response = extreme_market_response
+        self._extreme_market_was_active = False
 
         # ⑧ DriftDetector (T10 integration) — strategy drift monitoring.
         self._drift_detector = drift_detector
+
+        # ⑨ LatencyTracker (T-005 integration) — optional tick latency aggregator.
+        self._latency_tracker = latency_tracker
 
         self.rule_engine = RuleEngine()
         self._shutdown = threading.Event()
@@ -502,7 +507,7 @@ class MarketListener:
             return
 
         latest_prices = self._fetch_latest_prices(codes)
-        span.mark("fetch_prices_done", codes=len(latest_prices))
+        span.mark("data_fetch", codes=len(latest_prices))
         if not latest_prices:
             logger.debug("[MarketListener] %s: no prices fetched", market)
             return
@@ -538,20 +543,20 @@ class MarketListener:
         em = getattr(self, "_extreme_market_response", None)
         if em is not None:
             em.auto_resume()
-            if em.is_active() and em.force_hold_buy():
+            now_active = bool(em.is_active())
+            if now_active and not self._extreme_market_was_active:
+                self._emit("extreme_market_activated", reason="extreme market activated")
+            elif not now_active and self._extreme_market_was_active:
+                self._emit("extreme_market_deactivated", reason="extreme market deactivated")
+            self._extreme_market_was_active = now_active
+            if now_active and em.force_hold_buy():
                 logger.debug("[MarketListener] Extreme market: holding buy signals")
             # If market orders are disabled, the engine's RMS/Oms will enforce.
 
         # 4) Evaluate strategy rules.
         if self.config.enable_strategies and self.strategies:
             self._evaluate_strategies(codes, latest_prices, market)
-        span.mark("evaluate_strategies_done")
-
-        # T-005: Record tick latency; warn if > 1000ms.
-        result = span.finish()
-        if result["total_ms"] > 1000:
-            logger.warning("[MarketListener] Slow tick: %.1fms steps=%s",
-                           result["total_ms"], result["steps"])
+        span.mark("signal_calc")
 
         # T-008: RiskDaemon — per-tick VaR + liquidity + market anomaly check.
         if self._risk_daemon is not None:
@@ -565,6 +570,7 @@ class MarketListener:
                         getattr(alert, "alert_type", "?"),
                         getattr(alert, "detail", alert),
                     )
+                    self._emit_risk_alert(alert)
                     # VaR breach → feed back into circuit breaker.
                     if (hasattr(alert, "alert_type")
                             and getattr(alert, "alert_type", None) == "var_breach"
@@ -578,10 +584,101 @@ class MarketListener:
                         )
             except Exception:
                 logger.exception("[MarketListener] RiskDaemon tick failed")
+        span.mark("risk_check")
+
+        # T-005: Record tick latency; warn if > 1000ms.
+        result = span.finish()
+        if result["total_ms"] > 1000:
+            logger.warning("[MarketListener] Slow tick: %.1fms steps=%s",
+                           result["total_ms"], result["steps"])
+        self._record_tick_latency(result)
 
         # 5) P1-C: PM agent decision now runs via AISignalWorker (T20)
         # — decoupled from the rule-engine tick to avoid blocking.
         # self._maybe_trigger_pm_decision(market)
+
+    def _record_tick_latency(self, span_result: Dict[str, Any]) -> None:
+        """Record a finished tick latency span into the aggregator (T-005).
+
+        Normalizes the raw span ``steps`` (event-name keyed) into the
+        document contract's four phases. Safe no-op when no aggregator is
+        wired.
+        """
+        tracker = self._latency_tracker
+        if tracker is None:
+            return
+        steps = span_result.get("steps", {})
+        phases = {
+            "data_fetch": float(steps.get("data_fetch", 0.0)),
+            "signal_calc": float(steps.get("signal_calc", 0.0)),
+            "risk_check": float(steps.get("risk_check", 0.0)),
+            "order_execute": float(steps.get("tick_market.end", 0.0)),
+        }
+        try:
+            tracker.record(
+                {
+                    "operation": "tick_market",
+                    "total_ms": float(span_result.get("total_ms", 0.0)),
+                    "steps": phases,
+                    "trace_id": span_result.get("trace_id"),
+                }
+            )
+        except Exception:
+            logger.debug("[MarketListener] failed to record tick latency", exc_info=True)
+
+    def _emit(self, event_type: str, **fields: Any) -> None:
+        """Emit a paper-trading trade event (best-effort, never raises)."""
+        try:
+            from paper_trading.events import emit_trade_event
+
+            emit_trade_event(event_type, **fields)
+        except Exception:
+            logger.debug("[MarketListener] event emission failed", exc_info=True)
+
+    def _emit_risk_alert(self, alert: Any) -> None:
+        """Convert a RiskDaemon ``RiskAlert`` to a frontend risk-alert message.
+
+        The event stream ``WS /ws/events`` carries two message shapes; risk
+        alerts are discriminated by ``alertType`` and consumed by
+        ``RiskAlertToast`` (pending-api §3 type B).
+        """
+        try:
+            from paper_trading.events import emit_risk_alert
+            from paper_trading.risk_daemon import RiskAlertType
+
+            alert_type = getattr(alert, "alert_type", None)
+            atype = alert_type.value if hasattr(alert_type, "value") else str(alert_type)
+            detail_obj = getattr(alert, "detail", None)
+
+            if atype == RiskAlertType.VAR_BREACH.value:
+                message = "组合 VaR 超过阈值"
+                var_pct = getattr(detail_obj, "var_pct_of_capital", None)
+                detail = f"VaR 占资金: {var_pct:.2f}%" if var_pct is not None else None
+                level = "danger"
+            elif atype == RiskAlertType.LIQUIDITY_WARNING.value:
+                code = str(getattr(detail_obj, "code", "") or "")
+                days = getattr(detail_obj, "days_to_liquidate", None)
+                message = "流动性不足警告"
+                detail = f"{code} 清仓需 {days:.1f} 天" if code and days is not None else None
+                level = "warning"
+            elif atype == RiskAlertType.MARKET_ANOMALY.value:
+                ratio = getattr(detail_obj, "ratio", None)
+                message = "市场异常"
+                detail = f"波动率比: {ratio:.2f}x" if ratio is not None else None
+                level = "danger"
+            else:
+                return
+
+            ts = getattr(alert, "timestamp", None)
+            emit_risk_alert(
+                atype,
+                message=message,
+                detail=detail,
+                level=level,
+                timestamp=ts.isoformat() if ts else None,
+            )
+        except Exception:
+            logger.debug("[MarketListener] risk alert emission failed", exc_info=True)
 
     def _consume_ai_signals(self, latest_prices: Dict[str, float]) -> None:
         """Consume AI-generated signals from the shared queue and submit them to the trading engine.
@@ -1338,6 +1435,9 @@ def build_default_listener(
     risk_daemon: Optional[Any] = None,  # T-008: risk daemon injection
     signal_fusion: Optional[Any] = None,  # T-009: signal fusion injection
     quote_cache: Optional[Any] = None,  # T-007: quote cache injection
+    latency_tracker: Optional[Any] = None,  # T-005: tick latency aggregation
+    feature_pipeline: Optional[Any] = None,  # ⑥ T13: feature pipeline injection
+    drift_detector: Optional[Any] = None,  # ⑧ T10: drift detector injection
 ) -> MarketListener:
     """Build a MarketListener wired to project defaults.
 
@@ -1411,8 +1511,15 @@ def build_default_listener(
         watched_codes = get_paper_traded_watchcodes(account_id)
 
     if strategy_dir is None:
-        # Default location — caller may create strategies here.
-        strategy_dir = str(Path(__file__).parent / "strategies")
+        # Prefer config-driven strategy dir (PAPER_TRADING_STRATEGY_DIR),
+        # fall back to the default location under paper_trading/strategies.
+        from src.config import get_config as _get_config
+        _cfg = _get_config()
+        cfg_strategy_dir = getattr(_cfg, "paper_trading_strategy_dir", None)
+        if cfg_strategy_dir:
+            strategy_dir = str(cfg_strategy_dir)
+        else:
+            strategy_dir = str(Path(__file__).parent / "strategies")
 
     strategies: List[RuleStrategy] = []
     if enable_strategies and strategy_dir:
@@ -1517,4 +1624,7 @@ def build_default_listener(
         quote_cache=quote_cache,
         signal_fusion=signal_fusion,
         risk_daemon=risk_daemon,
+        latency_tracker=latency_tracker,
+        feature_pipeline=feature_pipeline,
+        drift_detector=drift_detector,
     )

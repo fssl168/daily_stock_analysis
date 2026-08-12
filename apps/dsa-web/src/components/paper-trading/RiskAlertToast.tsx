@@ -47,6 +47,7 @@ export function RiskAlertToast({ accountId, maxVisible = 3 }: Props) {
     url: wsUrl,
     enabled: true,
     autoReconnect: true,
+    maxRetries: 5,
   });
 
   // On WS event → push a toast.

@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 import { TrendingDown, TrendingUp, Minus } from "lucide-react";
 import { paperTradingApi } from "../../api/paperTrading";
+import { requestQueue } from "../../utils/requestQueue";
 import { Badge } from "../common/Badge";
 import type { DriftReportItem } from "../../types/paperTrading";
 
@@ -39,8 +40,8 @@ export function DriftPanel({ accountId, className = "" }: Props) {
   useEffect(() => {
     let cancelled = false;
     const fetch = () => {
-      paperTradingApi
-        .getDrift(accountId)
+      requestQueue
+        .enqueue(() => paperTradingApi.getDrift(accountId))
         .then((r) => { if (!cancelled) setReports(r ?? []); })
         .catch(() => {})
         .finally(() => { if (!cancelled) setLoading(false); });

@@ -532,7 +532,8 @@ def regressions() -> Dict[str, Any]:
         if observer is None:
             return {"items": [], "count": 0}
         stats = observer.stats()
-        return {"items": stats.get("regression_events", []), "count": stats.get("regression_events", 0)}
+        events = stats.get("regression_events", [])
+        return {"items": events, "count": len(events) if isinstance(events, list) else 0}
     except Exception as exc:
         raise _internal_error("Regressions failed", exc)
 

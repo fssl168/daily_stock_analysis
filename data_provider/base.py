@@ -1589,7 +1589,9 @@ class DataFetcherManager:
         """
         from src.utils.exchange_clock import EXCHANGE_TIMEZONES
 
-        if df.index.tz is not None:
+        # RangeIndex (raw fetcher output) has no .tz attribute — guard it.
+        index_tz = getattr(df.index, "tz", None)
+        if index_tz is not None:
             tz = EXCHANGE_TIMEZONES["us"] if _is_us_market(stock_code) else EXCHANGE_TIMEZONES["cn"]
             df = df.copy()
             df.index = df.index.tz_convert(tz).tz_localize(None)

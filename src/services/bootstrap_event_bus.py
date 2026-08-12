@@ -155,7 +155,7 @@ class L3ConfigObserver:
             logger.exception("L3ConfigObserver failed")
 
     def stats(self) -> Dict[str, Any]:
-        return {"regression_events": len(self._regression_events)}
+        return {"regression_events": list(self._regression_events)}
 
 
 # ===================================================================

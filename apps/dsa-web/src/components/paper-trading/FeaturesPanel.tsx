@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Brain, RefreshCw } from "lucide-react";
 import { paperTradingApi } from "../../api/paperTrading";
+import { requestQueue } from "../../utils/requestQueue";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -47,8 +48,8 @@ export function FeaturesPanel({ accountId, className = "" }: Props) {
   useEffect(() => {
     let cancelled = false;
     const fetch = () => {
-      paperTradingApi
-        .getFeatures<FeatureSnapshot>(accountId)
+      requestQueue
+        .enqueue(() => paperTradingApi.getFeatures<FeatureSnapshot>(accountId))
         .then((r) => { if (!cancelled) setSnapshot(r); })
         .catch(() => {})
         .finally(() => { if (!cancelled) setLoading(false); });
@@ -66,15 +67,17 @@ export function FeaturesPanel({ accountId, className = "" }: Props) {
 
   const handleRecompute = () => {
     setRecomputing(true);
-    paperTradingApi
-      .recomputeFeatures(accountId)
+    requestQueue
+      .enqueue(() => paperTradingApi.recomputeFeatures(accountId))
       .then(() => {
-        // Re-fetch after a short delay.
         recomputeTimerRef.current = setTimeout(() => {
-          paperTradingApi.getFeatures<FeatureSnapshot>(accountId).then((r) => {
-            setSnapshot(r);
-            setRecomputing(false);
-          }).catch(() => setRecomputing(false));
+          requestQueue
+            .enqueue(() => paperTradingApi.getFeatures<FeatureSnapshot>(accountId))
+            .then((r) => {
+              setSnapshot(r);
+              setRecomputing(false);
+            })
+            .catch(() => setRecomputing(false));
         }, 3_000);
       })
       .catch(() => setRecomputing(false));

@@ -148,3 +148,75 @@ class LatencyTracker:
         """返回各 operation 的统计摘要列表（浅拷贝，避免外部篡改内部状态）。"""
         with self._lock:
             return [dict(v) for v in self._stats.values()]
+
+
+class TickLatencyAggregator:
+    """按阶段聚合 tick 延迟（T-005 / paper_trading_pending_api §1）。
+
+    记录 ``{"total_ms": float, "steps": {"data_fetch": ms, ...}}`` 样本，
+    按滑动窗口计算总延迟与各阶段的 p50/p95/p99。线程安全。
+
+    阶段顺序固定为文档契约的四阶段：
+    ``data_fetch`` → ``signal_calc`` → ``risk_check`` → ``order_execute``。
+    """
+
+    PHASE_ORDER = ("data_fetch", "signal_calc", "risk_check", "order_execute")
+
+    def __init__(self, window_size: int = 100):
+        self._samples: deque = deque(maxlen=window_size)
+        self._lock = threading.Lock()
+
+    def record(self, sample: Dict[str, Any]) -> None:
+        """记录一次 tick 延迟样本。"""
+        with self._lock:
+            self._samples.append(sample)
+
+    def clear(self) -> None:
+        """清空样本（用于测试 / 重置）。"""
+        with self._lock:
+            self._samples.clear()
+
+    def count(self) -> int:
+        """当前窗口内样本数。"""
+        with self._lock:
+            return len(self._samples)
+
+    def report(self) -> Dict[str, Any]:
+        """返回文档 §1 契约的延迟报告。
+
+        Returns:
+            Dict: 无样本时返回全零 ``tick_total_ms`` 与空 ``steps``；
+            有样本时返回各阶段 p50/p95/p99（毫秒）。
+        """
+        with self._lock:
+            samples = list(self._samples)
+        if not samples:
+            return {
+                "tick_total_ms": {"p50": 0.0, "p95": 0.0, "p99": 0.0},
+                "steps": [],
+            }
+
+        totals = [float(s.get("total_ms", 0.0)) for s in samples]
+        tp50, tp95, tp99 = _compute_percentiles(totals)
+
+        steps = []
+        for phase in self.PHASE_ORDER:
+            values = [float(s.get("steps", {}).get(phase, 0.0)) for s in samples]
+            sp50, sp95, sp99 = _compute_percentiles(values)
+            steps.append(
+                {
+                    "name": phase,
+                    "p50_ms": sp50 if sp50 is not None else 0.0,
+                    "p95_ms": sp95 if sp95 is not None else 0.0,
+                    "p99_ms": sp99 if sp99 is not None else 0.0,
+                }
+            )
+
+        return {
+            "tick_total_ms": {
+                "p50": tp50 if tp50 is not None else 0.0,
+                "p95": tp95 if tp95 is not None else 0.0,
+                "p99": tp99 if tp99 is not None else 0.0,
+            },
+            "steps": steps,
+        }

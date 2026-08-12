@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 import { Trophy, BarChart3 } from "lucide-react";
 import { paperTradingApi } from "../../api/paperTrading";
+import { requestQueue } from "../../utils/requestQueue";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -50,8 +51,8 @@ export function StrategyLeaderboard({ accountId, className = "" }: Props) {
   useEffect(() => {
     let cancelled = false;
     const fetch = () => {
-      paperTradingApi
-        .getStrategyPerformance<StrategyPerformance[]>(accountId)
+      requestQueue
+        .enqueue(() => paperTradingApi.getStrategyPerformance<StrategyPerformance[]>(accountId))
         .then((list) => {
           if (!cancelled) {
             const sorted = [...(list ?? [])].sort((a, b) => b.sharpeRatio - a.sharpeRatio);

@@ -25,16 +25,31 @@ export function LatencyPanel({ accountId, className = "" }: Props) {
 
   useEffect(() => {
     let cancelled = false;
+    let stopped = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
     const fetch = () => {
+      if (stopped) return;
       requestQueue
         .enqueue(() => paperTradingApi.getLatency(accountId))
-        .then((r) => { if (!cancelled) { setReport(r); setError(false); } })
+        .then((r) => {
+          if (cancelled) return;
+          if (r === null) {
+            // Endpoint not implemented (404) — stop polling to avoid
+            // spamming the console with repeated 404 errors.
+            stopped = true;
+            setError(true);
+            if (timer) clearInterval(timer);
+            return;
+          }
+          setReport(r);
+          setError(false);
+        })
         .catch(() => { if (!cancelled) setError(true); })
         .finally(() => { if (!cancelled) setLoading(false); });
     };
     fetch();
-    const timer = setInterval(fetch, POLL_MS);
-    return () => { cancelled = true; clearInterval(timer); };
+    timer = setInterval(fetch, POLL_MS);
+    return () => { cancelled = true; if (timer) clearInterval(timer); };
   }, [accountId]);
 
   // ---- Loading / error states ----

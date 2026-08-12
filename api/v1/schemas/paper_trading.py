@@ -675,6 +675,18 @@ class BreakerStatusResponse(BaseModel):
     reason: str = Field("", description="Breaker reason if engaged")
     triggered_at: Optional[str] = Field(None, description="ISO timestamp of trigger")
 
+
+class ExtremeMarketStatusResponse(BaseModel):
+    """Extreme market alert state for frontend consumption."""
+    market: str = Field("cn", description="Market code")
+    is_active: bool = Field(False, description="Whether extreme market is active")
+    current_vol: float = Field(0.0, description="Current annualized volatility")
+    historical_vol: float = Field(0.0, description="Historical annualized volatility")
+    ratio: float = Field(0.0, description="current_vol / historical_vol")
+    actions: List[str] = Field(default_factory=list, description="Actions when active")
+    detected_at: Optional[str] = Field(None, description="ISO timestamp of detection")
+
+
 # ---------------------------------------------------------------------------
 # Daily bars (A-01 frontend CandlestickChart)
 # ---------------------------------------------------------------------------
@@ -748,3 +760,82 @@ class L2DepthResponse(BaseModel):
     bid_ask_imbalance: float = Field(0.0, description="Bid/ask imbalance")
     depth_weighted_spread: float = Field(0.0, description="Depth-weighted spread")
     source: str = Field("", description="L2 provider")
+
+
+# ---------------------------------------------------------------------------
+# Tick latency report (T-005 / pending-api §1)
+# ---------------------------------------------------------------------------
+
+class LatencyTotalMs(BaseModel):
+    """Total tick latency percentiles (milliseconds)."""
+    p50: float = Field(0.0, description="Median (ms)")
+    p95: float = Field(0.0, description="P95 (ms)")
+    p99: float = Field(0.0, description="P99 (ms)")
+
+
+class LatencyStep(BaseModel):
+    """Per-phase tick latency percentiles."""
+    name: str = Field(..., description="Phase name: data_fetch/signal_calc/risk_check/order_execute")
+    p50_ms: float = Field(0.0, description="Median (ms)")
+    p95_ms: float = Field(0.0, description="P95 (ms)")
+    p99_ms: float = Field(0.0, description="P99 (ms)")
+
+
+class LatencyReportResponse(BaseModel):
+    """Full tick latency report consumed by frontend LatencyPanel."""
+    tick_total_ms: LatencyTotalMs = Field(default_factory=LatencyTotalMs)
+    steps: List[LatencyStep] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Drift / strategy performance / features (frontend calls these; fields are
+# deliberately camelCase — the frontend reads them without toCamelCase)
+# ---------------------------------------------------------------------------
+
+class DriftReportItem(BaseModel):
+    """One strategy's drift-detection report (DriftPanel)."""
+    strategyName: str = Field(..., description="Strategy name")
+    isDrifting: bool = Field(False, description="Whether drift was detected")
+    rollingSharpe: List[float] = Field(default_factory=list, description="Rolling annualized Sharpe sequence")
+    sharpeTrend: float = Field(0.0, description="Sharpe trend (positive = improving)")
+    consecutiveLosingDays: int = Field(0, description="Consecutive losing days")
+    recommendedAction: str = Field("keep", description="keep / reduce_weight / pause / retire")
+
+
+class StrategyPerformanceItem(BaseModel):
+    """One strategy's performance row (StrategyLeaderboard)."""
+    name: str = Field(..., description="Strategy name")
+    sharpeRatio: float = Field(0.0, description="Sharpe ratio")
+    winRate: float = Field(0.0, description="Win rate (0-1)")
+    maxDrawdownPct: float = Field(0.0, description="Max drawdown (%)")
+    calmarRatio: Optional[float] = Field(None, description="Calmar ratio")
+    avgDailyReturnPct: float = Field(0.0, description="Avg daily return (%)")
+    currentWeight: float = Field(1.0, description="SignalFusion weight (0-1)")
+    status: str = Field("active", description="active / reduced / paused / retired")
+    tradeCount: int = Field(0, description="Number of trades")
+
+
+class FeatureRowItem(BaseModel):
+    """One (code, date) row of computed features (FeaturesPanel)."""
+    code: str = Field(..., description="Stock code")
+    date: str = Field(..., description="Trading date (YYYY-MM-DD)")
+    smaCrossover: float = Field(0.0, description="SMA crossover signal")
+    rsi: float = Field(0.0, description="RSI value")
+    volumeSpike: float = Field(0.0, description="Volume spike signal")
+    maAlignment: float = Field(0.0, description="MA alignment signal")
+    bidAskImbalance: float = Field(0.0, description="Bid/ask imbalance")
+
+
+class FeatureSnapshotResponse(BaseModel):
+    """Feature-pipeline snapshot (FeaturesPanel)."""
+    asOf: str = Field("", description="Snapshot date (YYYY-MM-DD)")
+    features: List[FeatureRowItem] = Field(default_factory=list)
+    skippedCodes: List[str] = Field(default_factory=list)
+
+
+class FeatureRecomputeResponse(BaseModel):
+    """Result of a manual feature recompute."""
+    ok: bool = Field(True, description="Whether recompute succeeded")
+    message: str = Field("", description="Human-readable message")
+    asOf: str = Field("", description="Snapshot date (YYYY-MM-DD)")
+    savedPath: Optional[str] = Field(None, description="Saved parquet path")

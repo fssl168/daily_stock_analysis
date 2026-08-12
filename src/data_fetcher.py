@@ -13,7 +13,7 @@ Supported data sources (in default order):
 4. akshare - AkShare (open source financial data)
 """
 
-from typing import Optional, List, Tuple, Dict
+from typing import Any, Optional, List, Tuple, Dict
 import pandas as pd
 import logging
 import time  # Added for cache timestamp

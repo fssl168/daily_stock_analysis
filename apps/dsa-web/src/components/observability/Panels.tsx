@@ -265,7 +265,7 @@ export const MetaObservationsPanel: React.FC = () => {
 
   useEffect(() => {
     observabilityApi.getMetaObservations({ limit: 50 })
-      .then(setData)
+      .then((r) => setData({ items: Array.isArray(r.items) ? r.items : [], count: r.count ?? 0 }))
       .catch((e) => setError(e instanceof Error ? e.message : '观察加载失败'))
       .finally(() => setLoading(false));
   }, []);
@@ -332,7 +332,7 @@ export const RegressionPanel: React.FC = () => {
 
   useEffect(() => {
     observabilityApi.getRegressions()
-      .then((r) => setItems(r.items))
+      .then((r) => setItems(Array.isArray(r.items) ? r.items : []))
       .catch((e) => setError(e instanceof Error ? e.message : '回归记录加载失败'))
       .finally(() => setLoading(false));
   }, []);
@@ -371,7 +371,7 @@ export const HealthTrendPanel: React.FC = () => {
 
   useEffect(() => {
     observabilityApi.getHealthTrend({ limit: 100 })
-      .then(setData)
+      .then((r) => setData({ items: Array.isArray(r.items) ? r.items : [], count: r.count ?? 0 }))
       .catch((e) => setError(e instanceof Error ? e.message : '健康趋势加载失败'))
       .finally(() => setLoading(false));
   }, []);

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { paperTradingApi } from '../../api/paperTrading';
+import { requestQueue } from '../../utils/requestQueue';
 import { Card, EmptyState, InlineAlert } from '../common';
 
 interface L2DepthLevel {
@@ -42,7 +43,7 @@ export function L2DepthPanel({ code, pollMs = 10_000 }: Props) {
     }
     setError(null);
     try {
-      const resp = await paperTradingApi.getL2Depth<L2DepthData>(code);
+      const resp = await requestQueue.enqueue(() => paperTradingApi.getL2Depth<L2DepthData>(code));
       setData(resp);
     } catch (e) {
       setError(e instanceof Error ? e.message : "L2 数据加载失败");

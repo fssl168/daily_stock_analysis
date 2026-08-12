@@ -577,14 +577,23 @@ export const paperTradingApi = {
   // routes and degrade to empty defaults on failure.
   // ---------------------------------------------------------------------------
 
-  /** Get tick-level latency statistics (p50/p95/p99). */
-  getLatency: async (accountId: number): Promise<LatencyReport> => {
+  /** Get tick-level latency statistics (p50/p95/p99).
+   *  Returns null when the endpoint is not implemented (404) so callers can
+   *  stop polling instead of spamming the console with 404 errors.
+   */
+  getLatency: async (accountId: number): Promise<LatencyReport | null> => {
     try {
       const response = await apiClient.get<Record<string, unknown>>(
         `/api/v1/paper-trading/accounts/${accountId}/latency`
       );
       return toCamelCase<LatencyReport>(response.data);
-    } catch {
+    } catch (err) {
+      // 404 means the endpoint is not implemented yet — signal caller to
+      // stop polling.
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 404) return null;
+      // Other errors (500, timeout, etc.) — return zero-filled default
+      // so the UI shows "waiting" rather than crashing.
       return {
         tickTotalMs: { p50: 0, p95: 0, p99: 0 },
         steps: [],

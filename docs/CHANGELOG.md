@@ -64,3 +64,12 @@ All notable changes to this project will be documented in this file.
 - [修复] server.py 硬编码本机 .venv-lib 路径 → 改为 DSA_VENV_LIB 环境变量注入
 - [改进] 前端 C 域核验：补齐 Alerts updateRule / Portfolio updateAccount API 封装
 - [文档] 新增系统可观测性与 L4 干预模式手册 docs/observability.md + 前后端对齐计划/评审文档
+- [修复] Paper Trading WebSocket 握手 500：router 级 require_login 被误应用到 WS 路由（TypeError: missing request）→ 新增独立 ws_router（api/v1/endpoints/paper_trading.py + api/v1/router.py），WS 端点内置 cookie 鉴权（verify_ws_account_ownership），未登录 close(1008) 而非 500
+- [修复] backtest-scenario 500：PaperTradingToBacktestAdapter._fetch_net_values 日期改为 ISO 字符串 + _paper_scenario_to_schema 兼容 date/str（NetValuePoint.date 校验失败）
+- [修复] battle-plans 500：HoldingPlanItem 必填 current_price 缺失（示例数据契约）
+- [改进] 市价单定价闭环：TradingEngine 注入 SharedQuoteCache，市价单成交价=实时行情+滑点（fee_model.apply_slippage），缓存缺失显式 logger.warning 降级；持仓估值实时化（_apply_live_valuation）；batch market 单实时定价
+- [测试] 新增 WS 握手/回测序列化/定价闭环回归测试（test_paper_trading_ws.py、test_paper_trading_backtest_contracts.py、test_paper_trading_pricing.py）
+- [新功能] scripts/seed_demo_data.py 演示数据一键生成脚本（参数化 --account/--capital/--days/--reset，服务层下单 + ORM 写入，幂等可复现）
+- [文档] 新增纸面交易实施计划与函数级实施清单（docs/paper_trading_next_phase_plan.md、docs/paper_trading_impl_backlog_function_level.md）
+- [修复] HomePage 历史列表 StockBarItem 按钮嵌套（`<button>` 内嵌 `<button>` 触发 React hydration 警告）→ 外层改为 `div[role=button]`，保留点击与键盘（Enter/Space）语义
+- [修复] requestQueue.enqueueBatch 类型签名改为元组泛型，修复 PaperTradingPage loadAll 异构请求的类型推断错误（此前阻塞 tsc/build）

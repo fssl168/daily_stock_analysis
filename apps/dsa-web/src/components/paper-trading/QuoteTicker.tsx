@@ -46,6 +46,7 @@ export function QuoteTicker({ accountId, maxCodes = 12, className = "" }: Props)
     autoReconnect: true,
     reconnectDelay: 1000,
     maxReconnectDelay: 15000,
+    maxRetries: 5,
   });
 
   // Apply WS push → update quote map.

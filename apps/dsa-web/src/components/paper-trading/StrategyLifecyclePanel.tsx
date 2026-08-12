@@ -7,6 +7,7 @@
 import { useEffect, useState } from "react";
 import { Play, Pause, RotateCcw, ChevronRight } from "lucide-react";
 import { paperTradingApi } from "../../api/paperTrading";
+import { requestQueue } from "../../utils/requestQueue";
 import { Badge } from "../common/Badge";
 
 // ---------------------------------------------------------------------------
@@ -60,8 +61,8 @@ export function StrategyLifecyclePanel({ accountId, className = "", onTransition
   useEffect(() => {
     let cancelled = false;
     const fetch = () => {
-      paperTradingApi
-        .getStrategies<StrategyLifecycleItem[]>(accountId)
+      requestQueue
+        .enqueue(() => paperTradingApi.getStrategies<StrategyLifecycleItem[]>(accountId))
         .then((r) => { if (!cancelled) setStrategies(r ?? []); })
         .catch(() => {})
         .finally(() => { if (!cancelled) setLoading(false); });

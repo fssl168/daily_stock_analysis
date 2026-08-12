@@ -135,6 +135,10 @@ class ContentGenerator:
         self.config = config
         self.db = db_manager
         self.account_id = int(account_id or 0)
+        if self.account_id <= 0:
+            self.account_id = int(
+                getattr(config, "paper_trading_default_account_id", 0) or 0
+            )
         self.reflection_engine = reflection_engine
         self.battle_plan_generator = battle_plan_generator
         self.trading_engine = trading_engine

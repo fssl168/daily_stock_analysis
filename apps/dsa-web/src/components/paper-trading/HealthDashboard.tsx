@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Activity } from "lucide-react";
 import apiClient from "../../api";
+import { requestQueue } from "../../utils/requestQueue";
 import { Card } from "../common/Card";
 import { Badge } from "../common/Badge";
 
@@ -17,8 +18,8 @@ export function HealthDashboard({ className = "" }: { className?: string }) {
   useEffect(() => {
     let cancelled = false;
     const fetch = () => {
-      apiClient
-        .get<HealthResponse>("/api/v1/health")
+      requestQueue
+        .enqueue(() => apiClient.get<HealthResponse>("/api/v1/health"))
         .then((r) => { if (!cancelled) setHealth(r.data); })
         .catch(() => {})
         .finally(() => { if (!cancelled) setLoading(false); });

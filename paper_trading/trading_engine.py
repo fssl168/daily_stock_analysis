@@ -104,12 +104,14 @@ class TradingEngine:
         broker_router: Optional[Any] = None,  # T-020: broker routing
         on_trade_executed: Optional[Any] = None,
         on_signal_rejected: Optional[Any] = None,
+        quote_cache: Optional[Any] = None,  # T-02: shared live-quote cache for pricing
     ):
         self.db = db_manager or get_db()
         self.account_mgr = account_manager or PaperAccountManager(self.db)
         self.order_mgr = order_manager or OrderManager(self.db)
         self.position_mgr = position_manager or PositionManager(self.db)
         self.fee_model = fee_model or FeeModel()
+        self.quote_cache = quote_cache  # T-02: None disables live pricing (fallback)
         # If no explicit risk_checker is provided, create one using the main system config for parameter alignment.
         if risk_checker is None:
             from .risk_config_adapter import create_risk_config_from_main
@@ -170,6 +172,24 @@ class TradingEngine:
     # Signal submission
     # ------------------------------------------------------------------
 
+    def _live_price(self, code: str) -> Optional[float]:
+        """Return the fresh live price for ``code`` from the shared quote cache.
+
+        Returns None when no cache is wired, the code is absent, the quote is
+        stale, or the price is non-positive — the caller falls back.
+        """
+        if self.quote_cache is None:
+            return None
+        try:
+            quote = self.quote_cache.get(code)
+            if quote is None:
+                return None
+            price = float(getattr(quote, "price", 0.0) or 0.0)
+            return price if price > 0 else None
+        except Exception as exc:  # defensive: cache must never break order flow
+            logger.warning("[TradingEngine] quote_cache.get(%s) failed: %s", code, exc)
+            return None
+
     def submit_signal(
         self,
         account_id: int,
@@ -185,6 +205,17 @@ class TradingEngine:
         """
         # Persist signal first (always — for audit even if rejected).
         signal_id = self._persist_signal(account_id, signal, status="pending")
+
+        # Emit the strategy signal event for the realtime feed (pending-api §3).
+        self._emit(
+            "signal_generated",
+            code=signal.code,
+            side=signal.side,
+            price=float(signal.trigger_price or 0.0),
+            quantity=float(signal.suggested_quantity or 0.0),
+            strategy_name=signal.strategy_name,
+            reason=signal.reason,
+        )
 
         side = signal.side
         if side not in ("buy", "sell"):
@@ -227,10 +258,21 @@ class TradingEngine:
                 )
 
         # Determine reference price for risk checks.
+        # T-02: market orders price off the shared live-quote cache when fresh,
+        # falling back to the signal trigger price (explicitly logged) otherwise.
         if order_type == OrderType.LIMIT:
             ref_price = float(limit_price) if limit_price and limit_price > 0 else float(signal.trigger_price)
         else:
-            ref_price = float(signal.trigger_price)
+            live = self._live_price(signal.code)
+            if live is not None:
+                ref_price = live
+            else:
+                ref_price = float(signal.trigger_price)
+                if self.quote_cache is not None:
+                    logger.warning(
+                        "[TradingEngine] no fresh quote for %s; market fill uses trigger price %.4f",
+                        signal.code, ref_price,
+                    )
 
         # Run risk checks (delegated to RMS — T18-A).
         risk_result = self.rms.pre_trade_check(
@@ -240,6 +282,11 @@ class TradingEngine:
         if not risk_result.passed:
             self._update_signal_status(
                 signal_id, "rejected", reason=risk_result.reason
+            )
+            self._emit(
+                "risk_check_failed",
+                code=signal.code, side=side, price=ref_price, quantity=quantity,
+                strategy_name=signal.strategy_name, reason=risk_result.reason,
             )
             return TradeResult(
                 signal_id=signal_id,
@@ -256,6 +303,11 @@ class TradingEngine:
 
         # Optional Agent risk-control review (delegated to RMS — T18-A).
         # Verdict is persisted to PaperSignal for audit.
+        self._emit(
+            "risk_check_passed",
+            code=signal.code, side=side, price=ref_price, quantity=quantity,
+            strategy_name=signal.strategy_name,
+        )
         agent_review_dict: Optional[Dict[str, Any]] = self.rms.agent_review(
             account_id, signal=signal,
         )
@@ -274,6 +326,12 @@ class TradingEngine:
             if not agent_review_dict.get("approved", True):
                 self._update_signal_status(
                     signal_id, "rejected",
+                    reason=f"agent veto: {agent_review_dict.get('reason', '')}",
+                )
+                self._emit(
+                    "agent_review_vetoed",
+                    code=signal.code, side=side, price=ref_price, quantity=quantity,
+                    strategy_name=signal.strategy_name,
                     reason=f"agent veto: {agent_review_dict.get('reason', '')}",
                 )
                 logger.info(
@@ -295,6 +353,12 @@ class TradingEngine:
                 )
 
         # ① CircuitBreaker check (T2 integration) — after RMS, before OMS.
+        if agent_review_dict is not None:
+            self._emit(
+                "agent_review_passed",
+                code=signal.code, side=side, price=ref_price, quantity=quantity,
+                strategy_name=signal.strategy_name,
+            )
         if self.circuit_breaker is not None:
             account = self.account_mgr.snapshot(account_id)
             breaker_state = self.circuit_breaker.evaluate(
@@ -303,6 +367,12 @@ class TradingEngine:
                 initial_capital=getattr(account, 'initial_capital', account.total_assets),
             )
             if not self.circuit_breaker.allow_any_trade():
+                self._emit(
+                    "breaker_rejected",
+                    code=signal.code, side=side, price=ref_price, quantity=quantity,
+                    strategy_name=signal.strategy_name,
+                    reason=f"breaker: {breaker_state.reason}",
+                )
                 return TradeResult(
                     signal_id=signal_id, order_id=None, side=side,
                     code=signal.code, status="rejected",
@@ -311,6 +381,12 @@ class TradingEngine:
                     agent_review=agent_review_dict,
                 )
             if side == "buy" and not self.circuit_breaker.allow_new_position():
+                self._emit(
+                    "breaker_rejected",
+                    code=signal.code, side=side, price=ref_price, quantity=quantity,
+                    strategy_name=signal.strategy_name,
+                    reason="breaker(soft): new positions blocked",
+                )
                 return TradeResult(
                     signal_id=signal_id, order_id=None, side=side,
                     code=signal.code, status="rejected",
@@ -318,6 +394,12 @@ class TradingEngine:
                     risk_decisions=risk_result.risk_decisions,
                     agent_review=agent_review_dict,
                 )
+
+        self._emit(
+            "breaker_check_passed",
+            code=signal.code, side=side, price=ref_price, quantity=quantity,
+            strategy_name=signal.strategy_name,
+        )
 
         # Create and execute the order via OMS (T18-B).
         from paper_trading.oms_mgmt import OrderParams
@@ -340,6 +422,11 @@ class TradingEngine:
             order_result = self.oms.create_order(oms_params)
             if order_result.order_id is None:
                 return order_result  # creation failed
+            self._emit(
+                "order_created",
+                code=signal.code, side=side, price=ref_price, quantity=quantity,
+                strategy_name=signal.strategy_name, order_id=order_result.order_id,
+            )
             oms_params.order_id = order_result.order_id
             trade_result = self.oms.execute_market(order_result.order_id, oms_params)
             # Normalize OMS status to the public "executed" contract.
@@ -352,6 +439,14 @@ class TradingEngine:
                                        reason=trade_result.reason)
             self._apply_sltp_to_position(account_id, signal.code, oms_params.ref_price)
             if trade_result.status == "executed":
+                self._emit(
+                    "order_filled",
+                    code=signal.code, side=side,
+                    price=trade_result.fill_price,
+                    quantity=trade_result.fill_quantity,
+                    strategy_name=signal.strategy_name,
+                    order_id=getattr(trade_result, "order_id", None),
+                )
                 self._fire_callback(self._on_trade_executed, trade_result,
                                     trade_id=getattr(trade_result, 'trade_id', None))
             else:
@@ -362,10 +457,21 @@ class TradingEngine:
         order_result = self.oms.create_order(oms_params)
         if order_result.order_id is None:
             return order_result
+        self._emit(
+            "order_created",
+            code=signal.code, side=side, price=ref_price, quantity=quantity,
+            strategy_name=signal.strategy_name, order_id=order_result.order_id,
+        )
         oms_params.order_id = order_result.order_id
         limit_reject = self.oms.handle_limit(order_result.order_id, oms_params)
         if limit_reject is not None:
             self._update_signal_status(signal_id, "rejected", reason=limit_reject.reason)
+            self._emit(
+                "order_rejected",
+                code=signal.code, side=side, price=ref_price, quantity=quantity,
+                strategy_name=signal.strategy_name, order_id=order_result.order_id,
+                reason=limit_reject.reason,
+            )
             return limit_reject
 
         self._update_signal_status(signal_id, "pending", reason="limit order awaiting match")
@@ -637,6 +743,11 @@ class TradingEngine:
             reason="conditional order triggered and filled as market",
         )
         trade_id = getattr(trade, "id", None) if trade is not None else None
+        self._emit(
+            "order_filled",
+            code=code, side=side, price=fill_price, quantity=quantity,
+            strategy_name=order.get("strategy_name"), order_id=order_id,
+        )
         self._fire_callback(self._on_trade_executed, result, trade_id=trade_id)
         return result
 
@@ -734,6 +845,11 @@ class TradingEngine:
         )
         # P1-C: fire trade-executed callback (e.g., reflection trigger).
         trade_id = getattr(trade, "id", None) if trade is not None else None
+        self._emit(
+            "order_filled",
+            code=code, side=side, price=fill_price, quantity=quantity,
+            strategy_name=order.get("strategy_name"), order_id=order_id,
+        )
         self._fire_callback(self._on_trade_executed, result, trade_id=trade_id)
         return result
 
@@ -815,6 +931,13 @@ class TradingEngine:
                 account_id=pos["account_id"],
                 signal=signal,
                 order_type=OrderType.MARKET,
+            )
+            self._emit(
+                "sl_tp_triggered",
+                code=pos["code"], side="sell", price=float(price),
+                quantity=float(pos.get("available_quantity") or 0.0),
+                strategy_name="risk_guard",
+                reason=f"{triggered} triggered at {price:.4f}",
             )
             results.append(result)
         return results
@@ -1162,6 +1285,20 @@ class TradingEngine:
                 exc_info=True,
             )
 
+    def _emit(self, event_type: str, **fields: Any) -> None:
+        """Emit a paper-trading trade event (best-effort, never raises).
+
+        Pushes into ``paper_trading.events.PaperTradingEventBus`` which feeds
+        the ``WS /ws/events`` endpoint. A subscriber failure must never break
+        the trading pipeline.
+        """
+        try:
+            from paper_trading.events import emit_trade_event
+
+            emit_trade_event(event_type, **fields)
+        except Exception:
+            logger.debug("[TradingEngine] event emission failed", exc_info=True)
+
     # ------------------------------------------------------------------
     # Signal cancel / modify (P0-C)
     # ------------------------------------------------------------------
@@ -1266,6 +1403,11 @@ class TradingEngine:
         # Mark the signal.
         cancel_note = reason or "signal canceled by user/agent"
         self._update_signal_status(signal_id, "rejected", reason=cancel_note)
+        self._emit(
+            "order_canceled",
+            code=code, side=side, price=price, quantity=quantity,
+            order_id=order_id, reason=cancel_note,
+        )
         logger.info(
             "Signal canceled: signal_id=%s order_id=%s code=%s reason=%s",
             signal_id, order_id, code, cancel_note,
@@ -1513,6 +1655,12 @@ class TradingEngine:
         # Update linked signal audit trail if present.
         if signal_id is not None:
             self._update_signal_status(signal_id, "rejected", reason=cancel_note)
+
+        self._emit(
+            "order_canceled",
+            code=code, side=side, price=price, quantity=quantity,
+            order_id=order_id, reason=cancel_note,
+        )
 
         logger.info(
             "Order canceled by id: order_id=%s signal_id=%s code=%s reason=%s",

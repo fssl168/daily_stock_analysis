@@ -27,13 +27,18 @@ import logging
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from sqlalchemy import desc, select
 
 from api.deps import get_config_dep, get_database_manager
 from api.v1.schemas.common import ErrorResponse
 from starlette.requests import Request
-from src.permissions import check_paper_trading_account_access
+from src.permissions import (
+    check_paper_trading_account_access,
+    require_login,
+    verify_account_ownership,
+    verify_ws_account_ownership,
+)
 from api.v1.schemas.paper_trading import (
     AccountCreateRequest,
     AccountListItem,
@@ -55,9 +60,15 @@ from api.v1.schemas.paper_trading import (
     DailyReflectionRequest,
     DailyReportResponse,
     DrawdownItem,
+    DriftReportItem,
+    ExtremeMarketStatusResponse,
+    FeatureRecomputeResponse,
+    FeatureRowItem,
+    FeatureSnapshotResponse,
     HoldingPlanItem,
     L2DepthLevel,
     L2DepthResponse,
+    LatencyReportResponse,
     ListenerControlResponse,
     ListenerStartRequest,
     ListenerStatusResponse,
@@ -85,6 +96,7 @@ from api.v1.schemas.paper_trading import (
     SignalListResponse,
     StrategyLifecycleItem,
     StrategyLifecycleListResponse,
+    StrategyPerformanceItem,
     StrategyTransitionRequest,
     StrategyTransitionResponse,
     TradeItem,
@@ -126,7 +138,15 @@ from paper_trading.strategies import Signal
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_login)])
+
+# WebSocket router WITHOUT the router-level require_login dependency.
+# FastAPI applies router-level dependencies to websocket routes too, and
+# require_login(request: Request) fails during websocket dependency
+# resolution ("missing 1 required positional argument: 'request'"), turning
+# every ws handshake into a 500. The ws endpoints below authenticate via
+# verify_ws_account_ownership() (cookie-based) themselves, so this is safe.
+ws_router = APIRouter()
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +179,11 @@ class PaperTradingService:
         self._pm_agent: Optional[Any] = None
         self._listener: Optional[MarketListener] = None
         self._data_fetcher: Optional[Any] = None
+        self._tick_latency: Optional[Any] = None  # T-005: tick latency aggregator
+        self._drift_detector: Optional[Any] = None  # T-010: drift detector
+        self._signal_fusion: Optional[Any] = None  # T-009: signal fusion
+        self._feature_pipeline: Optional[Any] = None  # T-013: feature pipeline
+        self._quote_cache: Optional[Any] = None  # T-02: shared live-quote cache
 
     # ------------------------------------------------------------------
     # Managers (lightweight)
@@ -235,6 +260,7 @@ class PaperTradingService:
                 ),
                 on_trade_executed=self._on_trade_executed,
                 on_signal_rejected=self._on_signal_rejected,
+                quote_cache=self.quote_cache(),
             )
         return self._engine
 
@@ -310,6 +336,12 @@ class PaperTradingService:
 
         from paper_trading.market_listener import build_default_listener
 
+        # T-007/T-005/T-02: reuse the shared quote cache (the same instance the
+        # engine prices off) and tune freshness to the listener tick.
+        quote_cache = self.quote_cache()
+        quote_cache._max_age = max(float(request.tick_interval_seconds or 10.0) * 2.0, 10.0)
+        latency_tracker = self.tick_latency()
+
         watched_codes = request.watched_codes or list(
             getattr(self.config, "stock_list", []) or []
         )
@@ -346,6 +378,11 @@ class PaperTradingService:
             pm_decision_interval_seconds=request.pm_decision_interval_seconds,
             enable_daily_reflection=request.enable_daily_reflection,
             enable_battle_plan=request.enable_battle_plan,
+            quote_cache=quote_cache,
+            latency_tracker=latency_tracker,
+            signal_fusion=self.signal_fusion(),
+            feature_pipeline=self.feature_pipeline(),
+            drift_detector=self.drift_detector(),
         )
         listener.start()
         self._listener = listener
@@ -393,6 +430,78 @@ class PaperTradingService:
                 )
                 self._data_fetcher = None
         return self._data_fetcher
+
+    # ------------------------------------------------------------------
+    # Tick latency aggregator (T-005 / pending-api §1)
+    # ------------------------------------------------------------------
+
+    def tick_latency(self) -> Any:
+        """Return the shared tick-latency aggregator (lazy singleton)."""
+        if self._tick_latency is None:
+            from src.utils.latency_tracker import TickLatencyAggregator
+
+            self._tick_latency = TickLatencyAggregator(window_size=100)
+        return self._tick_latency
+
+    def quote_cache(self) -> Any:
+        """Return the shared live-quote cache (lazy singleton, T-02)."""
+        if self._quote_cache is None:
+            from paper_trading.quote_cache import SharedQuoteCache
+
+            self._quote_cache = SharedQuoteCache()
+        return self._quote_cache
+
+    def latency_report(self) -> Dict[str, Any]:
+        """Return the doc-contract latency report (zeros when no samples)."""
+        try:
+            return self.tick_latency().report()
+        except Exception as exc:
+            logger.error("[PaperTradingService] latency report failed: %s", exc, exc_info=True)
+            return {
+                "tick_total_ms": {"p50": 0.0, "p95": 0.0, "p99": 0.0},
+                "steps": [],
+            }
+
+    # ------------------------------------------------------------------
+    # Drift detector / signal fusion / feature pipeline (T10 / T9 / T13)
+    # ------------------------------------------------------------------
+
+    def drift_detector(self) -> Any:
+        """Return the shared DriftDetector (lazy singleton)."""
+        if self._drift_detector is None:
+            from paper_trading.drift_detector import DriftDetector
+
+            self._drift_detector = DriftDetector()
+        return self._drift_detector
+
+    def signal_fusion(self) -> Any:
+        """Return the shared SignalFusionEngine (lazy singleton)."""
+        if self._signal_fusion is None:
+            from paper_trading.signal_fusion import FusionMethod, SignalFusionEngine
+
+            self._signal_fusion = SignalFusionEngine(
+                method=FusionMethod.WEIGHTED_VOTE,
+                consensus_threshold=float(
+                    getattr(self.config, "signal_fusion_consensus_threshold", 0.60)
+                ),
+            )
+        return self._signal_fusion
+
+    def feature_pipeline(self) -> Any:
+        """Return the shared FeaturePipeline with default configs (lazy)."""
+        if self._feature_pipeline is None:
+            from paper_trading.features import FeatureConfig, FeaturePipeline
+
+            self._feature_pipeline = FeaturePipeline(
+                [
+                    FeatureConfig("sma_crossover", "momentum", "sma_crossover", {"fast": 5, "slow": 20}),
+                    FeatureConfig("rsi", "momentum", "rsi", {"period": 14}),
+                    FeatureConfig("volume_spike", "volume", "volume_spike", {"multiplier": 2.0}),
+                    FeatureConfig("ma_alignment", "trend", "ma_alignment", {"short": 5, "long": 20}),
+                    FeatureConfig("bid_ask_imbalance", "market_microstructure", "bid_ask_imbalance", {}),
+                ]
+            )
+        return self._feature_pipeline
 
 
 # ---------------------------------------------------------------------------
@@ -627,9 +736,7 @@ def _candidate_dict_to_item(c: Dict[str, Any]) -> Any:
     },
     summary="List paper trading accounts",
 )
-def list_accounts(request: Request, service: PaperTradingService = Depends(get_paper_trading_service)):
-    # Check user has permission to access paper trading accounts
-    check_paper_trading_account_access(request)
+def list_accounts(service: PaperTradingService = Depends(get_paper_trading_service)):
     try:
         mgr = service.account_mgr()
         rows = mgr.list_accounts()
@@ -716,6 +823,7 @@ def create_account(
         500: {"description": "Server error", "model": ErrorResponse},
     },
     summary="Update paper trading account metadata",
+    dependencies=[Depends(verify_account_ownership)],
 )
 def update_account(
     account_id: int,
@@ -760,6 +868,7 @@ def update_account(
     status_code=200,
     response_model=None,
     summary="Delete a paper trading account and all its data",
+    dependencies=[Depends(verify_account_ownership)],
 )
 def delete_account(
     account_id: int,
@@ -782,6 +891,7 @@ def delete_account(
         500: {"description": "Server error", "model": ErrorResponse},
     },
     summary="Get account snapshot",
+    dependencies=[Depends(verify_account_ownership)],
 )
 def get_account_snapshot(
     account_id: int,
@@ -818,6 +928,7 @@ def get_account_snapshot(
         500: {"description": "Server error", "model": ErrorResponse},
     },
     summary="Get net value curve",
+    dependencies=[Depends(verify_account_ownership)],
 )
 def get_net_value_curve(
     account_id: int,
@@ -850,6 +961,7 @@ def get_net_value_curve(
         500: {"description": "Server error", "model": ErrorResponse},
     },
     summary="Get account performance metrics",
+    dependencies=[Depends(verify_account_ownership)],
 )
 def get_account_performance(
     account_id: int,
@@ -879,6 +991,7 @@ def get_account_performance(
         500: {"description": "Server error", "model": ErrorResponse},
     },
     summary="Get account drawdown curve",
+    dependencies=[Depends(verify_account_ownership)],
 )
 def get_account_drawdown(
     account_id: int,
@@ -916,6 +1029,7 @@ def get_account_drawdown(
         500: {"description": "Server error", "model": ErrorResponse},
     },
     summary="Get current risk metrics",
+    dependencies=[Depends(verify_account_ownership)],
 )
 def get_account_risk_metrics(
     account_id: int,
@@ -928,6 +1042,33 @@ def get_account_risk_metrics(
         raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:
         logger.error("[paper_trading] get_account_risk_metrics failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get(
+    "/accounts/{account_id}/latency",
+    response_model=LatencyReportResponse,
+    responses={
+        500: {"description": "Server error", "model": ErrorResponse},
+    },
+    summary="Get account tick latency statistics (p50/p95/p99)",
+    dependencies=[Depends(verify_account_ownership)],
+)
+def get_account_latency(
+    account_id: int,
+    service: PaperTradingService = Depends(get_paper_trading_service),
+) -> LatencyReportResponse:
+    """Return aggregated tick latency for an account (pending-api §1).
+
+    Matches the frontend LatencyPanel polling contract: returns HTTP 200 with
+    zeroed ``tick_total_ms`` and empty ``steps`` when the MarketListener has
+    not produced any ticks yet — never 404.
+    """
+    try:
+        report = service.latency_report()
+        return LatencyReportResponse(**report)
+    except Exception as exc:
+        logger.error("[paper_trading] get_account_latency failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
 
 
@@ -1179,7 +1320,8 @@ def create_batch_orders(
         for order in created:
             if order.order_type == OrderType.MARKET.value:
                 order_dict = order_mgr._order_to_dict(order)
-                fill_price = float(order.price or 0.0)
+                live = engine._live_price(order.code)
+                fill_price = live if live is not None else float(order.price or 0.0)
                 result = engine._execute_triggered_market_order(
                     order_dict, fill_price=fill_price
                 )
@@ -1269,6 +1411,7 @@ def create_conditional_order(
         500: {"description": "Server error", "model": ErrorResponse},
     },
     summary="List orders for an account",
+    dependencies=[Depends(verify_account_ownership)],
 )
 def list_orders(
     account_id: int,
@@ -1302,6 +1445,7 @@ def list_orders(
         500: {"description": "Server error", "model": ErrorResponse},
     },
     summary="List filled trades for an account",
+    dependencies=[Depends(verify_account_ownership)],
 )
 def list_trades(
     account_id: int,
@@ -1342,6 +1486,39 @@ def list_trades(
 # ---------------------------------------------------------------------------
 
 
+def _apply_live_valuation(
+    rows: List[Dict[str, Any]], quote_cache: Optional[Any]
+) -> List[Dict[str, Any]]:
+    """Overlay fresh live prices on position rows for PnL display (T-02).
+
+    When a fresh quote exists for a held code, recompute last_price /
+    market_value / floating_pnl from the live price so displayed PnL is
+    consistent with the market rather than the fill reference price.
+    """
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        live: Optional[float] = None
+        if quote_cache is not None:
+            try:
+                q = quote_cache.get(r["code"])
+                if q is not None and float(getattr(q, "price", 0.0) or 0.0) > 0:
+                    live = float(q.price)
+            except Exception:
+                live = None
+        if live is not None:
+            qty = float(r.get("quantity") or 0.0)
+            avg_cost = float(r.get("avg_cost") or 0.0)
+            r = dict(r)
+            r["last_price"] = live
+            r["market_value"] = qty * live
+            r["floating_pnl"] = (live - avg_cost) * qty
+            r["floating_pnl_pct"] = (
+                ((live - avg_cost) / avg_cost * 100.0) if avg_cost > 0 else 0.0
+            )
+        out.append(r)
+    return out
+
+
 @router.get(
     "/accounts/{account_id}/positions",
     response_model=PositionListResponse,
@@ -1349,6 +1526,7 @@ def list_trades(
         500: {"description": "Server error", "model": ErrorResponse},
     },
     summary="List open positions",
+    dependencies=[Depends(verify_account_ownership)],
 )
 def list_positions(
     account_id: int,
@@ -1359,6 +1537,7 @@ def list_positions(
         rows = service.position_mgr().list_positions(
             account_id=account_id, include_zero=include_zero
         )
+        rows = _apply_live_valuation(rows, service.quote_cache())
         items = [
             PositionItem(
                 account_id=account_id,
@@ -1400,6 +1579,7 @@ def list_positions(
         500: {"description": "Server error", "model": ErrorResponse},
     },
     summary="List signals (audit trail)",
+    dependencies=[Depends(verify_account_ownership)],
 )
 def list_signals(
     account_id: int,
@@ -1438,6 +1618,7 @@ def list_signals(
         500: {"description": "Server error", "model": ErrorResponse},
     },
     summary="List reflection notes",
+    dependencies=[Depends(verify_account_ownership)],
 )
 def list_reflections(
     account_id: int,
@@ -1477,6 +1658,7 @@ def list_reflections(
         "Runs the AI reflection agent on today's (or specified date's) trades "
         "and persists the resulting note. Returns the note."
     ),
+    dependencies=[Depends(verify_account_ownership)],
 )
 def trigger_daily_reflection(
     account_id: int,
@@ -1523,6 +1705,7 @@ def trigger_daily_reflection(
         500: {"description": "Server error", "model": ErrorResponse},
     },
     summary="Generate (and persist) the next-trading-day battle plan",
+    dependencies=[Depends(verify_account_ownership)],
 )
 def generate_battle_plan(
     account_id: int,
@@ -1565,6 +1748,7 @@ def generate_battle_plan(
         500: {"description": "Server error", "model": ErrorResponse},
     },
     summary="List recent battle plans",
+    dependencies=[Depends(verify_account_ownership)],
 )
 def list_battle_plans(
     account_id: int,
@@ -1663,6 +1847,7 @@ def get_battle_plan_markdown(
         500: {"description": "Server error", "model": ErrorResponse},
     },
     summary="Manually trigger one PM agent decision cycle",
+    dependencies=[Depends(verify_account_ownership)],
 )
 def trigger_pm_decision(
     account_id: int,
@@ -1711,6 +1896,7 @@ def trigger_pm_decision(
         500: {"description": "Server error", "model": ErrorResponse},
     },
     summary="List PM agent decisions",
+    dependencies=[Depends(verify_account_ownership)],
 )
 def list_pm_decisions(
     account_id: int,
@@ -1746,6 +1932,7 @@ def list_pm_decisions(
         500: {"description": "Server error", "model": ErrorResponse},
     },
     summary="Execute a pending PM decision",
+    dependencies=[Depends(verify_account_ownership)],
 )
 def execute_pm_decision(
     account_id: int,
@@ -1785,6 +1972,7 @@ def execute_pm_decision(
     status_code=200,
     response_model=None,
     summary="Ignore / skip a pending PM decision",
+    dependencies=[Depends(verify_account_ownership)],
 )
 def ignore_pm_decision(
     account_id: int,
@@ -1909,6 +2097,7 @@ def stop_listener(
     "/accounts/{account_id}/daily-report/generate",
     response_model=DailyReportResponse,
     tags=["daily-report"],
+    dependencies=[Depends(verify_account_ownership)],
 )
 async def generate_daily_report(
     account_id: int,
@@ -1916,9 +2105,9 @@ async def generate_daily_report(
 ) -> DailyReportResponse:
     """Generate a daily trading report (P2-A)."""
     from datetime import date as date_cls
-    from paper_trading.content_generator import ContentGenerator
+    from paper_trading.content_generator import build_content_generator
     try:
-        generator = ContentGenerator()
+        generator = build_content_generator(account_id=account_id)
         result = generator.generate_daily_report(save=save)
         return DailyReportResponse(
             date=date_cls.today().isoformat(),
@@ -1939,6 +2128,7 @@ async def generate_daily_report(
     "/accounts/{account_id}/daily-report/{report_date}",
     response_model=DailyReportResponse,
     tags=["daily-report"],
+    dependencies=[Depends(verify_account_ownership)],
 )
 async def get_daily_report(
     account_id: int,
@@ -1966,14 +2156,23 @@ async def get_daily_report(
 # ---------------------------------------------------------------------------
 
 
+def _fmt_iso_date_value(value: Any) -> Optional[str]:
+    """Format a date/datetime/str to ISO string (adapter may yield either)."""
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
 def _paper_scenario_to_schema(scenario: Any) -> PaperTradingScenario:
     """Serialize a PaperTradingScenario dataclass to the API schema."""
     return PaperTradingScenario(
         account_id=scenario.account_id,
         strategy_name=scenario.strategy_name,
-        base_date=scenario.base_date.isoformat() if scenario.base_date else None,
-        start_date=scenario.start_date.isoformat() if scenario.start_date else None,
-        end_date=scenario.end_date.isoformat() if scenario.end_date else None,
+        base_date=_fmt_iso_date_value(scenario.base_date),
+        start_date=_fmt_iso_date_value(scenario.start_date),
+        end_date=_fmt_iso_date_value(scenario.end_date),
         initial_capital=scenario.initial_capital,
         total_return_pct=scenario.total_return_pct,
         max_drawdown_pct=scenario.max_drawdown_pct,
@@ -1996,6 +2195,7 @@ def _paper_scenario_to_schema(scenario: Any) -> PaperTradingScenario:
     },
     summary="生成纸面交易回测场景",
     description="将纸面账户历史打包为类回测场景，用于与回测结果对比",
+    dependencies=[Depends(verify_account_ownership)],
 )
 def get_backtest_scenario(
     account_id: int,
@@ -2042,6 +2242,7 @@ def get_backtest_scenario(
     },
     summary="回测与纸面交易对比",
     description="对比回测引擎输出与纸面账户实际表现，并可写入复盘笔记",
+    dependencies=[Depends(verify_account_ownership)],
 )
 def compare_backtest_with_paper(
     account_id: int,
@@ -2109,6 +2310,7 @@ def compare_backtest_with_paper(
     "/accounts/{account_id}/breaker/status",
     response_model=BreakerStatusResponse,
     summary="Get circuit breaker status for an account",
+    dependencies=[Depends(verify_account_ownership)],
 )
 def get_breaker_status(
     account_id: int,
@@ -2136,6 +2338,49 @@ def get_breaker_status(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.get(
+    "/accounts/{account_id}/extreme-market",
+    response_model=ExtremeMarketStatusResponse,
+    summary="Get extreme market alert status for an account",
+    dependencies=[Depends(verify_account_ownership)],
+)
+def get_extreme_market_status(
+    account_id: int,
+    service: PaperTradingService = Depends(get_paper_trading_service),
+) -> ExtremeMarketStatusResponse:
+    """Return the current extreme market alert state.
+
+    Reads the ``ExtremeMarketResponse`` attached to the account's
+    ``MarketListener`` (if running). Returns an inactive default when no
+    listener is active or the response module is not configured.
+    """
+    try:
+        listener = service.get_listener()
+        if listener is None:
+            return ExtremeMarketStatusResponse(market="cn")
+
+        em = getattr(listener, "_extreme_market_response", None)
+        if em is None or not em.is_active():
+            return ExtremeMarketStatusResponse(market="cn")
+
+        alert = em.active_alert
+        if alert is None:
+            return ExtremeMarketStatusResponse(market="cn")
+
+        return ExtremeMarketStatusResponse(
+            market=alert.market,
+            is_active=True,
+            current_vol=float(alert.current_vol),
+            historical_vol=float(alert.historical_vol),
+            ratio=float(alert.ratio),
+            actions=list(alert.actions),
+            detected_at=alert.detected_at.isoformat() if alert.detected_at else None,
+        )
+    except Exception as exc:
+        logger.error("[paper_trading] extreme market status failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 # ===================================================================
 # A-01: Daily bars (frontend CandlestickChart)
 # ===================================================================
@@ -2145,6 +2390,7 @@ def get_breaker_status(
     "/accounts/{account_id}/daily-bars/{code}",
     response_model=Dict[str, Any],
     summary="Daily OHLC bars for a stock code",
+    dependencies=[Depends(verify_account_ownership)],
 )
 def get_daily_bars(
     account_id: int,
@@ -2335,3 +2581,491 @@ def get_l2_depth(
     except Exception as exc:
         logger.warning("[paper_trading] l2 depth failed for %s: %s", code, exc)
         return L2DepthResponse(code=code, timestamp="", bids=[], asks=[], source="error")
+
+
+# ===================================================================
+# Realtime WS: /ws/quotes + /ws/events (pending-api §2 / §3)
+# ===================================================================
+
+
+def _service_from_websocket(websocket: WebSocket) -> PaperTradingService:
+    """Resolve the shared PaperTradingService from a WebSocket connection."""
+    service = getattr(websocket.app.state, "paper_trading_service", None)
+    if service is None:
+        config = get_config_dep()
+        db_manager = get_database_manager()
+        service = PaperTradingService(config=config, db_manager=db_manager)
+        websocket.app.state.paper_trading_service = service
+    return service
+
+
+def _collect_quotes(listener: Optional[MarketListener]) -> List[Dict[str, Any]]:
+    """Build fresh quote messages from the listener's SharedQuoteCache.
+
+    Matches the frontend ``QuoteItem`` shape consumed by ``QuoteTicker`` and
+    ``useLivePositions`` (pending-api §2). Returns an empty list when the
+    listener (or its quote cache) is unavailable.
+    """
+    quotes: List[Dict[str, Any]] = []
+    cache = None
+    if listener is not None:
+        cache = getattr(listener, "_quote_cache", None)
+    if cache is None:
+        return quotes
+    for code, cached in cache.get_all().items():
+        quotes.append(
+            {
+                "code": code,
+                "price": float(getattr(cached, "price", 0.0) or 0.0),
+                "changePct": float(getattr(cached, "change_pct", 0.0) or 0.0),
+                "volume": float(getattr(cached, "volume", 0.0) or 0.0),
+                "timestamp": (
+                    cached.timestamp.isoformat() if getattr(cached, "timestamp", None) else ""
+                ),
+            }
+        )
+    return quotes
+
+
+@ws_router.websocket("/{account_id}/ws/quotes")
+async def ws_quotes(websocket: WebSocket, account_id: int) -> None:
+    """Push latest quotes for an account's watched codes (pending-api §2).
+
+    Reads the MarketListener's SharedQuoteCache every push cycle (~3s).
+    The handshake is rejected (HTTP 403) when the caller does not own the
+    account. Listener not running → no messages are pushed; the frontend
+    keeps the connection open and shows "等待行情推送".
+    """
+    try:
+        verify_ws_account_ownership(websocket, account_id)
+    except HTTPException:
+        await websocket.close(code=1008)
+        return
+    await websocket.accept()
+    service = _service_from_websocket(websocket)
+    listener = service.get_listener()
+    try:
+        while True:
+            import asyncio
+
+            for quote in _collect_quotes(listener):
+                await websocket.send_json(quote)
+            await asyncio.sleep(3.0)
+    except WebSocketDisconnect:
+        logger.info("[paper_trading] ws/quotes client disconnected account=%s", account_id)
+    except Exception as exc:
+        logger.debug("[paper_trading] ws/quotes loop ended: %s", exc)
+
+
+@ws_router.websocket("/{account_id}/ws/events")
+async def ws_events(websocket: WebSocket, account_id: int) -> None:
+    """Push paper-trading events + risk alerts (pending-api §3).
+
+    Subscribes to the ``PaperTradingEventBus`` and forwards each payload
+    as-is (already in the frontend contract shape). Recent events are replayed
+    on connect. The subscription is removed on disconnect to avoid leaks.
+    """
+    try:
+        verify_ws_account_ownership(websocket, account_id)
+    except HTTPException:
+        await websocket.close(code=1008)
+        return
+    await websocket.accept()
+
+    from collections import deque
+
+    from paper_trading.events import PaperTradingEventBus
+
+    bus = PaperTradingEventBus.instance()
+    queue: "deque[Dict[str, Any]]" = deque(maxlen=200)
+
+    def _on_event(payload: Dict[str, Any]) -> None:
+        queue.append(payload)
+
+    bus.subscribe(_on_event)
+    # Replay recent events so a freshly-connected feed shows recent activity.
+    for payload in bus.replay():
+        queue.append(payload)
+
+    try:
+        while True:
+            import asyncio
+
+            await asyncio.sleep(0.2)
+            if queue:
+                await websocket.send_json(queue.popleft())
+    except WebSocketDisconnect:
+        logger.info("[paper_trading] ws/events client disconnected account=%s", account_id)
+    except Exception as exc:
+        logger.debug("[paper_trading] ws/events loop ended: %s", exc)
+    finally:
+        bus.unsubscribe(_on_event)
+
+
+# ===================================================================
+# Drift / strategy performance / features (frontend-aligned additions)
+# ===================================================================
+
+
+def _drift_to_item(report: Any) -> DriftReportItem:
+    """Serialize a DriftDetector.DriftReport to the frontend camelCase item."""
+    return DriftReportItem(
+        strategyName=report.strategy_name,
+        isDrifting=bool(report.is_drifting),
+        rollingSharpe=[round(float(v), 4) for v in report.rolling_sharpe],
+        sharpeTrend=round(float(report.sharpe_trend), 4),
+        consecutiveLosingDays=int(report.consecutive_losing_days),
+        recommendedAction=report.recommended_action,
+    )
+
+
+def _strategy_status(name: str, recommended_action: str, weight: float) -> str:
+    """Map lifecycle state + drift action to the frontend status enum."""
+    try:
+        from paper_trading.strategy_lifecycle import StrategyLifecycle
+
+        state = StrategyLifecycle().get_state(name)
+        state_str = state.value if hasattr(state, "value") else str(state)
+        if state_str == "PAUSED":
+            return "paused"
+        if state_str == "RETIRED":
+            return "retired"
+    except Exception:
+        pass
+    if recommended_action == "retire":
+        return "retired"
+    if recommended_action == "pause" or weight <= 0.0:
+        return "paused"
+    if recommended_action == "reduce_weight":
+        return "reduced"
+    return "active"
+
+
+def _compute_strategy_trade_metrics(
+    account_id: int, db_manager: DatabaseManager
+) -> Dict[str, Dict[str, Any]]:
+    """Compute per-strategy trade metrics from the DB (running cost basis).
+
+    Replays filled trades in chronological order, maintaining a running
+    average cost per (strategy, code). Returns ``{strategy_name: {...}}`` with
+    camelCase metric keys consumed by StrategyLeaderboard.
+    """
+    from src.storage import PaperOrder, PaperTrade
+
+    with db_manager.session_scope() as session:
+        orders = session.execute(
+            select(PaperOrder).where(PaperOrder.account_id == account_id)
+        ).scalars().all()
+        trades = session.execute(
+            select(PaperTrade)
+            .where(PaperTrade.account_id == account_id)
+            .order_by(PaperTrade.traded_at)
+        ).scalars().all()
+        # Snapshot into plain tuples while the session is open — the ORM
+        # instances would be detached (and lazy-load would fail) afterwards.
+        order_rows: List[Any] = [(o.id, o.strategy_name) for o in orders]
+        trade_rows: List[Any] = [
+            (t.order_id, t.code, t.side, t.price, t.quantity, t.fee, t.traded_at)
+            for t in trades
+        ]
+
+    order_strategy: Dict[int, str] = {
+        oid: (sname or "manual") for oid, sname in order_rows
+    }
+    by_strategy: Dict[str, List[Any]] = {}
+    for (order_id, _code, _side, _price, _qty, _fee, _traded_at) in trade_rows:
+        by_strategy.setdefault(order_strategy.get(order_id, "manual"), []).append(
+            (order_id, _code, _side, _price, _qty, _fee, _traded_at)
+        )
+
+    try:
+        from paper_trading.account import PaperAccountManager
+
+        account = PaperAccountManager(db_manager).snapshot(account_id)
+        initial_capital = float(getattr(account, "initial_capital", 0.0) or 0.0)
+    except Exception:
+        initial_capital = 0.0
+
+    import numpy as np
+
+    out: Dict[str, Dict[str, Any]] = {}
+    for sname, trade_list in by_strategy.items():
+        pos: Dict[str, List[float]] = {}  # code -> [qty, avg_cost]
+        realized_by_day: Dict[str, float] = {}
+        win_trades = 0
+        realized_trades = 0
+        total_realized = 0.0
+        for (_order_id, code, side, price, qty, fee, traded_at) in trade_list:
+            qty = float(qty or 0.0)
+            price = float(price or 0.0)
+            fee = float(fee or 0.0)
+            day = traded_at.date().isoformat() if traded_at else ""
+            p = pos.get(code, [0.0, 0.0])
+            if side == "buy":
+                new_qty = p[0] + qty
+                new_cost = ((p[0] * p[1]) + (qty * price)) / new_qty if new_qty > 0 else 0.0
+                pos[code] = [new_qty, new_cost]
+            else:  # sell
+                if p[0] > 0:
+                    realized = (price - p[1]) * qty - fee
+                    total_realized += realized
+                    realized_by_day[day] = realized_by_day.get(day, 0.0) + realized
+                    realized_trades += 1
+                    if realized > 0:
+                        win_trades += 1
+                    pos[code] = [p[0] - qty, p[1]]
+
+        trade_count = len(trade_list)
+        win_rate = (win_trades / realized_trades) if realized_trades else 0.0
+
+        days = sorted(realized_by_day)
+        cum = 0.0
+        peak = 0.0
+        max_dd = 0.0
+        for d in days:
+            cum += realized_by_day[d]
+            peak = max(peak, cum)
+            if peak > 0:
+                dd = (peak - cum) / peak
+                max_dd = max(max_dd, dd)
+        max_dd_pct = max_dd * 100.0
+
+        num_days = len(days) or 1
+        avg_daily_return_pct = (
+            ((total_realized / (initial_capital or 1.0)) / num_days) * 100.0 if days else 0.0
+        )
+
+        daily_values = [realized_by_day[d] for d in days]
+        sharpe = 0.0
+        if len(daily_values) > 1:
+            arr = np.asarray(daily_values, dtype=float)
+            std = float(arr.std())
+            if std > 0:
+                sharpe = (float(arr.mean()) / std) * np.sqrt(242)
+
+        annualized_return_pct = avg_daily_return_pct * 242
+        calmar = (annualized_return_pct / max_dd_pct) if max_dd_pct > 0 else None
+
+        out[sname] = {
+            "tradeCount": trade_count,
+            "winRate": round(win_rate, 4),
+            "maxDrawdownPct": round(max_dd_pct, 4),
+            "avgDailyReturnPct": round(avg_daily_return_pct, 4),
+            "sharpeRatio": round(sharpe, 4),
+            "calmarRatio": round(calmar, 4) if calmar is not None else None,
+        }
+    return out
+
+
+def _watched_codes(service: PaperTradingService) -> List[str]:
+    """Return the account's watched codes (listener config first)."""
+    listener = service.get_listener()
+    if listener is not None:
+        codes = list(getattr(listener.config, "watched_codes", []) or [])
+        if codes:
+            return codes
+    return list(getattr(service.config, "stock_list", []) or [])[:50]
+
+
+def _daily_data_for_codes(
+    service: PaperTradingService, codes: List[str]
+) -> Dict[str, Any]:
+    """Collect daily DataFrames from the listener cache, falling back to fetch."""
+    listener = service.get_listener()
+    cache = getattr(listener, "_daily_df_cache", None) if listener is not None else None
+    out: Dict[str, Any] = {}
+    if cache:
+        for code in codes:
+            wrapper = cache.get(code)
+            if wrapper is not None:
+                _, df = wrapper
+                if df is not None and not df.empty:
+                    out[code] = df
+    missing = [c for c in codes if c not in out]
+    if missing:
+        fetcher = service._get_data_fetcher()
+        for code in missing[:20]:
+            try:
+                df, _source = fetcher.get_daily_data(code, days=90)
+                if df is not None and not df.empty:
+                    out[code] = df
+            except Exception:
+                continue
+    return out
+
+
+def _feature_rows(features: Any) -> List[Dict[str, Any]]:
+    """Convert a (code, date) MultiIndex feature DataFrame to camelCase rows."""
+    rows: List[Dict[str, Any]] = []
+
+    def _f(v: Any) -> float:
+        try:
+            x = float(v)
+            return x if x == x else 0.0  # NaN -> 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    if features is None or features.empty:
+        return rows
+    for (code, day), row in features.iterrows():
+        rows.append(
+            {
+                "code": str(code),
+                "date": str(day),
+                "smaCrossover": _f(row.get("sma_crossover")),
+                "rsi": _f(row.get("rsi")),
+                "volumeSpike": _f(row.get("volume_spike")),
+                "maAlignment": _f(row.get("ma_alignment")),
+                "bidAskImbalance": _f(row.get("bid_ask_imbalance")),
+            }
+        )
+    return rows
+
+
+def _feature_snapshot(service: PaperTradingService, account_id: int) -> Dict[str, Any]:
+    """Build a feature snapshot (asOf / features / skippedCodes)."""
+    pipeline = service.feature_pipeline()
+    codes = _watched_codes(service)
+    if not codes:
+        return {"asOf": "", "features": [], "skippedCodes": []}
+    daily_data = _daily_data_for_codes(service, codes)
+    if not daily_data:
+        return {"asOf": "", "features": [], "skippedCodes": list(codes)}
+    try:
+        features = pipeline.run(list(daily_data.keys()), daily_data)
+    except Exception as exc:
+        logger.warning("[paper_trading] feature pipeline run failed: %s", exc)
+        return {"asOf": "", "features": [], "skippedCodes": list(codes)}
+    return {
+        "asOf": date.today().isoformat(),
+        "features": _feature_rows(features),
+        "skippedCodes": list(getattr(pipeline, "skipped", []) or []),
+    }
+
+
+@router.get(
+    "/accounts/{account_id}/drift",
+    response_model=List[DriftReportItem],
+    summary="List strategy drift reports",
+    dependencies=[Depends(verify_account_ownership)],
+)
+def get_strategy_drift(
+    account_id: int,
+    service: PaperTradingService = Depends(get_paper_trading_service),
+) -> List[DriftReportItem]:
+    """Return drift-detection reports for all configured strategies."""
+    try:
+        names = _load_strategy_names()
+        if not names:
+            listener = service.get_listener()
+            if listener is not None:
+                names = [s.name for s in listener.strategies]
+        detector = service.drift_detector()
+        return [_drift_to_item(detector.check(n)) for n in names]
+    except Exception as exc:
+        logger.error("[paper_trading] get_strategy_drift failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get(
+    "/accounts/{account_id}/strategies/performance",
+    response_model=List[StrategyPerformanceItem],
+    summary="List strategy performance leaderboard",
+    dependencies=[Depends(verify_account_ownership)],
+)
+def get_strategy_performance(
+    account_id: int,
+    service: PaperTradingService = Depends(get_paper_trading_service),
+    db_manager: DatabaseManager = Depends(get_database_manager),
+) -> List[StrategyPerformanceItem]:
+    """Return per-strategy performance rows for the leaderboard."""
+    try:
+        names = _load_strategy_names()
+        if not names:
+            listener = service.get_listener()
+            if listener is not None:
+                names = [s.name for s in listener.strategies]
+        drift = service.drift_detector()
+        fusion = service.signal_fusion()
+        trade_metrics = _compute_strategy_trade_metrics(account_id, db_manager)
+
+        items: List[StrategyPerformanceItem] = []
+        for name in names:
+            report = drift.check(name)
+            tm = trade_metrics.get(name, {})
+            sharpe = (
+                float(report.rolling_sharpe[-1])
+                if report.rolling_sharpe
+                else float(tm.get("sharpeRatio", 0.0))
+            )
+            weight = 1.0
+            if hasattr(fusion, "_strategy_weights"):
+                weight = float(fusion._strategy_weights.get(name, 1.0))
+            items.append(
+                StrategyPerformanceItem(
+                    name=name,
+                    sharpeRatio=round(sharpe, 4),
+                    winRate=float(tm.get("winRate", 0.0)),
+                    maxDrawdownPct=float(tm.get("maxDrawdownPct", 0.0)),
+                    calmarRatio=tm.get("calmarRatio"),
+                    avgDailyReturnPct=float(tm.get("avgDailyReturnPct", 0.0)),
+                    currentWeight=round(weight, 4),
+                    status=_strategy_status(name, report.recommended_action, weight),
+                    tradeCount=int(tm.get("tradeCount", 0)),
+                )
+            )
+        return items
+    except Exception as exc:
+        logger.error("[paper_trading] get_strategy_performance failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get(
+    "/accounts/{account_id}/features",
+    response_model=FeatureSnapshotResponse,
+    summary="Get feature-pipeline snapshot",
+    dependencies=[Depends(verify_account_ownership)],
+)
+def get_features_snapshot(
+    account_id: int,
+    service: PaperTradingService = Depends(get_paper_trading_service),
+) -> FeatureSnapshotResponse:
+    """Return the latest computed feature snapshot (asOf/features/skippedCodes)."""
+    try:
+        return FeatureSnapshotResponse(**_feature_snapshot(service, account_id))
+    except Exception as exc:
+        logger.error("[paper_trading] get_features_snapshot failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post(
+    "/accounts/{account_id}/features/recompute",
+    response_model=FeatureRecomputeResponse,
+    summary="Trigger feature-pipeline recompute",
+    dependencies=[Depends(verify_account_ownership)],
+)
+def recompute_features(
+    account_id: int,
+    service: PaperTradingService = Depends(get_paper_trading_service),
+) -> FeatureRecomputeResponse:
+    """Run the feature pipeline now and persist the result to parquet."""
+    try:
+        pipeline = service.feature_pipeline()
+        codes = _watched_codes(service)
+        daily_data = _daily_data_for_codes(service, codes)
+        as_of = date.today()
+        saved_path: Optional[str] = None
+        if daily_data:
+            features = pipeline.run(list(daily_data.keys()), daily_data)
+            if features is not None and not features.empty:
+                path = pipeline.save(features, as_of)
+                saved_path = str(path)
+        return FeatureRecomputeResponse(
+            ok=True,
+            message=f"features recomputed for {len(daily_data)} codes",
+            asOf=as_of.isoformat(),
+            savedPath=saved_path,
+        )
+    except Exception as exc:
+        logger.error("[paper_trading] recompute_features failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))

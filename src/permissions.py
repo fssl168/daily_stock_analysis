@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Optional, Callable, Any
 from fastapi import HTTPException, status
 from starlette.requests import Request
+from starlette.websockets import WebSocket
 
 from src.auth import COOKIE_NAME, verify_session
 
@@ -101,28 +102,91 @@ def require_role(required_role: str):
     return RoleChecker(required_role)
 
 
-async def check_paper_trading_account_access(account_id: str, request: Request):
+def require_login(request: Request):
+    """FastAPI dependency: require an authenticated session.
+
+    Use as ``dependencies=[Depends(require_login)]`` on a router or endpoint
+    to enforce login for all covered routes.
     """
-    检查用户是否有权限访问指定的纸面交易账户。
-    
-    验证当前登录用户是否拥有该 account_id 的账户。
-    
-    Args:
-        account_id: 要访问的账户 ID
-        request: FastAPI Request 对象，用于获取当前用户会话
-    
-    Note:
-        此函数应在 paper_trading 端点中使用，通过适当的数据库管理器
-        获取数据库连接并查询账户的所有权关系。
-    """
-    from api.deps import get_database_manager
-    
     current_user = get_current_user(request)
     if not current_user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"error": "unauthorized", "message": "需要登录"}
         )
-    
-    # TODO: 实现实际的账户所有权验证逻辑
-    pass
+    return current_user
+
+
+def check_paper_trading_account_access(account_id: str, request: Request):
+    """
+    检查用户是否有权限访问指定的纸面交易账户。
+
+    验证当前登录用户是否拥有该 account_id 的账户。
+    - account_id 为空时仅做登录检查（已由 router 级 require_login 覆盖）。
+    - 账户 owner_id 为 NULL 时允许访问（向后兼容遗留账户）。
+    - owner_id 与当前用户不匹配时返回 403。
+
+    Args:
+        account_id: 要访问的账户 ID（字符串形式）
+        request: FastAPI Request 对象，用于获取当前用户会话
+
+    Raises:
+        HTTPException 403: 当前用户不是该账户的所有者
+    """
+    if not account_id:
+        return
+
+    current_user = get_current_user(request)
+    if not current_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": "unauthorized", "message": "需要登录"}
+        )
+
+    try:
+        account_id_int = int(account_id)
+    except (ValueError, TypeError):
+        return  # 让端点自行处理无效 ID
+
+    from api.deps import get_database_manager
+    from src.storage import Account
+
+    db_manager = get_database_manager()
+    with db_manager.session_scope() as session:
+        from sqlalchemy import select
+        account = session.execute(
+            select(Account).where(Account.id == account_id_int)
+        ).scalar_one_or_none()
+        if account is None:
+            return  # 账户不存在，让端点自行返回 404
+        # 必须在 session 关闭前读取 owner_id，否则会触发 DetachedInstanceError
+        owner_id = account.owner_id
+
+    if owner_id is None or owner_id == "":
+        return  # 遗留账户（无 owner_id），允许访问
+
+    if owner_id != current_user.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "forbidden",
+                "message": "无权访问该账户",
+                "account_id": account_id,
+            },
+        )
+
+
+def verify_account_ownership(account_id: int, request: Request):
+    """FastAPI dependency: verify current user owns the account_id path param."""
+    check_paper_trading_account_access(str(account_id), request)
+
+
+def verify_ws_account_ownership(websocket: WebSocket, account_id: int) -> None:
+    """Verify the current user owns the account_id during a WebSocket handshake.
+
+    ``WebSocket`` inherits from Starlette's ``HTTPConnection`` and exposes the
+    same ``cookies`` as ``Request``, so the shared ownership check applies
+    unchanged. Call this inside the websocket endpoint after ``accept()`` (or
+    before, to reject the handshake with an HTTP error).
+    """
+    check_paper_trading_account_access(str(account_id), websocket)

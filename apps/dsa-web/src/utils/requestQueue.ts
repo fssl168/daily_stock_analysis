@@ -35,15 +35,20 @@ class RequestQueue {
   /**
    * Enqueue multiple requests, respecting the concurrency limit.
    * Returns a promise that resolves when ALL requests complete.
+   *
+   * Uses a mapped tuple type so heterogeneous request return types are
+   * preserved (e.g. loadAll's 10 different API responses).
    */
-  async enqueueBatch<T>(fns: Array<() => Promise<T>>): Promise<T[]> {
-    const results: T[] = new Array(fns.length);
+  async enqueueBatch<T extends readonly unknown[]>(
+    fns: { [K in keyof T]: () => Promise<T[K]> },
+  ): Promise<{ [K in keyof T]: T[K] }> {
+    const results = new Array(fns.length) as { -readonly [K in keyof T]: T[K] };
     let nextIndex = 0;
 
     const worker = async (): Promise<void> => {
       while (nextIndex < fns.length) {
         const idx = nextIndex++;
-        results[idx] = await this.enqueue(fns[idx]);
+        results[idx] = (await this.enqueue(fns[idx])) as never;
       }
     };
 

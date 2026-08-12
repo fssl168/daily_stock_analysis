@@ -123,6 +123,14 @@ router.include_router(
     tags=["PaperTrading"]
 )
 
+# WebSocket endpoints live on a dependency-free router (see paper_trading.py
+# ws_router comment) to avoid the require_login(request) websocket 500 bug.
+router.include_router(
+    paper_trading.ws_router,
+    prefix="/paper-trading",
+    tags=["PaperTrading-WS"]
+)
+
 router.include_router(
     observability.router,
     prefix="/observability",

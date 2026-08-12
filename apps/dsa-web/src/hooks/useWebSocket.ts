@@ -28,6 +28,8 @@ export interface UseWebSocketOptions {
   reconnectDelay?: number;
   /** Max reconnect delay in ms (default 30000). */
   maxReconnectDelay?: number;
+  /** Max reconnect attempts before giving up (default: unlimited). */
+  maxRetries?: number;
   /** Called when the connection opens. */
   onOpen?: (event: Event) => void;
   /** Called when the connection closes. */
@@ -67,6 +69,8 @@ interface WsSubscriber {
   autoReconnect: boolean;
   initialDelay: number;
   maxDelay: number;
+  /** Max reconnect attempts before this subscriber gives up (undefined = unlimited). */
+  maxRetries?: number;
 }
 
 interface WsState {
@@ -74,6 +78,8 @@ interface WsState {
   connected: boolean;
   reconnectTimer: ReturnType<typeof setTimeout> | null;
   reconnectDelay: number;
+  /** Consecutive failed reconnect attempts since last successful open. */
+  retryCount: number;
   subscribers: Set<WsSubscriber>;
 }
 
@@ -103,15 +109,25 @@ function clearReconnect(state: WsState): void {
 function teardownShared(url: string, state: WsState): void {
   clearReconnect(state);
   if (state.socket) {
+    const sock = state.socket;
     // Remove handlers before close so onclose doesn't schedule reconnect.
-    state.socket.onopen = null;
-    state.socket.onmessage = null;
-    state.socket.onclose = null;
-    state.socket.onerror = null;
-    try {
-      state.socket.close();
-    } catch {
-      // ignore
+    sock.onopen = null;
+    sock.onmessage = null;
+    sock.onclose = null;
+    sock.onerror = null;
+    // If socket is still CONNECTING, closing it immediately triggers
+    // "WebSocket is closed before the connection is established" in the
+    // browser console (common in React StrictMode dev double-mount).
+    // Defer the close until the connection settles.
+    if (sock.readyState === WebSocket.CONNECTING) {
+      sock.addEventListener('open', () => { try { sock.close(); } catch { /* ignore */ } }, { once: true });
+      sock.addEventListener('error', () => { try { sock.close(); } catch { /* ignore */ } }, { once: true });
+    } else {
+      try {
+        sock.close();
+      } catch {
+        // ignore
+      }
     }
     state.socket = null;
   }
@@ -123,9 +139,13 @@ function scheduleReconnect(url: string, state: WsState, sub: WsSubscriber): void
   if (state.reconnectTimer) return;
   state.reconnectTimer = setTimeout(() => {
     state.reconnectTimer = null;
-    // Only reconnect if there are still subscribers who want auto-reconnect.
-    const anyWantReconnect = Array.from(state.subscribers).some((s) => s.autoReconnect);
+    // Only reconnect if there are still subscribers who want auto-reconnect
+    // AND haven't exhausted their maxRetries budget.
+    const anyWantReconnect = Array.from(state.subscribers).some(
+      (s) => s.autoReconnect && (s.maxRetries === undefined || state.retryCount < s.maxRetries),
+    );
     if (anyWantReconnect && state.subscribers.size > 0) {
+      state.retryCount += 1;
       connectShared(url);
     } else if (state.subscribers.size === 0) {
       teardownShared(url, state);
@@ -150,6 +170,7 @@ function connectShared(url: string): void {
       connected: false,
       reconnectTimer: null,
       reconnectDelay: 1000,
+      retryCount: 0,
       subscribers: new Set(),
     };
     wsRegistry.set(url, state);
@@ -159,6 +180,7 @@ function connectShared(url: string): void {
 
   socket.onopen = () => {
     state!.reconnectDelay = 1000;
+    state!.retryCount = 0;
     notifyConnected(state!, true);
     state!.subscribers.forEach((s) => s.cbRef.current.onOpen?.(new Event('open')));
   };
@@ -215,6 +237,7 @@ export function useWebSocket<T = unknown>(
     autoReconnect = true,
     reconnectDelay: initialDelay = 1000,
     maxReconnectDelay = 30000,
+    maxRetries,
     onOpen,
     onClose,
     onError,
@@ -255,6 +278,7 @@ export function useWebSocket<T = unknown>(
         connected: false,
         reconnectTimer: null,
         reconnectDelay: initialDelay,
+        retryCount: 0,
         subscribers: new Set(),
       };
       wsRegistry.set(resolvedUrl, state);
@@ -266,6 +290,7 @@ export function useWebSocket<T = unknown>(
       autoReconnect,
       initialDelay,
       maxDelay: maxReconnectDelay,
+      maxRetries,
     };
     state.subscribers.add(subscriber);
     subscriberRef.current = subscriber;
@@ -288,7 +313,7 @@ export function useWebSocket<T = unknown>(
       }
     };
     // connectShared/teardownShared are stable module-level functions.
-  }, [enabled, resolvedUrl, autoReconnect, initialDelay, maxReconnectDelay]);
+  }, [enabled, resolvedUrl, autoReconnect, initialDelay, maxReconnectDelay, maxRetries]);
 
   // ---- Send ----
   const send = useCallback(

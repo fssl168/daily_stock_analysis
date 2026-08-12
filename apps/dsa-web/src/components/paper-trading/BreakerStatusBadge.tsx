@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, AlertCircle, AlertOctagon, ShieldCheck } from "lucide-react";
 import { paperTradingApi } from "../../api/paperTrading";
+import { requestQueue } from "../../utils/requestQueue";
 import { Badge } from "../common/Badge";
 import type { BreakerStatusResponse } from "../../types/paperTrading";
 
@@ -27,8 +28,8 @@ export function BreakerStatusBadge({ accountId, className = "" }: Props) {
   useEffect(() => {
     const cancelled = { current: false };
     const fetch = () => {
-      paperTradingApi
-        .getBreakerStatus(accountId)
+      requestQueue
+        .enqueue(() => paperTradingApi.getBreakerStatus(accountId))
         .then((s) => { if (!cancelled.current) { setStatus(s); setError(false); } })
         .catch(() => { if (!cancelled.current) setError(true); })
         .finally(() => { if (!cancelled.current) setLoading(false); });

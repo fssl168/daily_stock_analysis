@@ -211,7 +211,7 @@ class PaperTradingToBacktestAdapter:
             )
             return [
                 {
-                    "date": row.date,
+                    "date": row.date.isoformat() if row.date else "",
                     "net_value": float(row.net_value),
                     "total_assets": float(row.total_assets),
                     "cash": float(row.cash),

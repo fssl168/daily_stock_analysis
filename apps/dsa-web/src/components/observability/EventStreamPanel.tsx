@@ -101,9 +101,9 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
         page_size: pageSize,
         ...(filterType ? { event_type: filterType } : {}),
       });
-      setEvents(resp.items);
-      setTotal(resp.total);
-      setPage(resp.page);
+      setEvents(Array.isArray(resp.items) ? resp.items : []);
+      setTotal(resp.total ?? 0);
+      setPage(resp.page ?? targetPage);
     } catch (e) {
       setError(e instanceof Error ? e.message : '事件加载失败');
     } finally {

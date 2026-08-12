@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, X } from "lucide-react";
 import { paperTradingApi } from "../../api/paperTrading";
+import { requestQueue } from "../../utils/requestQueue";
 import type { ExtremeMarketAlertItem } from "../../types/paperTrading";
 
 interface Props {
@@ -24,8 +25,8 @@ export function ExtremeMarketBanner({ accountId, className = "" }: Props) {
   useEffect(() => {
     let cancelled = false;
     const fetch = () => {
-      paperTradingApi
-        .getExtremeMarket(accountId)
+      requestQueue
+        .enqueue(() => paperTradingApi.getExtremeMarket(accountId))
         .then((data) => {
           if (!cancelled) {
             if (data.isActive) {

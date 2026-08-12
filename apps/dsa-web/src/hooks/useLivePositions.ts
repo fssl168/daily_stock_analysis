@@ -59,6 +59,7 @@ export function useLivePositions({
     url: wsUrl,
     enabled,
     autoReconnect: true,
+    maxRetries: 5,
   });
 
   // Cache latest WS pushes into a price map.

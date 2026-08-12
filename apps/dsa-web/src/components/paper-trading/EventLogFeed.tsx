@@ -100,6 +100,7 @@ export function EventLogFeed({ accountId, maxEvents = 50, className = "" }: Prop
     url: wsUrl,
     enabled: true,
     autoReconnect: true,
+    maxRetries: 5,
   });
 
   // Push incoming events.

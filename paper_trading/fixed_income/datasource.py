@@ -8,6 +8,7 @@ so callers can tell synthetic from real data.
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 from datetime import date
 from typing import Dict, List, Optional, Tuple
@@ -15,6 +16,26 @@ from typing import Dict, List, Optional, Tuple
 from .models import RepoRate, YieldCurve, YieldCurvePoint
 
 logger = logging.getLogger(__name__)
+
+# Cap online fetches so a slow/blocked data source degrades to the offline
+# stub instead of hanging an API request.
+_ONLINE_TIMEOUT_SECONDS = 12.0
+
+
+def _call_with_timeout(fn, timeout: float = _ONLINE_TIMEOUT_SECONDS):
+    """Run ``fn`` in a worker thread with a hard timeout (fallback helper).
+
+    The underlying thread may keep running if the call ignores cancellation;
+    the caller simply stops waiting and uses the stub. Acceptable for
+    one-shot fetch calls behind the request path.
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        future = ex.submit(fn)
+        try:
+            return future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            logger.warning("[fixed_income] online call timed out after %ss; using fallback", timeout)
+            return None
 
 _TENOR_YEARS: Dict[str, float] = {
     "3月": 0.25,
@@ -79,15 +100,17 @@ class FixedIncomeDataSource:
     ) -> YieldCurve:
         if self.use_online:
             try:
-                points, curve_date = self._fetch_curve_online(curve_name)
-                if points:
-                    return YieldCurve(
-                        name=curve_name,
-                        date=curve_date,
-                        points=points,
-                        source="akshare",
-                        used_fallback=False,
-                    )
+                result = _call_with_timeout(lambda: self._fetch_curve_online(curve_name))
+                if result:
+                    points, curve_date = result
+                    if points:
+                        return YieldCurve(
+                            name=curve_name,
+                            date=curve_date,
+                            points=points,
+                            source="akshare",
+                            used_fallback=False,
+                        )
                 logger.warning("[fixed_income] online curve empty; using stub")
             except Exception as exc:  # pragma: no cover - network dependent
                 logger.warning("[fixed_income] online curve failed (%s); using stub", exc)
@@ -140,7 +163,7 @@ class FixedIncomeDataSource:
     def fetch_repo_rates(self) -> List[RepoRate]:
         if self.use_online:
             try:
-                online = self._fetch_repo_online()
+                online = _call_with_timeout(self._fetch_repo_online, 8.0)
                 if online:
                     return online
             except Exception as exc:  # pragma: no cover - network dependent

@@ -610,6 +610,7 @@ class ReflectionEngine:
         review_date,
     ) -> str:
         """Build the LLM prompt for end-of-day reflection."""
+        snap = None
         try:
             snap = self.trading_engine.account_mgr.snapshot(account_id)
             start_assets = float(getattr(snap, "initial_capital", 0) or 0)
@@ -619,8 +620,14 @@ class ReflectionEngine:
             end_assets = 0.0
         daily_pnl = end_assets - start_assets
         daily_pnl_pct = (daily_pnl / start_assets * 100) if start_assets > 0 else 0.0
+        cash = float(getattr(snap, "cash", 0) or 0) if snap else 0.0
+        trades = []
         try:
-            trades = self.trading_engine.order_mgr.list_trades(account_id) if hasattr(self.trading_engine, "order_mgr") else []
+            trades = (
+                self.trading_engine.order_mgr.list_trades(account_id)
+                if hasattr(self.trading_engine, "order_mgr")
+                else []
+            )
             trade_count = len(trades)
         except Exception:
             trade_count = 0
@@ -629,6 +636,12 @@ class ReflectionEngine:
             position_count = len(positions)
         except Exception:
             position_count = 0
+        trades_lines = []
+        for t in trades[:10]:
+            trades_lines.append(
+                f"{t.get('code')} {t.get('side')} x{t.get('quantity', 0)} @{t.get('price', 0)}"
+            )
+        trades_summary = "\n".join(trades_lines) if trades_lines else "(无成交明细)"
         return DAILY_REFLECTION_PROMPT_TEMPLATE.format(
             account_id=account_id,
             review_date=str(review_date),
@@ -639,6 +652,8 @@ class ReflectionEngine:
             trade_count=trade_count,
             decision_count=0,
             position_count=position_count,
+            cash=cash,
+            trades_summary=trades_summary,
             positions_summary=self._positions_summary(account_id),
             decisions_summary="",
         )

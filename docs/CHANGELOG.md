@@ -78,3 +78,7 @@ All notable changes to this project will be documented in this file.
 - [修复] BrokerRouter.resolve_by_account 调用不存在的 `PaperAccountManager.get()` → 改用 `_get_account_by_id`，支持注入 account_mgr（便于测试/隔离 DB）
 - [测试] 固收模块 11 测试 + BrokerRouter 5 测试
 - [文档] 实盘切换前置检查单 `docs/live-trading-switch-checklist.md`（风控/券商/订单/权限/回滚，仅准备不执行实盘）
+- [修复] 每日复盘 prompt 模板占位符缺失（`{cash}`/`{trades_summary}`）导致 `POST /reflections/daily` 500 → 补齐账户现金与成交明细上下文
+- [改进] 固收数据源在线获取超时（12s）→ 自动降级离线 stub，避免 akshare 挂起阻塞 API
+- [新功能] 前端固收分析页面 `/fixed-income`（收益率曲线 / 久期凸性 / 信用利差 / 回购利率），接入路由与侧边导航（`api/fixedIncome.ts`、`pages/FixedIncomePage.tsx`）
+- [文档] 实盘切换检查单逐项核验报告 `docs/live-trading-switch-checklist-review.md`（22 项中 18 通过 / 4 缺口，缺口为券商 sandbox、日终对账、实盘确认流程、风控参数校准）

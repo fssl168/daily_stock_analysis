@@ -328,7 +328,18 @@ T-07（实盘前置） ─── 依赖 T-01/T-02 完成，纸面完备后
 
 ### 未完成（依赖用户/后续阶段）
 
-- **T-04** 固收定位决策（待拍板）
-- **T-05** Agent 真实能力验证（需真实 LLM 密钥）
-- **T-06** 纸面 5 日稳定性演练
-- **T-07** 实盘切换前置清单（纸面完备后启动）
+- ~~T-04~~ **已定：做固收最小闭环**（2026-08-13 落地，见下）
+- ~~T-05~~ **已推进**：LLM 真密钥可用（PM 决策非 fallback 通过；reflection/battle_plan 受沙箱联网搜索限制）
+- ~~T-06~~ **已完成**：5 日演练脚本 `scripts/simulate_trading_days.py`
+- ~~T-07~~ **已完成**：`docs/live-trading-switch-checklist.md` + BrokerRouter 路由修复
+
+### T-04~T-07 执行记录（2026-08-13）
+
+| 任务 | 交付 | 验证 |
+| --- | --- | --- |
+| T-04 固收 | `paper_trading/fixed_income/`（curve/duration/spread/repo）+ `/api/v1/fixed-income/*` | `tests/test_fixed_income.py` 11 passed；API 4 端点 200 |
+| T-05 Agent | LLM 真实调用 OK；PM 决策非 fallback | `LLMToolAdapter.call_text` 返回 OK；决策 id=4（hold, conf=1.0）落库 |
+| T-06 演练 | `scripts/simulate_trading_days.py` | 5 日净值曲线连续（741005→760356） |
+| T-07 前置 | `docs/live-trading-switch-checklist.md`；`broker/router.py` 修复 | `tests/test_broker_router.py` 5 passed |
+
+> T-07 附带修复真实 bug：`BrokerRouter.resolve_by_account` 原来调用不存在的 `PaperAccountManager.get()`（实盘路由无法工作），改为 `_get_account_by_id` 并支持注入 account_mgr。

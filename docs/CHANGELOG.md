@@ -73,3 +73,8 @@ All notable changes to this project will be documented in this file.
 - [文档] 新增纸面交易实施计划与函数级实施清单（docs/paper_trading_next_phase_plan.md、docs/paper_trading_impl_backlog_function_level.md）
 - [修复] HomePage 历史列表 StockBarItem 按钮嵌套（`<button>` 内嵌 `<button>` 触发 React hydration 警告）→ 外层改为 `div[role=button]`，保留点击与键盘（Enter/Space）语义
 - [修复] requestQueue.enqueueBatch 类型签名改为元组泛型，修复 PaperTradingPage loadAll 异构请求的类型推断错误（此前阻塞 tsc/build）
+- [新功能] 固收分析模块（T-04）：`paper_trading/fixed_income/` 收益率曲线/久期凸性/信用利差/回购，数据源 akshare + 离线 stub fallback（used_fallback 标记），`/api/v1/fixed-income/*` 端点（curve/duration/spread/repo）
+- [新功能] 纸面 5 日稳定性演练脚本 `scripts/simulate_trading_days.py`（合成行情驱动日终结算，净值曲线连续性断言）
+- [修复] BrokerRouter.resolve_by_account 调用不存在的 `PaperAccountManager.get()` → 改用 `_get_account_by_id`，支持注入 account_mgr（便于测试/隔离 DB）
+- [测试] 固收模块 11 测试 + BrokerRouter 5 测试
+- [文档] 实盘切换前置检查单 `docs/live-trading-switch-checklist.md`（风控/券商/订单/权限/回滚，仅准备不执行实盘）

@@ -19,6 +19,7 @@ from api.v1.endpoints import (
     auth,
     backtest,
     decision_signals,
+    fixed_income,
     health,
     history,
     intelligence,
@@ -135,4 +136,10 @@ router.include_router(
     observability.router,
     prefix="/observability",
     tags=["Observability"]
+)
+
+router.include_router(
+    fixed_income.router,
+    prefix="/fixed-income",
+    tags=["FixedIncome"]
 )

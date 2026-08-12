@@ -12,7 +12,7 @@ reads the account's ``broker`` field to select the correct adapter.
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from paper_trading.broker.base import BaseBroker
 
@@ -67,18 +67,24 @@ class BrokerRouter:
         except KeyError:
             raise KeyError(f"no broker registered under {name!r}") from None
 
-    def resolve_by_account(self, account_id: int) -> BaseBroker:
+    def resolve_by_account(
+        self, account_id: int, account_mgr: Optional[Any] = None
+    ) -> BaseBroker:
         """Resolve a broker by account id.
 
         Queries ``PaperAccountManager`` for the account's ``broker``
         field (defaults to ``"paper"``) and returns the corresponding
         adapter. Falls back to the ``"paper"`` broker when the named
         broker is not registered.
+
+        ``account_mgr`` may be injected (e.g. a test instance bound to a
+        temp DB); it defaults to the global manager.
         """
         from paper_trading.account import PaperAccountManager
 
-        account = PaperAccountManager().get(account_id)
-        broker_name = str(getattr(account, "broker", "paper")).strip().lower()
+        mgr = account_mgr or PaperAccountManager()
+        account = mgr._get_account_by_id(account_id)
+        broker_name = str(getattr(account, "broker", "paper") or "paper").strip().lower()
         broker = self._brokers.get(broker_name)
         if broker is None:
             logger.warning(

@@ -97,3 +97,5 @@ All notable changes to this project will be documented in this file.
 - [改进] 延迟加载 litellm（`analyzer.py` + `llm_adapter.py` 改为方法内导入），启动 `import` 时间 13.8s→9.0s（省约 4.8s）；首次 LLM 调用时才加载 litellm
 - [改进] `email_sender.py` 延迟 `data_provider.base` 导入（移除一个启动时 data_provider 加载入口）
 - [工具] 新增 `scripts/diagnose_startup.py` 启动分阶段诊断脚本（import / 调度 / 配置 / EventBus / 数据库 / 数据源各阶段计时）
+- [修复] 前端 Agent 慢端点（每日复盘/PM 决策/作战计划/日报生成）设置 300s 超时，修复"连接上游服务超时"报错（此前全局 30s 超时 vs 后端 Agent 慢操作）
+- [改进] Agent 数据工具超时降至 4s（get_realtime_quote/get_daily_history/get_chip_distribution），减少慢/失效数据源对 Agent 循环的阻塞

@@ -359,7 +359,8 @@ export const paperTradingApi = {
       {
         account_id: params.accountId,
         review_date: params.reviewDate,
-      }
+      },
+      { timeout: 300000 },
     );
     return toCamelCase<ReflectionNoteItem>(response.data);
   },
@@ -374,7 +375,8 @@ export const paperTradingApi = {
         account_id: params.accountId,
         target_date: params.targetDate,
         watched_codes: params.watchedCodes,
-      }
+      },
+      { timeout: 300000 },
     );
     return toCamelCase<BattlePlanItem>(response.data);
   },
@@ -419,7 +421,8 @@ export const paperTradingApi = {
       {
         account_id: params.accountId,
         extra_context: params.extraContext,
-      }
+      },
+      { timeout: 300000 },
     );
     return toCamelCase<PMDecisionItem>(response.data);
   },
@@ -513,7 +516,7 @@ export const paperTradingApi = {
     const response = await apiClient.post<Record<string, unknown>>(
       `/api/v1/paper-trading/accounts/${accountId}/daily-report/generate`,
       undefined,
-      { params: { save } }
+      { params: { save }, timeout: 300000 },
     );
     return toCamelCase<DailyReportResponse>(response.data);
   },

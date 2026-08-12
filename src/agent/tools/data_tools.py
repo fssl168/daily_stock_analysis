@@ -253,7 +253,7 @@ def _compact_portfolio_risk(risk: dict, top_n: int = 10) -> dict:
 def _handle_get_realtime_quote(stock_code: str) -> dict:
     """Get real-time stock quote."""
     manager = _get_fetcher_manager()
-    quote = _call_with_timeout(lambda: manager.get_realtime_quote(stock_code), 8.0)
+    quote = _call_with_timeout(lambda: manager.get_realtime_quote(stock_code), 4.0)
     if quote is None:
         return {
             "error": f"No realtime quote available for {stock_code}",
@@ -311,7 +311,7 @@ def _handle_get_daily_history(stock_code: str, days: int = 60) -> dict:
 
     from src.services.history_loader import load_history_df
     loaded = _call_with_timeout(
-        lambda: load_history_df(stock_code, days=effective_days), 10.0
+        lambda: load_history_df(stock_code, days=effective_days), 4.0
     )
     if loaded is None:
         return _append_history_metadata(
@@ -397,7 +397,7 @@ get_daily_history_tool = ToolDefinition(
 def _handle_get_chip_distribution(stock_code: str) -> dict:
     """Get chip distribution data."""
     manager = _get_fetcher_manager()
-    chip = _call_with_timeout(lambda: manager.get_chip_distribution(stock_code), 8.0)
+    chip = _call_with_timeout(lambda: manager.get_chip_distribution(stock_code), 4.0)
 
     if chip is None:
         return {"error": f"No chip distribution data available for {stock_code}"}

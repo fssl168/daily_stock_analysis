@@ -19,9 +19,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Optional, Dict, Any, List, Tuple, Callable
 
-import litellm
 from json_repair import repair_json
-from litellm import Router
 
 from src.agent.llm_adapter import (
     get_thinking_extra_body,
@@ -2537,6 +2535,7 @@ class GeminiAnalyzer:
 
     def _init_litellm(self) -> None:
         """Initialize litellm Router from channels / YAML / legacy keys."""
+        from litellm import Router
         config = self._get_runtime_config()
         if self._get_hermes_config_error(config) is not None:
             logger.error("Analyzer LLM: Hermes channel configuration blocks legacy fallback")
@@ -2840,6 +2839,7 @@ class GeminiAnalyzer:
         router_model_names: set[str],
     ) -> Any:
         """Dispatch a LiteLLM completion through router or direct fallback."""
+        import litellm
         origins = route_deployment_origins(config.llm_model_list, model)
         if origins.is_mixed:
             raise RuntimeError("Hermes/non-Hermes mixed generation route is not supported without deployment-level no-proxy client support")

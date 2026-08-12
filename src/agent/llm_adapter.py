@@ -13,9 +13,6 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-import litellm
-from litellm import Router
-
 from src.config import (
     extra_litellm_params,
     get_api_keys_for_model,
@@ -56,6 +53,7 @@ logger = logging.getLogger(__name__)
 
 def _resolve_litellm_exception(name: str) -> type[BaseException]:
     """Return a catchable LiteLLM exception class even in stubbed test environments."""
+    import litellm
     exc = getattr(litellm, name, None)
     if isinstance(exc, type) and issubclass(exc, BaseException):
         return exc
@@ -377,6 +375,8 @@ class LLMToolAdapter:
 
     def _init_litellm(self) -> None:
         """Initialize litellm Router from channels / YAML / legacy keys."""
+        import litellm
+        from litellm import Router
         config = self._config
         self._legacy_router_model_list = []
         try:
@@ -686,6 +686,7 @@ class LLMToolAdapter:
         timeout: Optional[float] = None,
     ) -> LLMResponse:
         """Call a specific litellm model with OpenAI-format messages and tools."""
+        import litellm
         openai_messages = self._convert_messages(messages, target_model=model)
 
         # Use short model name (without provider prefix) for thinking model lookup
@@ -951,6 +952,7 @@ class LLMToolAdapter:
 
 def register_fallback_model_pricing(models: Iterable[str]) -> None:
     """Register zero-cost pricing for unknown OpenAI-compatible models."""
+    import litellm
     if not models:
         return
     register = getattr(litellm, "register_model", None)

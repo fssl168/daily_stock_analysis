@@ -94,3 +94,6 @@ All notable changes to this project will be documented in this file.
 - [改进] `/api/v1/backtest/performance(/{code})` 无回测汇总时返回 200 零值指标（而非 404），修复前端回测页打开报错
 - [改进] 新增 `AGENT_CONTEXT_COMPRESSION_PROFILE` 的 `aggressive`/`conservative` 档位（与 adjustment_engine 文档一致），消除配置 `conservative` 时"Invalid ... falling back to balanced"启动警告（config + config_registry + 测试）
 - [修复] 持仓管理页点击纸面账户 → 纸面交易页携带 `?accountId=` 并显示对应账户（PortfolioPage navigate 带参 + PaperTradingPage 从 URL 初始化账户）
+- [改进] 延迟加载 litellm（`analyzer.py` + `llm_adapter.py` 改为方法内导入），启动 `import` 时间 13.8s→9.0s（省约 4.8s）；首次 LLM 调用时才加载 litellm
+- [改进] `email_sender.py` 延迟 `data_provider.base` 导入（移除一个启动时 data_provider 加载入口）
+- [工具] 新增 `scripts/diagnose_startup.py` 启动分阶段诊断脚本（import / 调度 / 配置 / EventBus / 数据库 / 数据源各阶段计时）

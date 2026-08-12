@@ -15,7 +15,6 @@ from email.header import Header
 from email.utils import formataddr
 import smtplib
 
-from data_provider.base import normalize_stock_code
 from src.config import Config
 from src.formatters import markdown_to_html_document
 
@@ -78,6 +77,7 @@ class EmailSender:
         """
         if not stock_codes or not self._stock_email_groups:
             return self._email_config['receivers']
+        from data_provider.base import normalize_stock_code
         normalized_codes = [normalize_stock_code(c) for c in stock_codes]
         seen: set = set()
         result: List[str] = []

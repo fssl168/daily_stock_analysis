@@ -54,3 +54,13 @@ All notable changes to this project will be documented in this file.
 - [文档] .env.example 新增 v2 实时量化系统全部环境变量（熔断/风控/WS/信号融合/健康检查/券商/回测等）
 - [文档] 新增 6 份专项文档：架构设计 / 后端差距分析 v2 / 后端实施计划 / 前端差距分析 / 前端差距分析 v2 / 前端实施计划
 - [测试] paper_trading 测试套件 94/94 全部通过
+- [新功能] L1/L2/L3/L4 EventBus 全主动观察集成：四层通过 SystemEventBus 双向互通（24 个 L1/L2 事件类型 + L3/L4 事件），bootstrap 装配层 + 事件落盘审计 + 日志轮转防磁盘堆积
+- [新功能] SystemEventBus 日志轮转与自动落盘：JSONL 格式 + 大小上限轮转（默认 10MB）+ 归档保留（默认 5 个）+ 后台自动落盘线程（默认 300s）+ 进程退出最终 flush
+- [新功能] 可观测性 API（/api/v1/observability/*）：事件流查询/统计/关联追踪、L4 内省报告/系统观察/触发反思、L3 修复效果/配置回归、健康趋势、WS 事件实时推送；payload 自动脱敏
+- [新功能] 可观测性 Web 面板（/observability）：事件流（WS 实时 + REST 降级）、事件统计、L4 内省报告、系统观察、修复效果、配置回归、健康趋势 7 大组件
+- [新功能] L4 干预模式（AdjustmentEngine）：内省建议 → 安全软参数调整（AGENT_MAX_STEPS / 上下文压缩档位），白名单门控 + 默认人工确认 + 事件审计；调整持久化到 .env 重启保留
+- [新功能] Paper Trading A 域补齐：daily-bars 日线端点、策略生命周期状态机 API（DRAFT→LIVE→RETIRED 合法流转 + 400 拦截）、L2 十档深度行情端点
+- [修复] L2Fetcher 无法实例化（BaseFetcher 抽象方法未实现）→ 补抽象 stub
+- [修复] server.py 硬编码本机 .venv-lib 路径 → 改为 DSA_VENV_LIB 环境变量注入
+- [改进] 前端 C 域核验：补齐 Alerts updateRule / Portfolio updateAccount API 封装
+- [文档] 新增系统可观测性与 L4 干预模式手册 docs/observability.md + 前后端对齐计划/评审文档

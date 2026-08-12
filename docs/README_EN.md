@@ -48,6 +48,9 @@ English | [简体中文](../README.md) | [繁體中文](README_CHT.md)
 | Agent strategy chat | Multi-turn Q&A with 15 built-in strategies across Web/Bot/API |
 | Smart import & autocomplete | Image, CSV/Excel, clipboard import; code/name/pinyin/alias autocomplete |
 | Automation & notifications | GitHub Actions, Docker, local scheduler, FastAPI service, and WeChat Work / Feishu / Telegram / Discord / Slack / Email delivery |
+| Four-layer architecture | L1 data infra → L2 analysis engine → L3 self-healing → L4 meta-cognition, fully autonomous |
+| System observability | L1/L2/L3/L4 full passive observation: live event stream (WS), L4 introspection, repair effectiveness, health trends |
+| L4 intervention mode | Introspection-driven gated soft-parameter adjustment (analysis depth / context compression), whitelist safety + audit, manual confirm by default |
 
 > Detailed fields, fundamental P0 timeout semantics, trading rules, data-source priority, Web/API behavior, and troubleshooting live in the [Full Guide](./full-guide_EN.md).
 

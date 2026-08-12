@@ -36,7 +36,6 @@ import type {
   RiskMetricsResponse,
   SignalItem,
   TradeItem,
-  ListenerStatusResponse,
   TradeResultResponse,
 } from '../types/paperTrading';
 
@@ -767,90 +766,6 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
       {error && (
         <p className="mt-3 text-xs text-danger" data-testid="order-error-message">{error}</p>
       )}
-    </Card>
-  );
-};
-
-// ============ Listener Control ============
-
-const ListenerControl: React.FC<{ onStatusChange: () => void }> = ({ onStatusChange }) => {
-  const { t } = useUiLanguage();
-  const [status, setStatus] = useState<ListenerStatusResponse | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  const fetchStatus = useCallback(async () => {
-    try {
-      const s = await requestQueue.enqueue(() => paperTradingApi.getListenerStatus());
-      setStatus(s);
-    } catch {
-      setStatus({ running: false, watchedCodesCount: 0, strategiesCount: 0, markets: [] });
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchStatus();
-    const timer = setInterval(fetchStatus, 5000);
-    return () => clearInterval(timer);
-  }, [fetchStatus]);
-
-  const handleStart = async () => {
-    setLoading(true);
-    try {
-      await paperTradingApi.startListener({ accountId: 1 });
-      await fetchStatus();
-      onStatusChange();
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleStop = async () => {
-    setLoading(true);
-    try {
-      await paperTradingApi.stopListener();
-      await fetchStatus();
-      onStatusChange();
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <Card variant="gradient" padding="md" className="mt-3">
-      <div className="flex items-center justify-between">
-        <span className="label-uppercase">{t('paperTrading.listener.title')}</span>
-        <Badge variant={status?.running ? 'success' : 'default'}>
-          {status?.running ? t('paperTrading.listener.status.running') : t('paperTrading.listener.status.stopped')}
-        </Badge>
-      </div>
-      <div className="mt-2 text-xs text-secondary space-y-1">
-        <p>{t('paperTrading.listener.account')}: {status?.accountId ?? '--'}</p>
-        <p>{t('paperTrading.listener.watched')}: {status?.watchedCodesCount ?? 0} {t('paperTrading.listener.codes')}</p>
-        <p>{t('paperTrading.listener.markets')}: {status?.markets?.join(', ') || '--'}</p>
-      </div>
-      <div className="mt-3 flex gap-2">
-        {status?.running ? (
-          <button
-            type="button"
-            onClick={handleStop}
-            disabled={loading}
-            className="btn-secondary flex-1 text-xs py-2"
-            data-testid="listener-stop-button"
-          >
-            {t('paperTrading.listener.stop')}
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={handleStart}
-            disabled={loading}
-            className="btn-primary flex-1 text-xs py-2"
-            data-testid="listener-start-button"
-          >
-            {t('paperTrading.listener.start')}
-          </button>
-        )}
-      </div>
     </Card>
   );
 };
@@ -2245,9 +2160,6 @@ const PaperTradingPage: React.FC = () => {
 
           {/* Order form */}
           <OrderForm accountId={accountId} onSubmitted={loadAll} />
-
-          {/* Listener control */}
-          <ListenerControl onStatusChange={loadAll} />
         </div>
 
         {/* Right content */}

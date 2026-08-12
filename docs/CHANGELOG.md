@@ -99,3 +99,7 @@ All notable changes to this project will be documented in this file.
 - [工具] 新增 `scripts/diagnose_startup.py` 启动分阶段诊断脚本（import / 调度 / 配置 / EventBus / 数据库 / 数据源各阶段计时）
 - [修复] 前端 Agent 慢端点（每日复盘/PM 决策/作战计划/日报生成）设置 300s 超时，修复"连接上游服务超时"报错（此前全局 30s 超时 vs 后端 Agent 慢操作）
 - [改进] Agent 数据工具超时降至 4s（get_realtime_quote/get_daily_history/get_chip_distribution），减少慢/失效数据源对 Agent 循环的阻塞
+- [新功能] MarketListener 进程级自愈守护 `scripts/paper_trading_supervisor.py`：监控 listener 子进程，异常退出指数退避自动重启；配合系统计划任务可"常驻+自愈"
+- [新功能] WebSocket 行情推送 feed `paper_trading/ws_quote_feed.py`（方案 3）：订阅外部行情 WS，行情到达更新共享 `quote_cache`；MarketListener 主循环 push 优先、轮询兜底。`run_listener.py` 支持 `PAPER_TRADING_WS_QUOTE_URL` 配置启动 feed（未配置则轮询）
+- [测试] ws_quote_feed 消息解析（dict/JSON/Longbridge 字段）与 cache 更新测试
+- [改进] 纸面交易页移除前端"行情监听器"手动启动/停止区域（行情监听改由 `scripts/paper_trading_supervisor.py` 或 `run_listener.py` 管理）

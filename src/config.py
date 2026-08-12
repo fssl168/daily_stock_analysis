@@ -183,6 +183,12 @@ class AgentContextCompressionPreset:
 
 AGENT_CONTEXT_COMPRESSION_DEFAULT_PROFILE = "balanced"
 AGENT_CONTEXT_COMPRESSION_PROFILES: Dict[str, AgentContextCompressionPreset] = {
+    "aggressive": AgentContextCompressionPreset(
+        trigger_tokens=6000,
+        protected_turns=2,
+        summary_target_tokens=700,
+        history_budget_tokens=3000,
+    ),
     "cost": AgentContextCompressionPreset(
         trigger_tokens=6000,
         protected_turns=2,
@@ -194,6 +200,12 @@ AGENT_CONTEXT_COMPRESSION_PROFILES: Dict[str, AgentContextCompressionPreset] = {
         protected_turns=4,
         summary_target_tokens=1500,
         history_budget_tokens=8000,
+    ),
+    "conservative": AgentContextCompressionPreset(
+        trigger_tokens=18000,
+        protected_turns=6,
+        summary_target_tokens=1200,
+        history_budget_tokens=10000,
     ),
     "long_context_raw_first": AgentContextCompressionPreset(
         trigger_tokens=24000,

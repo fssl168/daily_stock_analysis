@@ -692,11 +692,11 @@ class TestAgentContextCompressionFields(unittest.TestCase):
         self.assertEqual(field["ui_control"], "select")
         self.assertEqual(
             field["validation"]["enum"],
-            ["cost", "balanced", "long_context_raw_first"],
+            ["aggressive", "cost", "balanced", "conservative", "long_context_raw_first"],
         )
         self.assertEqual(
             [option["label"] for option in field["options"]],
-            ["成本优先", "均衡推荐", "长上下文原文优先"],
+            ["激进压缩", "成本优先", "均衡推荐", "保守压缩", "长上下文原文优先"],
         )
 
     def test_trigger_and_protected_turns_can_follow_profile_preset(self):

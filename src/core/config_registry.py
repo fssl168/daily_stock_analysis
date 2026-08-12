@@ -4163,8 +4163,10 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "is_editable": True,
         "default_value": "balanced",
         "options": [
+            {"label": "激进压缩", "value": "aggressive"},
             {"label": "成本优先", "value": "cost"},
             {"label": "均衡推荐", "value": "balanced"},
+            {"label": "保守压缩", "value": "conservative"},
             {"label": "长上下文原文优先", "value": "long_context_raw_first"},
         ],
         "validation": {"enum": list(AGENT_CONTEXT_COMPRESSION_PROFILES.keys())},

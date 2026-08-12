@@ -92,3 +92,4 @@ All notable changes to this project will be documented in this file.
 - [改进] Agent 内置技能目录路径修正为 `paper_trading/strategies/configs`，消除启动时 `Skill directory does not exist: strategies` 警告（defaults.py + 3 处测试适配）
 - [改进] 飞书 `lark-oapi` SDK 改为懒加载（仅 App Bot 首次发送时导入），减少启动 import 时间约 3s（feishu_sender + 测试适配）
 - [改进] `/api/v1/backtest/performance(/{code})` 无回测汇总时返回 200 零值指标（而非 404），修复前端回测页打开报错
+- [改进] 新增 `AGENT_CONTEXT_COMPRESSION_PROFILE` 的 `aggressive`/`conservative` 档位（与 adjustment_engine 文档一致），消除配置 `conservative` 时"Invalid ... falling back to balanced"启动警告（config + config_registry + 测试）

@@ -493,7 +493,8 @@ class TestFeishuSender(unittest.TestCase):
         )
         sender = FeishuSender(cfg)
 
-        with mock.patch("src.notification_sender.feishu_sender.FEISHU_SDK_AVAILABLE", False), \
+        with mock.patch("src.notification_sender.feishu_sender._lark", object()), \
+             mock.patch("src.notification_sender.feishu_sender.FEISHU_SDK_AVAILABLE", False), \
              self.assertLogs("src.notification_sender.feishu_sender", level="WARNING") as logs:
             result = sender.send_to_feishu("hello")
 
@@ -660,23 +661,27 @@ class TestFeishuSender(unittest.TestCase):
         create.assert_called_once()
         mock_sleep.assert_not_called()
 
-    @mock.patch("src.notification_sender.feishu_sender.time.sleep")
-    @mock.patch("src.notification_sender.feishu_sender.CreateMessageRequest.builder", side_effect=RuntimeError("bad builder"))
-    def test_app_bot_builder_failure_does_not_retry(self, _mock_builder, mock_sleep):
+    def test_app_bot_builder_failure_does_not_retry(self):
         """Request builder failures are not treated as transient send failures."""
-        cfg = _config(
-            feishu_app_id="cli_app",
-            feishu_app_secret="secret",
-            feishu_chat_id="oc_chat",
-        )
-        sender = FeishuSender(cfg)
-        client, create = _fake_feishu_client(_sdk_response(True))
+        with mock.patch("src.notification_sender.feishu_sender.time.sleep") as mock_sleep, \
+             mock.patch("src.notification_sender.feishu_sender._lark", object()), \
+             mock.patch(
+                 "src.notification_sender.feishu_sender._CreateMessageRequest",
+                 mock.Mock(builder=mock.Mock(side_effect=RuntimeError("bad builder"))),
+             ):
+            cfg = _config(
+                feishu_app_id="cli_app",
+                feishu_app_secret="secret",
+                feishu_chat_id="oc_chat",
+            )
+            sender = FeishuSender(cfg)
+            client, create = _fake_feishu_client(_sdk_response(True))
 
-        result = sender._app_send_raw(client, "text", json.dumps({"text": "bad"}))
+            result = sender._app_send_raw(client, "text", json.dumps({"text": "bad"}))
 
-        self.assertFalse(result)
-        create.assert_not_called()
-        mock_sleep.assert_not_called()
+            self.assertFalse(result)
+            create.assert_not_called()
+            mock_sleep.assert_not_called()
 
 
 class TestEmailSender(unittest.TestCase):

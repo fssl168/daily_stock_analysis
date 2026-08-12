@@ -140,6 +140,33 @@ def get_backtest_results(
         )
 
 
+def _empty_performance_metrics(
+    scope: str, code: Optional[str], eval_window_days: Optional[int]
+) -> PerformanceMetrics:
+    """Return zeroed performance metrics when no backtest rollup exists.
+
+    Keeps the API contract 200 (frontend renders an empty state) instead of 404.
+    """
+    from src.config import get_config
+
+    cfg = get_config()
+    engine_version = str(getattr(cfg, "backtest_engine_version", "v1"))
+    return PerformanceMetrics(
+        scope=scope,
+        code=code,
+        eval_window_days=eval_window_days if eval_window_days is not None else 10,
+        engine_version=engine_version,
+        total_evaluations=0,
+        completed_count=0,
+        insufficient_count=0,
+        long_count=0,
+        cash_count=0,
+        win_count=0,
+        loss_count=0,
+        neutral_count=0,
+    )
+
+
 @router.get(
     "/performance",
     response_model=PerformanceMetrics,
@@ -170,10 +197,7 @@ def get_overall_performance(
             analysis_phase=analysis_phase,
         )
         if summary is None:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": "not_found", "message": "未找到整体回测汇总"},
-            )
+            return _empty_performance_metrics("overall", None, eval_window_days)
         return PerformanceMetrics(**summary)
     except ValueError as exc:
         raise HTTPException(
@@ -221,10 +245,7 @@ def get_stock_performance(
             analysis_phase=analysis_phase,
         )
         if summary is None:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": "not_found", "message": f"未找到 {code} 的回测汇总"},
-            )
+            return _empty_performance_metrics("stock", code, eval_window_days)
         return PerformanceMetrics(**summary)
     except ValueError as exc:
         raise HTTPException(

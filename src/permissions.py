@@ -51,7 +51,7 @@ class require_admin:
             )
         
         user_role = getattr(current_user, 'role', None)
-        if user_role != "admin":
+        if (user_role or "").lower() != "admin":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={
@@ -87,7 +87,7 @@ def require_role(required_role: str):
                 )
             
             user_role = getattr(current_user, 'role', None)
-            if user_role != self.required_role:
+            if (user_role or "").lower() != self.required_role.lower():
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail={

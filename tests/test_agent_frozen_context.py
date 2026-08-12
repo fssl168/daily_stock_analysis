@@ -116,7 +116,7 @@ class DesktopBackendPackagingAssetsTestCase(unittest.TestCase):
     repo_root = Path(__file__).resolve().parent.parent
 
     def test_builtin_strategy_yaml_inventory_matches_expected_desktop_bundle(self):
-        strategies_dir = self.repo_root / "strategies"
+        strategies_dir = self.repo_root / "paper_trading" / "strategies" / "configs"
         strategy_names = sorted(path.stem for path in strategies_dir.glob("*.yaml"))
 
         self.assertEqual(len(strategy_names), 15)

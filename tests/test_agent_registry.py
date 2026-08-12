@@ -32,7 +32,9 @@ from src.agent.skills.base import Skill, SkillManager
 
 
 def _builtin_strategy_names() -> set[str]:
-    strategies_dir = Path(__file__).resolve().parent.parent / "strategies"
+    strategies_dir = (
+        Path(__file__).resolve().parent.parent / "paper_trading" / "strategies" / "configs"
+    )
     return {path.stem for path in strategies_dir.glob("*.yaml")}
 
 

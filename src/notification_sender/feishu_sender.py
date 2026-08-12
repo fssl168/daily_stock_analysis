@@ -35,22 +35,11 @@ logger = logging.getLogger(__name__)
 
 FEISHU_SDK_AVAILABLE = False
 _lark: Any = None  # type: ignore[assignment]
+# lark-oapi is imported lazily inside _ensure_app_client to keep startup fast.
+_CreateMessageRequest: Any = None
+_CreateMessageRequestBody: Any = None
 FEISHU_DOMAIN = "feishu"
 LARK_DOMAIN = "lark"
-try:
-    import lark_oapi as _lark
-    from lark_oapi.api.im.v1 import (
-        CreateMessageRequest,
-        CreateMessageRequestBody,
-    )
-    from lark_oapi.core.const import FEISHU_DOMAIN as _SDK_FEISHU_DOMAIN
-    from lark_oapi.core.const import LARK_DOMAIN as _SDK_LARK_DOMAIN
-
-    FEISHU_DOMAIN = _SDK_FEISHU_DOMAIN
-    LARK_DOMAIN = _SDK_LARK_DOMAIN
-    FEISHU_SDK_AVAILABLE = True
-except ImportError:
-    pass
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -62,6 +51,26 @@ _WEBHOOK_SEND_TIMEOUT_SECONDS = 30
 
 # Sentinel for "client not yet initialised".
 _NO_CLIENT = object()
+
+
+def _ensure_lark_imported() -> None:
+    """Lazily import ``lark-oapi`` once. Safe to call from multiple paths."""
+    global _lark, FEISHU_SDK_AVAILABLE, _CreateMessageRequest, _CreateMessageRequestBody
+    if _lark is not None:
+        return
+    try:
+        import lark_oapi as _lark_mod
+        from lark_oapi.api.im.v1 import (
+            CreateMessageRequest,
+            CreateMessageRequestBody,
+        )
+
+        _lark = _lark_mod
+        _CreateMessageRequest = CreateMessageRequest
+        _CreateMessageRequestBody = CreateMessageRequestBody
+        FEISHU_SDK_AVAILABLE = True
+    except ImportError:
+        FEISHU_SDK_AVAILABLE = False
 
 
 class FeishuSender:
@@ -165,6 +174,7 @@ class FeishuSender:
 
     def _ensure_app_client(self) -> Any:
         """Lazily initialise the ``lark-oapi`` client for App Bot mode."""
+        _ensure_lark_imported()
         if self._app_client is not _NO_CLIENT:
             return self._app_client
         with self._app_client_lock:
@@ -268,16 +278,17 @@ class FeishuSender:
         deterministic and a construction error is a programming error, not
         a transient failure.
         """
+        _ensure_lark_imported()
         if client is None:
             return False
 
         send_uuid = str(uuid_mod.uuid4())
         try:
             req = (
-                CreateMessageRequest.builder()
+                _CreateMessageRequest.builder()
                 .receive_id_type(self._feishu_receive_id_type)
                 .request_body(
-                    CreateMessageRequestBody.builder()
+                    _CreateMessageRequestBody.builder()
                     .receive_id(self._feishu_chat_id)
                     .content(content_json)
                     .msg_type(msg_type)

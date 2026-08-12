@@ -89,3 +89,6 @@ All notable changes to this project will be documented in this file.
 - [改进] Agent 数据工具（get_realtime_quote/get_daily_history/get_chip_distribution）加线程超时（8-10s），慢/失效数据源快速降级（返回 retriable:false）不再阻塞整个 agent 循环
 - [改进] battle_plan 市场综述解析宽松化：从 agent 原始响应恢复 `market_review/sentiment_score/main_theme`（先查 `params`，再查 JSON 顶层，最后接受自然语言/Markdown 报告），提升非 fallback 生成率（网关正常时已验证 non-fallback 落库）
 - [修复] 纸面账户编辑初始金额后现金/净值不变 → `update_account` 按新旧初始资金差额同步调整现金（保留持仓；净值随之变化），附测试
+- [改进] Agent 内置技能目录路径修正为 `paper_trading/strategies/configs`，消除启动时 `Skill directory does not exist: strategies` 警告（defaults.py + 3 处测试适配）
+- [改进] 飞书 `lark-oapi` SDK 改为懒加载（仅 App Bot 首次发送时导入），减少启动 import 时间约 3s（feishu_sender + 测试适配）
+- [改进] `/api/v1/backtest/performance(/{code})` 无回测汇总时返回 200 零值指标（而非 404），修复前端回测页打开报错

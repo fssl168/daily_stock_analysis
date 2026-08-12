@@ -185,6 +185,14 @@ def bootstrap_event_bus(log_path: Optional[Path] = None) -> SystemEventBus:
         logger.info("EventBus already bootstrapped; returning existing singleton")
         return bus
 
+    # 从磁盘加载历史事件（在观察者注册前加载，避免观察者重复处理历史事件）
+    try:
+        loaded = bus.load_from_disk()
+        if loaded > 0:
+            logger.info("EventBus loaded %d historical events from %s", loaded, bus._log_path)
+    except Exception:
+        logger.exception("Failed to load historical events; starting with empty log")
+
     # L4 元认知观察者（订阅全部事件）
     try:
         observer = MetaCognitiveObserver(auto_reflect=False)

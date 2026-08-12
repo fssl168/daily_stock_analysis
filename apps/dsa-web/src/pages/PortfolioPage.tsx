@@ -1097,7 +1097,7 @@ const PortfolioPage: React.FC = () => {
                 key={account.accountId}
                 type="button"
                 data-testid={`paper-account-card-${account.accountId}`}
-                onClick={() => navigate('/paper-trading')}
+                onClick={() => navigate(`/paper-trading?accountId=${account.accountId}`)}
                 className="text-left rounded-xl border border-white/10 bg-white/[0.02] p-4 transition-colors hover:border-cyan-400/40 hover:bg-white/[0.04]"
               >
                 <div className="flex items-start justify-between gap-2">

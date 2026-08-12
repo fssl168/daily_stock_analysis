@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useLocation } from 'react-router-dom';
 import { paperTradingApi } from '../api/paperTrading';
 import { requestQueue } from '../utils/requestQueue';
 import { Card, Badge } from '../components/common';
@@ -1998,7 +1999,15 @@ const DailyReportTab: React.FC<{ accountId: number }> = ({ accountId }) => {
 
 const PaperTradingPage: React.FC = () => {
   const { t } = useUiLanguage();
-  const [accountId, setAccountId] = useState<number>(1);
+  // Honor ?accountId= from the portfolio page so clicking a paper account
+  // opens this page scoped to that account; fall back to account 1.
+  const location = useLocation();
+  const initialAccountId = (() => {
+    const v = new URLSearchParams(location.search).get('accountId');
+    const n = v ? Number.parseInt(v, 10) : NaN;
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  })();
+  const [accountId, setAccountId] = useState<number>(initialAccountId);
   const [accounts, setAccounts] = useState<AccountListItem[]>([]);
   const [snapshot, setSnapshot] = useState<AccountSnapshotResponse | null>(null);
   const [netValue, setNetValue] = useState<NetValuePoint[]>([]);

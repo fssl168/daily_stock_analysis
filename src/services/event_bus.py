@@ -398,6 +398,9 @@ class SystemEventBus:
         轮转策略：写前检查当前日志文件大小，超过 ``max_log_bytes`` 时
         将旧文件重命名为带时间戳的归档（``*.jsonl.N``），再写入新文件；
         超过 ``max_log_files`` 的旧归档会被清理，防止磁盘无限堆积。
+
+        写入策略：覆盖写（truncate），文件内容始终为当前内存中最新事件快照。
+        避免追加写导致的事件重复堆积。
         """
         if not self._log_path:
             return None
@@ -409,19 +412,14 @@ class SystemEventBus:
             self._log_path.parent.mkdir(parents=True, exist_ok=True)
             self._rotate_if_needed()
             self._prune_archives()
-            # JSONL 追加写（每行一个事件；全新写入时清空旧内容）
-            if not self._log_path.exists() or self._log_path.stat().st_size == 0:
-                lines = "\n".join(
-                    json.dumps(e, ensure_ascii=False) for e in events_data
-                )
-                self._log_path.write_text(
-                    (lines + "\n") if lines else "",
-                    encoding="utf-8",
-                )
-            else:
-                with self._log_path.open("a", encoding="utf-8") as f:
-                    for e in events_data:
-                        f.write(json.dumps(e, ensure_ascii=False) + "\n")
+            # 覆盖写：文件内容始终为当前内存中事件快照，避免追加重复
+            lines = "\n".join(
+                json.dumps(e, ensure_ascii=False) for e in events_data
+            )
+            self._log_path.write_text(
+                (lines + "\n") if lines else "",
+                encoding="utf-8",
+            )
             return self._log_path
         except Exception:
             logger.exception("Failed to flush event log to %s", self._log_path)
@@ -473,7 +471,12 @@ class SystemEventBus:
             logger.exception("Failed to prune event log archives")
 
     def load_from_disk(self) -> int:
-        """从磁盘加载事件日志（兼容 JSONL 与旧版 JSON 数组）。"""
+        """从磁盘加载事件日志（兼容 JSONL 与旧版 JSON 数组）。
+
+        加载后同步更新 ``_event_counter``，确保 ``get_event_count()`` 返回值
+        不低于已加载的历史事件数。按 ``event_id`` 去重，防止旧版追加写
+        产生的重复条目污染内存日志。
+        """
         if not self._log_path or not self._log_path.exists():
             return 0
 
@@ -481,26 +484,39 @@ class SystemEventBus:
             raw = self._log_path.read_text(encoding="utf-8").strip()
             if not raw:
                 return 0
-            # 新格式：JSONL（每行一个事件）
+            # 新格式：JSONL（每行一个事件），逐行容错跳过损坏行
             if "\n" in raw:
-                data = [
-                    json.loads(line)
-                    for line in raw.splitlines()
-                    if line.strip()
-                ]
+                data = []
+                for line in raw.splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        data.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        logger.debug("Skipping malformed JSONL line")
             else:
                 # 旧格式：整个文件是一个 JSON 数组
                 data = json.loads(raw)
                 if not isinstance(data, list):
                     return 0
+            loaded = 0
+            seen_ids: set[str] = set()
             with self._lock:
                 for item in data:
                     try:
                         event = SystemEvent.from_dict(item)
+                        eid = event.event_id
+                        if eid in seen_ids:
+                            continue
+                        seen_ids.add(eid)
                         self._event_log.append(event)
+                        loaded += 1
                     except Exception:
                         logger.debug("Skipping malformed event entry in log")
-            return len(data)
+                # 同步事件计数器，确保 get_event_count() 返回值不低于已加载事件数
+                if loaded > self._event_counter:
+                    self._event_counter = loaded
+            return loaded
         except Exception:
             logger.exception("Failed to load event log from %s", self._log_path)
             return 0

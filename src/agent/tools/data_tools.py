@@ -40,6 +40,24 @@ def _get_fetcher_manager():
     return _fetcher_manager_singleton
 
 
+def _call_with_timeout(fn, timeout: float = 8.0):
+    """Run a blocking data fetch in a worker thread with a hard timeout.
+
+    Slow or unresponsive data sources degrade to None (callers return a
+    retriable:False note so the agent skips the tool) instead of blocking
+    the whole agent loop.
+    """
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        future = ex.submit(fn)
+        try:
+            return future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            logger.warning("[data_tools] data fetch timed out after %.1fs", timeout)
+            return None
+
+
 def reset_fetcher_manager() -> None:
     """Clear the cached DataFetcherManager so runtime config reloads take effect."""
     global _fetcher_manager_singleton
@@ -235,7 +253,7 @@ def _compact_portfolio_risk(risk: dict, top_n: int = 10) -> dict:
 def _handle_get_realtime_quote(stock_code: str) -> dict:
     """Get real-time stock quote."""
     manager = _get_fetcher_manager()
-    quote = manager.get_realtime_quote(stock_code)
+    quote = _call_with_timeout(lambda: manager.get_realtime_quote(stock_code), 8.0)
     if quote is None:
         return {
             "error": f"No realtime quote available for {stock_code}",
@@ -292,7 +310,15 @@ def _handle_get_daily_history(stock_code: str, days: int = 60) -> dict:
     effective_days, metadata = _normalize_history_days(days)
 
     from src.services.history_loader import load_history_df
-    df, source = load_history_df(stock_code, days=effective_days)
+    loaded = _call_with_timeout(
+        lambda: load_history_df(stock_code, days=effective_days), 10.0
+    )
+    if loaded is None:
+        return _append_history_metadata(
+            {"error": f"Historical data fetch timed out for {stock_code}"},
+            metadata,
+        )
+    df, source = loaded
 
     if df is None or df.empty:
         return _append_history_metadata(
@@ -371,7 +397,7 @@ get_daily_history_tool = ToolDefinition(
 def _handle_get_chip_distribution(stock_code: str) -> dict:
     """Get chip distribution data."""
     manager = _get_fetcher_manager()
-    chip = manager.get_chip_distribution(stock_code)
+    chip = _call_with_timeout(lambda: manager.get_chip_distribution(stock_code), 8.0)
 
     if chip is None:
         return {"error": f"No chip distribution data available for {stock_code}"}

@@ -892,6 +892,32 @@ class BattlePlanGenerator:
         sentiment = max(0, min(100, sentiment))
         theme = str(params.get("main_theme") or "").strip()
 
+        # Lenient fallback: the agent may put the review fields at the top
+        # level of its JSON (not inside "params"). Recover them from the
+        # raw response so a slightly off-spec LLM output still yields a
+        # non-fallback plan.
+        if (not review or not theme) and getattr(decision, "raw_response", None):
+            try:
+                raw = json.loads(decision.raw_response or "{}")
+                if isinstance(raw, dict):
+                    if not review:
+                        review = str(raw.get("market_review") or params.get("market_review") or "").strip()
+                    if not theme:
+                        theme = str(raw.get("main_theme") or params.get("main_theme") or "").strip()
+                    if "sentiment_score" in raw:
+                        try:
+                            sentiment_raw = raw.get("sentiment_score", sentiment_raw)
+                            sentiment = max(0, min(100, int(sentiment_raw)))
+                        except (ValueError, TypeError):
+                            pass
+            except (TypeError, ValueError):
+                pass
+
+        # Accept the agent's natural-language output (e.g. a Markdown review
+        # report) as the review text when it did not emit strict JSON.
+        if not review and getattr(decision, "raw_response", None):
+            review = str(decision.raw_response).strip()
+
         # If the agent didn't fill the structured fields, treat as failure
         # so the caller falls back to rule-based.
         if not review and not theme:

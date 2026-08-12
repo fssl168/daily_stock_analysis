@@ -86,3 +86,5 @@ All notable changes to this project will be documented in this file.
 - [测试] 券商契约测试 `tests/test_broker_contract.py`（mock easytrader 客户端，submit/query 契约 + 状态映射，11 项）
 - [文档] 券商 sandbox 接入验证方案 `docs/broker-sandbox-verification.md`（easytrader Windows 环境限制、真实 sandbox 单笔闭环步骤、验收标准）
 - [修复] 纸面交易页左下角"实时事件流"悬浮遮挡左侧栏底部内容 → 左侧栏 lg+ 预留底部空间（`lg:pb-80`）
+- [改进] Agent 数据工具（get_realtime_quote/get_daily_history/get_chip_distribution）加线程超时（8-10s），慢/失效数据源快速降级（返回 retriable:false）不再阻塞整个 agent 循环
+- [改进] battle_plan 市场综述解析宽松化：从 agent 原始响应恢复 `market_review/sentiment_score/main_theme`（先查 `params`，再查 JSON 顶层，最后接受自然语言/Markdown 报告），提升非 fallback 生成率（网关正常时已验证 non-fallback 落库）

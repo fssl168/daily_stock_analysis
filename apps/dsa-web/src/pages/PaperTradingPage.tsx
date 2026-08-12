@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { paperTradingApi } from '../api/paperTrading';
+import { requestQueue } from '../utils/requestQueue';
 import { Card, Badge } from '../components/common';
 import { BacktestComparisonPanel } from '../components/paper-trading';
 import { BreakerStatusBadge } from '../components/paper-trading/BreakerStatusBadge';
@@ -778,7 +779,7 @@ const ListenerControl: React.FC<{ onStatusChange: () => void }> = ({ onStatusCha
 
   const fetchStatus = useCallback(async () => {
     try {
-      const s = await paperTradingApi.getListenerStatus();
+      const s = await requestQueue.enqueue(() => paperTradingApi.getListenerStatus());
       setStatus(s);
     } catch {
       setStatus({ running: false, watchedCodesCount: 0, strategiesCount: 0, markets: [] });
@@ -2020,17 +2021,17 @@ const PaperTradingPage: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const [accountsRes, snap, nv, pos, ord, trd, sig, dec, ref, plans] = await Promise.all([
-        paperTradingApi.getAccounts(),
-        paperTradingApi.getAccountSnapshot(accountId),
-        paperTradingApi.getNetValueCurve(accountId, 90),
-        paperTradingApi.listPositions(accountId),
-        paperTradingApi.listOrders(accountId, { limit: 100 }),
-        paperTradingApi.listTrades(accountId, { limit: 100 }),
-        paperTradingApi.listSignals(accountId, { limit: 100 }),
-        paperTradingApi.listPMDecisions(accountId, { limit: 50 }),
-        paperTradingApi.listReflections(accountId, { limit: 50 }),
-        paperTradingApi.listBattlePlans(accountId, 10),
+      const [accountsRes, snap, nv, pos, ord, trd, sig, dec, ref, plans] = await requestQueue.enqueueBatch([
+        () => paperTradingApi.getAccounts(),
+        () => paperTradingApi.getAccountSnapshot(accountId),
+        () => paperTradingApi.getNetValueCurve(accountId, 90),
+        () => paperTradingApi.listPositions(accountId),
+        () => paperTradingApi.listOrders(accountId, { limit: 100 }),
+        () => paperTradingApi.listTrades(accountId, { limit: 100 }),
+        () => paperTradingApi.listSignals(accountId, { limit: 100 }),
+        () => paperTradingApi.listPMDecisions(accountId, { limit: 50 }),
+        () => paperTradingApi.listReflections(accountId, { limit: 50 }),
+        () => paperTradingApi.listBattlePlans(accountId, 10),
       ]);
       setAccounts(accountsRes.accounts || []);
       setSnapshot(snap);

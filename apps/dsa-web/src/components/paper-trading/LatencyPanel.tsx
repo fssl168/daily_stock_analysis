@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 import { Gauge, Timer, AlertCircle } from "lucide-react";
 import { paperTradingApi } from "../../api/paperTrading";
+import { requestQueue } from "../../utils/requestQueue";
 import type { LatencyReport } from "../../types/paperTrading";
 
 interface Props {
@@ -25,8 +26,8 @@ export function LatencyPanel({ accountId, className = "" }: Props) {
   useEffect(() => {
     let cancelled = false;
     const fetch = () => {
-      paperTradingApi
-        .getLatency(accountId)
+      requestQueue
+        .enqueue(() => paperTradingApi.getLatency(accountId))
         .then((r) => { if (!cancelled) { setReport(r); setError(false); } })
         .catch(() => { if (!cancelled) setError(true); })
         .finally(() => { if (!cancelled) setLoading(false); });

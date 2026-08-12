@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { TaskInfo } from '../types/analysis';
 import { useTaskStream } from './useTaskStream';
+import { requestQueue } from '../utils/requestQueue';
 
 type UseDashboardLifecycleOptions = {
   loadInitialHistory: () => Promise<void>;
@@ -40,10 +41,10 @@ export function useDashboardLifecycle({
       return;
     }
 
-    void loadInitialHistory();
-    void loadStockBar();
-    void loadMarketReviewHistory?.();
-    void refreshActiveTasks();
+    requestQueue.enqueue(() => loadInitialHistory());
+    requestQueue.enqueue(() => loadStockBar());
+    if (loadMarketReviewHistory) requestQueue.enqueue(() => loadMarketReviewHistory());
+    requestQueue.enqueue(() => refreshActiveTasks());
   }, [enabled, loadInitialHistory, loadMarketReviewHistory, loadStockBar, refreshActiveTasks]);
 
   useEffect(() => {
@@ -52,10 +53,10 @@ export function useDashboardLifecycle({
     }
 
     const intervalId = window.setInterval(() => {
-      void refreshHistory(true);
-      void refreshStockBar();
-      void refreshMarketReviewHistory?.(true);
-      void refreshActiveTasks();
+      requestQueue.enqueue(() => refreshHistory(true));
+      requestQueue.enqueue(() => refreshStockBar());
+      if (refreshMarketReviewHistory) requestQueue.enqueue(() => refreshMarketReviewHistory(true));
+      requestQueue.enqueue(() => refreshActiveTasks());
     }, 30_000);
 
     return () => window.clearInterval(intervalId);
@@ -68,10 +69,10 @@ export function useDashboardLifecycle({
 
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        void refreshHistory(true);
-        void refreshStockBar();
-        void refreshMarketReviewHistory?.(true);
-        void refreshActiveTasks();
+        requestQueue.enqueue(() => refreshHistory(true));
+        requestQueue.enqueue(() => refreshStockBar());
+        if (refreshMarketReviewHistory) requestQueue.enqueue(() => refreshMarketReviewHistory(true));
+        requestQueue.enqueue(() => refreshActiveTasks());
       }
     };
 
@@ -105,12 +106,12 @@ export function useDashboardLifecycle({
     onTaskCompleted: (task) => {
       syncTaskUpdated(task);
       if (refreshHistoryForCompletedTask) {
-        void refreshHistoryForCompletedTask(task);
+        requestQueue.enqueue(() => refreshHistoryForCompletedTask(task));
       } else {
-        void refreshHistory(true);
+        requestQueue.enqueue(() => refreshHistory(true));
       }
-      void refreshStockBar();
-      void refreshMarketReviewHistory?.(true);
+      requestQueue.enqueue(() => refreshStockBar());
+      if (refreshMarketReviewHistory) requestQueue.enqueue(() => refreshMarketReviewHistory(true));
       scheduleTaskRemoval(task.taskId, 2_000);
     },
     onTaskFailed: (task) => {

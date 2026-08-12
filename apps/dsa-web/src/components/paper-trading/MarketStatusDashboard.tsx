@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 import { WifiOff, Sun, Moon, Clock } from "lucide-react";
 import { paperTradingApi } from "../../api/paperTrading";
+import { requestQueue } from "../../utils/requestQueue";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -49,7 +50,7 @@ export function MarketStatusDashboard({ accountId, className = "" }: Props) {
     let cancelled = false;
     const fetch = async () => {
       try {
-        const s = await paperTradingApi.getListenerStatus();
+        const s = await requestQueue.enqueue(() => paperTradingApi.getListenerStatus());
         if (cancelled || !s) return;
         const markets = s.markets;
         const connected = s.running;

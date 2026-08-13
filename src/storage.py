@@ -485,6 +485,51 @@ class BacktestSummary(Base):
     )
 
 
+class StrategyBacktestResult(Base):
+    """策略级回测结果（策略 × 回测窗口 × 批次唯一）。
+
+    与 backtest_results（分析历史回测）不同：本表按策略模板记录
+    12 股 × 多策略批量回测的绩效，供信号融合权重持久化/重算使用。
+    """
+
+    __tablename__ = 'strategy_backtest_results'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    strategy_name = Column(String(64), nullable=False, index=True)
+    # 回测窗口（批次标识，如 '2026-08-13'）
+    batch_date = Column(Date, nullable=False, index=True)
+    eval_window_days = Column(Integer, nullable=False, default=250)
+    engine_version = Column(String(16), nullable=False, default='v1')
+    computed_at = Column(DateTime, default=datetime.now, index=True)
+
+    # 绩效指标
+    sharpe_ratio = Column(Float)
+    total_return_pct = Column(Float)
+    annual_return_pct = Column(Float)
+    win_rate_pct = Column(Float)
+    max_drawdown_pct = Column(Float)
+    profit_loss_ratio = Column(Float)
+    excess_return_pct = Column(Float)
+    trade_count = Column(Integer, default=0)
+
+    # 融合权重（SoftMax 归一化后的 Sharpe 权重，供 SignalFusionEngine 使用）
+    fusion_weight = Column(Float)
+
+    # 诊断
+    codes_count = Column(Integer, default=0)
+    diagnostics_json = Column(Text)
+
+    __table_args__ = (
+        UniqueConstraint(
+            'strategy_name',
+            'batch_date',
+            'eval_window_days',
+            'engine_version',
+            name='uix_strategy_backtest_batch',
+        ),
+    )
+
+
 class Account(Base):
     """Unified account model combining portfolio and paper-trading account features.
 

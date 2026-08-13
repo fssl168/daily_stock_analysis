@@ -89,6 +89,102 @@ class SignalFusionEngine:
             name: exp_v / total for name, exp_v in zip(metrics.keys(), exp_values)
         }
 
+    # ------------------------------------------------------------------
+    # 权重持久化（DB 支持，供重启后恢复真实权重）
+    # ------------------------------------------------------------------
+
+    def set_weights(self, weights: Dict[str, float]) -> None:
+        """直接设置权重表（用于从 DB 加载）。"""
+        self._strategy_weights = {str(k): float(v) for k, v in (weights or {}).items()}
+
+    def get_weights(self) -> Dict[str, float]:
+        """返回当前权重表（副本）。"""
+        return dict(self._strategy_weights)
+
+    def save_weights_to_db(self, *, batch_date: Optional[Any] = None) -> Dict[str, float]:
+        """把当前权重持久化到 strategy_backtest_results 表（最新一批）。
+
+        Returns:
+            写入的权重表副本。
+        """
+        from datetime import date
+
+        from src.storage import DatabaseManager, StrategyBacktestResult
+
+        if not self._strategy_weights:
+            return {}
+        batch = batch_date or date.today()
+        db = DatabaseManager.get_instance()
+        stored = 0
+        with db.get_session() as session:
+            for name, weight in self._strategy_weights.items():
+                try:
+                    from sqlalchemy import select
+
+                    existing = session.execute(
+                        select(StrategyBacktestResult).where(
+                            StrategyBacktestResult.strategy_name == name,
+                            StrategyBacktestResult.batch_date == batch,
+                            StrategyBacktestResult.eval_window_days == 250,
+                            StrategyBacktestResult.engine_version == "v1",
+                        )
+                    ).scalar_one_or_none()
+                    if existing is not None:
+                        existing.fusion_weight = weight
+                        existing.computed_at = datetime.now()
+                    else:
+                        session.add(StrategyBacktestResult(
+                            strategy_name=name,
+                            batch_date=batch,
+                            eval_window_days=250,
+                            engine_version="v1",
+                            fusion_weight=weight,
+                        ))
+                    stored += 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("save weight %s failed: %s", name, exc)
+            session.commit()
+        logger.info("Fusion weights persisted: %s", stored)
+        return dict(self._strategy_weights)
+
+    @classmethod
+    def load_weights_from_db(cls, *, batch_date: Optional[Any] = None) -> Dict[str, float]:
+        """从 strategy_backtest_results 表加载最新权重。
+
+        Args:
+            batch_date: 指定批次日期；None 时加载最近一个批次的全部权重。
+
+        Returns:
+            {strategy_name: fusion_weight}。
+        """
+        from src.storage import DatabaseManager, StrategyBacktestResult
+
+        db = DatabaseManager.get_instance()
+        try:
+            with db.get_session() as session:
+                from sqlalchemy import select, desc, func
+
+                if batch_date is None:
+                    latest = session.execute(
+                        select(func.max(StrategyBacktestResult.batch_date))
+                        .where(StrategyBacktestResult.fusion_weight.is_not(None))
+                    ).scalar()
+                    if latest is None:
+                        return {}
+                    batch_date = latest
+                rows = session.execute(
+                    select(StrategyBacktestResult).where(
+                        StrategyBacktestResult.batch_date == batch_date,
+                        StrategyBacktestResult.fusion_weight.is_not(None),
+                    )
+                ).scalars().all()
+                weights = {r.strategy_name: float(r.fusion_weight) for r in rows}
+                logger.info("Fusion weights loaded from DB (batch=%s): %s", batch_date, weights)
+                return weights
+        except Exception as exc:  # noqa: BLE001 — 加载失败返回空（引擎用默认权重）
+            logger.warning("load fusion weights failed: %s", exc)
+            return {}
+
     def fuse(self, code: str, signals: List[Signal]) -> Optional[FusedSignal]:
         """融合多个策略的信号，返回 None 表示无共识（hold）。
 

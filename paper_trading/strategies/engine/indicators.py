@@ -145,7 +145,8 @@ class IndicatorSpec:
             return cls(kind="sto", period=int(text[3:]))
 
         # Compound Bollinger / MACD output names referenced directly in rules.
-        if text in ("boll_mid", "boll_upper", "boll_lower", "macd_signal", "macd_hist"):
+        if text in ("boll_mid", "boll_upper", "boll_lower", "macd_signal", "macd_hist",
+                    "boll", "macd", "obv", "vwap"):
             return cls(kind=text, period=None)
 
         # Standard indicators. Some kinds have a default period when omitted.
@@ -225,12 +226,37 @@ def compute_indicators(df: pd.DataFrame, specs: List[IndicatorSpec]) -> Dict[str
             out["macd"] = macd_line
             out["macd_signal"] = signal
             out["macd_hist"] = macd_line - signal
+        elif spec.kind == "macd_signal":
+            # 独立引用 macd_signal：确保 MACD 系列已计算
+            if "macd" not in out:
+                macd_line = close.ewm(span=12, adjust=False).mean() - close.ewm(span=26, adjust=False).mean()
+                out["macd"] = macd_line
+                out["macd_signal"] = macd_line.ewm(span=9, adjust=False).mean()
+                out["macd_hist"] = out["macd"] - out["macd_signal"]
+            out["macd_signal"] = out["macd_signal"]
+        elif spec.kind == "macd_hist":
+            # 独立引用 macd_hist：确保 MACD 系列已计算
+            if "macd" not in out:
+                macd_line = close.ewm(span=12, adjust=False).mean() - close.ewm(span=26, adjust=False).mean()
+                out["macd"] = macd_line
+                out["macd_signal"] = macd_line.ewm(span=9, adjust=False).mean()
+                out["macd_hist"] = out["macd"] - out["macd_signal"]
+            out["macd_hist"] = out["macd_hist"]
         elif spec.kind == "boll":
             mid = close.rolling(window=20, min_periods=20).mean()
             std = close.rolling(window=20, min_periods=20).std(ddof=0)
             out["boll_mid"] = mid
             out["boll_upper"] = mid + 2 * std
             out["boll_lower"] = mid - 2 * std
+        elif spec.kind in ("boll_mid", "boll_upper", "boll_lower"):
+            # 独立引用布林带：确保 boll 系列已计算
+            if "boll_mid" not in out:
+                mid = close.rolling(window=20, min_periods=20).mean()
+                std = close.rolling(window=20, min_periods=20).std(ddof=0)
+                out["boll_mid"] = mid
+                out["boll_upper"] = mid + 2 * std
+                out["boll_lower"] = mid - 2 * std
+            out[spec.kind] = out[spec.kind]
         elif spec.kind == "pct_chg":
             n = spec.period or 1
             out[name] = close.pct_change(periods=n) * 100.0

@@ -44,6 +44,7 @@ from zoneinfo import ZoneInfo
 
 from paper_trading.trading_engine import TradeResult, TradingEngine
 from paper_trading.strategies import RuleEngine, RuleStrategy, Signal, load_strategies_from_dir
+from src.config import get_config
 from src.utils.exchange_clock import ExchangeClock
 
 logger = logging.getLogger(__name__)
@@ -392,6 +393,16 @@ class MarketListener:
 
         # ⑧ DriftDetector (T10 integration) — strategy drift monitoring.
         self._drift_detector = drift_detector
+
+        # ⑩ L4 元认知信号闸门（默认启用）— 偏差检测调节信号仓位/过滤。
+        # L4 引擎不可用时置 None，提交循环自动跳过（fail-open，不阻断交易）。
+        try:
+            from paper_trading.meta_cognitive_gate import L4SignalGate
+
+            self._l4_gate = L4SignalGate()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("L4SignalGate init failed (disabled): %s", exc)
+            self._l4_gate = None
 
         # ⑨ LatencyTracker (T-005 integration) — optional tick latency aggregator.
         self._latency_tracker = latency_tracker
@@ -1091,6 +1102,33 @@ class MarketListener:
                     continue
                 produced += 1
                 try:
+                    # ── L4 元认知信号闸门：偏差检测 → 调节仓位/过滤 ──
+                    # 检测过度自信/确认偏差/锚定等，调节后信号提交。
+                    l4 = getattr(self, "_l4_gate", None)
+                    if l4 is not None:
+                        verdict = l4.evaluate(
+                            signal,
+                            code=code,
+                            price=price,
+                            market=market,
+                            signals_considered=len(code_signals),
+                            signals_dismissed=max(0, len(targets) - len(code_signals)),
+                        )
+                        if not verdict.allowed:
+                            logger.info(
+                                "[MarketListener] L4 blocked: %s %s (%s)",
+                                signal.side, code, verdict.reason,
+                            )
+                            continue
+                        if verdict.adjusted_signal is not None:
+                            signal = verdict.adjusted_signal
+                        if verdict.biases:
+                            logger.info(
+                                "[MarketListener] L4 adjusted %s %s qty x%.1f: %s",
+                                signal.side, code, verdict.quantity_factor,
+                                verdict.biases,
+                            )
+
                     result = self.engine.submit_signal(
                         account_id=self.config.account_id,
                         signal=signal,
@@ -1757,6 +1795,32 @@ def build_default_listener(
         position_review_interval_seconds=position_review_interval_seconds,
         enable_daily_report=enable_daily_report,
     )
+
+    # 默认装配 SignalFusionEngine（若未注入）+ 从 DB 加载持久化权重
+    if signal_fusion is None:
+        try:
+            from paper_trading.signal_fusion import SignalFusionEngine, FusionMethod
+
+            signal_fusion = SignalFusionEngine(method=FusionMethod.WEIGHTED_VOTE)
+            try:
+                from paper_trading.strategy_backtest_service import load_fusion_weights
+
+                persisted = load_fusion_weights()
+                if persisted:
+                    signal_fusion.set_weights(persisted)
+                    logger.info(
+                        "[build_default_listener] fusion weights loaded from DB: %s",
+                        persisted,
+                    )
+                else:
+                    logger.info(
+                        "[build_default_listener] no persisted fusion weights; using defaults"
+                    )
+            except Exception as w_exc:  # noqa: BLE001 — 权重加载失败用默认
+                logger.warning("load fusion weights failed (defaults): %s", w_exc)
+        except Exception as exc:  # noqa: BLE001 — 融合不可用则禁用
+            logger.warning("SignalFusionEngine init failed (fusion disabled): %s", exc)
+            signal_fusion = None
 
     return MarketListener(
         engine=engine,

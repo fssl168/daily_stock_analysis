@@ -209,9 +209,46 @@ class RuntimeSchedulerService:
         return self._force_enabled or bool(getattr(config, "schedule_enabled", False))
 
     def _current_background_tasks(self, config: Config) -> List[Dict[str, Any]]:
+        tasks: List[Dict[str, Any]] = []
         if self._background_tasks_provider is not None:
-            return self._background_tasks_provider(config)
-        return self._current_agent_event_monitor_background_tasks(config)
+            tasks.extend(self._background_tasks_provider(config) or [])
+        else:
+            tasks.extend(self._current_agent_event_monitor_background_tasks(config) or [])
+        # ── 兜底通道：决策信号 → paper 订单转换（常驻，5 分钟一次）──
+        # 处理实时通道漏掉/失败/进程崩溃恢复的 active 信号。幂等，
+        # 与实时通道并发也不会重复下单。
+        try:
+            from src.services.paper_signal_service import convert_pending_signals_job
+
+            sig_name = "decision_signal_converter"
+            if sig_name not in self._background_task_registered_names:
+                tasks.append({
+                    "task": convert_pending_signals_job,
+                    "interval_seconds": 300,
+                    "run_immediately": False,
+                    "name": sig_name,
+                })
+                self._background_task_registered_names.add(sig_name)
+        except Exception as exc:  # noqa: BLE001 — 兜底任务注册失败不影响主调度
+            logger.warning("runtime_scheduler: register decision_signal_converter failed: %s", exc)
+
+        # ── 周重算：策略回测 → 融合权重更新（每 7 天一次，首次不立即跑）──
+        # 避免与盘中 listener 抢数据源；回测结果落库并刷新融合权重。
+        try:
+            from paper_trading.strategy_backtest_service import weekly_backtest_job
+
+            wbt_name = "weekly_strategy_backtest"
+            if wbt_name not in self._background_task_registered_names:
+                tasks.append({
+                    "task": weekly_backtest_job,
+                    "interval_seconds": 7 * 24 * 3600,
+                    "run_immediately": False,
+                    "name": wbt_name,
+                })
+                self._background_task_registered_names.add(wbt_name)
+        except Exception as exc:  # noqa: BLE001 — 周任务注册失败不影响主调度
+            logger.warning("runtime_scheduler: register weekly backtest failed: %s", exc)
+        return tasks
 
     def _current_agent_event_monitor_background_tasks(self, config: Config) -> List[Dict[str, Any]]:
         name = "agent_event_monitor"

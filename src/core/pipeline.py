@@ -2458,6 +2458,43 @@ class StockAnalysisPipeline:
                 summary = summarize_decision_signal(signal_result.get("item"))
                 if summary:
                     setattr(result, "decision_signal_summary", summary)
+
+                # ── 实时通道：决策信号落库后立即转 paper 订单 ──
+                # 幂等（active→consumed 原子更新）；失败仅告警，不阻塞分析流程。
+                try:
+                    item = signal_result.get("item")
+                    if item is not None:
+                        from src.services.paper_signal_service import convert_and_place
+
+                        conv = convert_and_place(item)
+                        if conv.get("order_created"):
+                            logger.info(
+                                "paper_signal_service: 实时转换信号 %s -> 订单(%s, %s) status=%s",
+                                getattr(item, "id", "?"),
+                                getattr(item, "stock_code", ""),
+                                conv.get("side"),
+                                conv.get("order_status"),
+                            )
+                        elif conv.get("converted"):
+                            logger.info(
+                                "paper_signal_service: 信号 %s 已处理（无订单）: %s",
+                                getattr(item, "id", "?"),
+                                conv.get("reason"),
+                            )
+                        else:
+                            logger.warning(
+                                "paper_signal_service: 信号 %s 转换未完成: %s",
+                                getattr(item, "id", "?"),
+                                conv.get("reason"),
+                            )
+                except Exception as conv_exc:  # noqa: BLE001 — 实时转换失败不阻断分析
+                    logger.warning(
+                        "paper_signal_service: 实时转换失败 query_id=%s code=%s error=%s",
+                        query_id,
+                        getattr(result, "code", None),
+                        conv_exc,
+                        exc_info=True,
+                    )
         except Exception as exc:
             logger.warning(
                 "Decision signal extraction skipped after history save: query_id=%s stock_code=%s error=%s",

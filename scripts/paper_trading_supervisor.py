@@ -55,6 +55,23 @@ def main() -> int:
         help="行情 WebSocket URL（如 Longbridge wss://...）。优先于 .env 的 "
              "PAPER_TRADING_WS_QUOTE_URL；不传则读 .env。留空=轮询",
     )
+    # T-08: 装配覆盖开关（默认跟随 .env，可显式关闭某项能力）
+    parser.add_argument(
+        "--no-pm-agent", action="store_true",
+        help="禁用 PM Agent（覆盖 .env PAPER_TRADING_ENABLE_PM_AGENT）",
+    )
+    parser.add_argument(
+        "--no-reflection", action="store_true",
+        help="禁用每日复盘（覆盖 .env PAPER_TRADING_ENABLE_REFLECTION）",
+    )
+    parser.add_argument(
+        "--no-battle-plan", action="store_true",
+        help="禁用次日作战卡（覆盖 .env PAPER_TRADING_ENABLE_BATTLE_PLAN）",
+    )
+    parser.add_argument(
+        "--no-ai-signal-worker", action="store_true",
+        help="禁用 AI 信号 Worker（覆盖 .env PAPER_TRADING_ENABLE_AI_SIGNAL_WORKER）",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -72,6 +89,19 @@ def main() -> int:
     dotenv = _load_dotenv(root)
     ws_url = (args.ws_url or dotenv.get("PAPER_TRADING_WS_QUOTE_URL", "")).strip()
     child_env = dict(os.environ)
+    # T-08: --no-* 覆盖开关透传为子进程环境变量，run_listener 据此装配。
+    if args.no_pm_agent:
+        child_env["PAPER_TRADING_ENABLE_PM_AGENT"] = "false"
+        log.info("覆盖: PAPER_TRADING_ENABLE_PM_AGENT=false")
+    if args.no_reflection:
+        child_env["PAPER_TRADING_ENABLE_REFLECTION"] = "false"
+        log.info("覆盖: PAPER_TRADING_ENABLE_REFLECTION=false")
+    if args.no_battle_plan:
+        child_env["PAPER_TRADING_ENABLE_BATTLE_PLAN"] = "false"
+        log.info("覆盖: PAPER_TRADING_ENABLE_BATTLE_PLAN=false")
+    if args.no_ai_signal_worker:
+        child_env["PAPER_TRADING_ENABLE_AI_SIGNAL_WORKER"] = "false"
+        log.info("覆盖: PAPER_TRADING_ENABLE_AI_SIGNAL_WORKER=false")
     if ws_url:
         child_env["PAPER_TRADING_WS_QUOTE_URL"] = ws_url
         log.info("行情源: WebSocket push (%s)", ws_url[:80])

@@ -248,6 +248,33 @@ class RuntimeSchedulerService:
                 self._background_task_registered_names.add(wbt_name)
         except Exception as exc:  # noqa: BLE001 — 周任务注册失败不影响主调度
             logger.warning("runtime_scheduler: register weekly backtest failed: %s", exc)
+
+        # ── 事后评估：决策信号结果结算（每日一次，首次不立即跑）──
+        # 对已到期的 consumed 决策信号计算 outcome，替代纯手动端点。
+        try:
+            from src.services.decision_signal_outcome_service import (
+                DecisionSignalOutcomeService,
+            )
+
+            def _decision_signal_outcome_job() -> None:
+                try:
+                    DecisionSignalOutcomeService().run_outcomes()
+                except Exception as exc:  # noqa: BLE001 — 评估失败不影响主调度
+                    logger.warning(
+                        "runtime_scheduler: decision_signal_outcome job failed: %s", exc
+                    )
+
+            dso_name = "decision_signal_outcome"
+            if dso_name not in self._background_task_registered_names:
+                tasks.append({
+                    "task": _decision_signal_outcome_job,
+                    "interval_seconds": 24 * 3600,
+                    "run_immediately": False,
+                    "name": dso_name,
+                })
+                self._background_task_registered_names.add(dso_name)
+        except Exception as exc:  # noqa: BLE001 — 评估任务注册失败不影响主调度
+            logger.warning("runtime_scheduler: register decision_signal_outcome failed: %s", exc)
         return tasks
 
     def _current_agent_event_monitor_background_tasks(self, config: Config) -> List[Dict[str, Any]]:

@@ -334,55 +334,35 @@ class PaperTradingService:
         if self._listener is not None and self._listener.is_running():
             self._listener.stop(timeout=2.0)
 
-        from paper_trading.market_listener import build_default_listener
+        # T-08: 统一生产装配。与 run_listener.py 共用 build_full_listener，
+        # 消除两条启动路径的能力漂移；PM/复盘/作战卡/漂移/延迟按 flag 注入。
+        from paper_trading.market_listener import build_full_listener
 
-        # T-007/T-005/T-02: reuse the shared quote cache (the same instance the
-        # engine prices off) and tune freshness to the listener tick.
+        # Reuse the shared quote cache (the same instance the engine prices
+        # off) and tune freshness to the listener tick.
         quote_cache = self.quote_cache()
         quote_cache._max_age = max(float(request.tick_interval_seconds or 10.0) * 2.0, 10.0)
-        latency_tracker = self.tick_latency()
 
         watched_codes = request.watched_codes or list(
             getattr(self.config, "stock_list", []) or []
         )
         markets = set(request.markets) if request.markets else {"cn"}
 
-        # PM agent / reflection / battle plan hooks are wired only when
-        # their respective flags are enabled. This keeps the listener
-        # lightweight when LLM credentials are missing.
-        pm_agent = None
-        if getattr(self.config, "paper_trading_enable_pm_agent", False):
-            try:
-                pm_agent = self.pm_agent()
-            except Exception as exc:
-                logger.warning(
-                    "[PaperTradingService] PM agent unavailable, listener will run without it: %s",
-                    exc,
-                )
-
-        reflection_engine = self.reflection_engine() if request.enable_daily_reflection else None
-        battle_plan_generator = (
-            self.battle_plan_generator() if request.enable_battle_plan else None
-        )
-
-        listener = build_default_listener(
+        listener = build_full_listener(
             config=self.config,
             account_id=request.account_id,
             watched_codes=watched_codes,
             markets=markets,
             tick_interval_seconds=request.tick_interval_seconds or 10.0,
             enable_strategies=request.enable_strategies,
-            pm_agent=pm_agent,
-            reflection_engine=reflection_engine,
-            battle_plan_generator=battle_plan_generator,
-            pm_decision_interval_seconds=request.pm_decision_interval_seconds,
             enable_daily_reflection=request.enable_daily_reflection,
             enable_battle_plan=request.enable_battle_plan,
+            pm_decision_interval_seconds=request.pm_decision_interval_seconds,
             quote_cache=quote_cache,
-            latency_tracker=latency_tracker,
-            signal_fusion=self.signal_fusion(),
-            feature_pipeline=self.feature_pipeline(),
-            drift_detector=self.drift_detector(),
+            latency_tracker=self.tick_latency(),
+            # T-10: 成交/拒单回调——成交即触发复盘（reflect_on_trade）。
+            on_trade_executed=self._on_trade_executed,
+            on_signal_rejected=self._on_signal_rejected,
         )
         listener.start()
         self._listener = listener

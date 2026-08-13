@@ -1593,6 +1593,7 @@ class MarketListener:
 def build_default_listener(
     config: Any,
     account_id: int,
+    db_manager: Optional[Any] = None,
     watched_codes: Optional[List[str]] = None,
     strategy_dir: Optional[str] = None,
     data_fetcher: Optional[Any] = None,
@@ -1744,6 +1745,7 @@ def build_default_listener(
             )
             circuit_breaker = CircuitBreaker(config=breaker_cfg, account_id=account_id)
         engine = TradingEngine(
+            db_manager=db_manager,
             agent_reviewer=agent_reviewer,
             circuit_breaker=circuit_breaker,
             on_trade_executed=on_trade_executed,
@@ -1838,4 +1840,181 @@ def build_default_listener(
         latency_tracker=latency_tracker,
         feature_pipeline=feature_pipeline,
         drift_detector=drift_detector,
+    )
+
+
+def build_full_listener(
+    config: Any,
+    account_id: int,
+    *,
+    db_manager: Optional[Any] = None,
+    watched_codes: Optional[List[str]] = None,
+    markets: Optional[Set[str]] = None,
+    enable_strategies: bool = True,
+    enable_pm_agent: Optional[bool] = None,
+    enable_daily_reflection: Optional[bool] = None,
+    enable_battle_plan: Optional[bool] = None,
+    tick_interval_seconds: Optional[float] = None,
+    strategy_dir: Optional[str] = None,
+    quote_cache: Optional[Any] = None,
+    latency_tracker: Optional[Any] = None,
+    pm_decision_interval_seconds: Optional[float] = None,
+    on_trade_executed: Optional[Any] = None,
+    on_signal_rejected: Optional[Any] = None,
+) -> MarketListener:
+    """Build a MarketListener with the full self-learning / self-reflection
+    wiring (T-08).
+
+    This is the canonical production assembly used by BOTH ``run_listener.py``
+    (supervisor / .bat launcher) and the API ``start_listener`` endpoint, so
+    the two startup paths no longer drift apart.
+
+    ``quote_cache`` / ``latency_tracker`` may be injected so the API can share
+    the same singletons it uses for engine pricing and latency reporting; when
+    omitted (standalone listener) fresh instances are created.
+
+    Each optional capability is fault-tolerant: if it cannot be built (e.g.
+    missing LLM credentials, broken import), that component degrades to None
+    and the listener still runs rule-engine execution.
+    """
+    # Resolve capability flags from config unless explicitly overridden.
+    if enable_pm_agent is None:
+        enable_pm_agent = bool(
+            getattr(config, "paper_trading_enable_pm_agent", False)
+        )
+    if enable_daily_reflection is None:
+        enable_daily_reflection = bool(
+            getattr(config, "paper_trading_listener_enable_daily_reflection", True)
+        )
+    if enable_battle_plan is None:
+        enable_battle_plan = bool(
+            getattr(config, "paper_trading_listener_enable_battle_plan", True)
+        )
+
+    # Shared quote cache + tick latency aggregator (single instances).
+    if quote_cache is None:
+        try:
+            from paper_trading.quote_cache import SharedQuoteCache
+
+            quote_cache = SharedQuoteCache()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[build_full_listener] quote_cache unavailable: %s", exc)
+
+    if latency_tracker is None:
+        try:
+            from src.utils.latency_tracker import TickLatencyAggregator
+
+            latency_tracker = TickLatencyAggregator(window_size=100)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[build_full_listener] latency_tracker unavailable: %s", exc)
+
+    # PM agent (self-decision) — independent of reflection/battle plan.
+    pm_agent = None
+    if enable_pm_agent:
+        try:
+            from src.agent.portfolio_manager_agent import build_portfolio_manager_agent
+
+            pm_agent = build_portfolio_manager_agent(
+                config=config, account_id=account_id
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[build_full_listener] PM agent unavailable: %s", exc)
+
+    # Reflection engine (self-learning).
+    reflection_engine = None
+    if enable_daily_reflection:
+        try:
+            from paper_trading.reflection import build_reflection_engine
+
+            reflection_engine = build_reflection_engine(
+                config=config, account_id=account_id
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[build_full_listener] reflection engine unavailable: %s", exc
+            )
+
+    # Battle-plan generator (self-reflection).
+    battle_plan_generator = None
+    if enable_battle_plan:
+        try:
+            from paper_trading.battle_plan import build_battle_plan_generator
+
+            battle_plan_generator = build_battle_plan_generator(
+                config=config, account_id=account_id
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[build_full_listener] battle plan generator unavailable: %s", exc
+            )
+
+    # Drift detector (strategy drift) + feature pipeline (T13).
+    drift_detector = None
+    try:
+        from paper_trading.drift_detector import DriftDetector
+
+        drift_detector = DriftDetector()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[build_full_listener] drift detector unavailable: %s", exc)
+
+    # Signal fusion engine (multi-strategy weighted vote + persisted weights).
+    signal_fusion = None
+    try:
+        from paper_trading.signal_fusion import FusionMethod, SignalFusionEngine
+
+        signal_fusion = SignalFusionEngine(
+            method=FusionMethod.WEIGHTED_VOTE,
+            consensus_threshold=float(
+                getattr(config, "signal_fusion_consensus_threshold", 0.60)
+            ),
+        )
+        try:
+            from paper_trading.strategy_backtest_service import load_fusion_weights
+
+            persisted = load_fusion_weights()
+            if persisted:
+                signal_fusion.set_weights(persisted)
+        except Exception as w_exc:  # noqa: BLE001
+            logger.warning("load fusion weights failed (defaults): %s", w_exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[build_full_listener] signal_fusion unavailable: %s", exc)
+
+    feature_pipeline = None
+    try:
+        from paper_trading.features import FeatureConfig, FeaturePipeline
+
+        feature_pipeline = FeaturePipeline(
+            [
+                FeatureConfig("sma_crossover", "momentum", "sma_crossover", {"fast": 5, "slow": 20}),
+                FeatureConfig("rsi", "momentum", "rsi", {"period": 14}),
+                FeatureConfig("volume_spike", "volume", "volume_spike", {"multiplier": 2.0}),
+                FeatureConfig("ma_alignment", "trend", "ma_alignment", {"short": 5, "long": 20}),
+                FeatureConfig("bid_ask_imbalance", "market_microstructure", "bid_ask_imbalance", {}),
+            ]
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[build_full_listener] feature pipeline unavailable: %s", exc)
+
+    return build_default_listener(
+        config=config,
+        account_id=account_id,
+        db_manager=db_manager,
+        watched_codes=watched_codes,
+        strategy_dir=strategy_dir,
+        markets=markets,
+        tick_interval_seconds=tick_interval_seconds or 10.0,
+        enable_strategies=enable_strategies,
+        pm_agent=pm_agent,
+        reflection_engine=reflection_engine,
+        battle_plan_generator=battle_plan_generator,
+        pm_decision_interval_seconds=pm_decision_interval_seconds,
+        enable_daily_reflection=enable_daily_reflection,
+        enable_battle_plan=enable_battle_plan,
+        quote_cache=quote_cache,
+        latency_tracker=latency_tracker,
+        signal_fusion=signal_fusion,
+        feature_pipeline=feature_pipeline,
+        drift_detector=drift_detector,
+        on_trade_executed=on_trade_executed,
+        on_signal_rejected=on_signal_rejected,
     )

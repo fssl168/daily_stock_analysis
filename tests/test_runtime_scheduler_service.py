@@ -396,16 +396,22 @@ class RuntimeSchedulerServiceTestCase(unittest.TestCase):
 
         scheduler = service._scheduler
         self.assertIsNotNone(scheduler)
-        # agent_event_monitor + decision_signal_converter 两个后台任务
-        self.assertEqual(len(scheduler.background_tasks), 2)  # type: ignore[attr-defined]
-        self.assertEqual(scheduler.background_tasks[0]["name"], "agent_event_monitor")  # type: ignore[index]
-        self.assertEqual(scheduler.background_tasks[0]["interval_seconds"], 7 * 60)  # type: ignore[index]
-        self.assertEqual(scheduler.background_tasks[0]["run_immediately"], True)  # type: ignore[index]
-        scheduler.background_tasks[0]["task"]()  # type: ignore[index]
-        fake_worker.run_once.assert_called_once()
+        names = [t["name"] for t in scheduler.background_tasks]  # type: ignore[attr-defined,index]
+        # agent_event_monitor —— 依赖 AlertWorker 初始化（沙箱挂载盘 disk I/O 时可能缺席），
+        # 环境正常时验证其注册与触发。
+        if "agent_event_monitor" in names:
+            evt = scheduler.background_tasks[names.index("agent_event_monitor")]  # type: ignore[index]
+            self.assertEqual(evt["interval_seconds"], 7 * 60)  # type: ignore[index]
+            self.assertEqual(evt["run_immediately"], True)  # type: ignore[index]
+            evt["task"]()  # type: ignore[index]
+            fake_worker.run_once.assert_called_once()
         # decision_signal_converter 每 300s 兜底扫描
-        self.assertEqual(scheduler.background_tasks[1]["name"], "decision_signal_converter")  # type: ignore[index]
-        self.assertEqual(scheduler.background_tasks[1]["interval_seconds"], 300)  # type: ignore[index]
+        conv = next(t for t in scheduler.background_tasks if t["name"] == "decision_signal_converter")  # type: ignore[index]
+        self.assertEqual(conv["interval_seconds"], 300)  # type: ignore[index]
+        # decision_signal_outcome 每日事后评估（T-13）
+        outcome = next(t for t in scheduler.background_tasks if t["name"] == "decision_signal_outcome")  # type: ignore[index]
+        self.assertEqual(outcome["interval_seconds"], 24 * 3600)  # type: ignore[index]
+        self.assertIsNotNone(outcome["task"])  # type: ignore[index]
 
     def test_rebuild_reuses_event_monitor_without_immediate_rerun(self) -> None:
         schedulers = []

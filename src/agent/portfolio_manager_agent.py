@@ -627,9 +627,13 @@ class PortfolioManagerAgent:
             if kw in text_lower:
                 return PMDecision(
                     action=act,
-                    reason=f"inferred from keyword '{kw}' (JSON parse failed)",
+                    reason=(
+                        f"inferred from keyword '{kw}' (JSON parse failed); "
+                        "treated as fallback"
+                    ),
                     confidence=0.3,
                     raw_response=raw_text,
+                    used_fallback=True,  # T-11: 关键词推断是 fallback，不是真实决策
                 )
 
         # Cannot determine — apply fallback.

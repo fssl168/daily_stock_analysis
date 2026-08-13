@@ -1229,6 +1229,10 @@ class Config:
     paper_trading_ai_signal_min_confidence: float = 0.7
     # Minimum cooldown between signals for the same stock (seconds), to avoid spamming
     paper_trading_ai_signal_cooldown_seconds: float = 30.0
+    # T-12: 是否启动独立 AISignalWorker 线程（周期性 AI 分析 → 信号队列 → listener 消费）
+    paper_trading_enable_ai_signal_worker: bool = False
+    # AISignalWorker 分析间隔（秒，默认 1 小时）
+    paper_trading_ai_signal_worker_interval_seconds: float = 3600.0
 
     # === 配置校验模式 ===
     # CONFIG_VALIDATE_MODE=warn (default): log all issues but always continue startup
@@ -2249,6 +2253,12 @@ class Config:
             paper_trading_enable_battle_plan_ai=os.getenv(
                 'PAPER_TRADING_ENABLE_BATTLE_PLAN_AI', 'false'
             ).lower() == 'true',
+            paper_trading_enable_ai_signal_worker=os.getenv(
+                'PAPER_TRADING_ENABLE_AI_SIGNAL_WORKER', 'false'
+            ).lower() == 'true',
+            paper_trading_ai_signal_worker_interval_seconds=float(
+                os.getenv('PAPER_TRADING_AI_SIGNAL_WORKER_INTERVAL_SECONDS', '3600.0')
+            ),
             paper_trading_reflection_timeout_seconds=float(
                 os.getenv('PAPER_TRADING_REFLECTION_TIMEOUT_SECONDS', '180.0')
             ),

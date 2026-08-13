@@ -429,9 +429,12 @@ class PaperAccountManager:
                 .order_by(desc(PaperNetValue.date))
                 .limit(1)
             ).scalar_one_or_none()
-            if prev is not None and prev.total_assets:
+            if prev is not None and prev.net_value:
+                # 用归一化净值对比（net_value = total/initial），避免账户
+                # reset 导致 initial_capital 变化时 total_assets 跳变产生的
+                # 虚假日收益（如 reset 后 900%）。
                 daily_return_pct = (
-                    (snap.total_assets - float(prev.total_assets)) / float(prev.total_assets) * 100.0
+                    (net_value - float(prev.net_value)) / float(prev.net_value) * 100.0
                 )
 
             if mode == 'insert':

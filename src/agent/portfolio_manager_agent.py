@@ -64,7 +64,7 @@ PM_SYSTEM_PROMPT = """你是模拟交易系统的 AI 基金经理,负责管理�
 
 ## 输出格式(严格 JSON)
 
-决策完成后,**必须**输出以下 JSON(不要附加任何解释文字):
+决策完成后,**只输出一个 JSON 对象**,禁止任何 Markdown、表格、标题、解释文字或代码围栏。输出必须以 `{` 开始、以 `}` 结束:
 
 {
   "action": "buy | sell | hold | cancel | modify | plan",
@@ -84,6 +84,8 @@ PM_SYSTEM_PROMPT = """你是模拟交易系统的 AI 基金经理,负责管理�
   "confidence": 0.0
 }
 
+⚠️ **confidence 必填**：confidence 是 0.0~1.0 的数值，表示你对该决策的确信度。观望/持仓决策也可以给高置信度（如 0.7~0.8），不要省略或填 0。
+
 action 取值:
 - buy: 买入开仓或加仓
 - sell: 卖出平仓或减仓
@@ -91,6 +93,8 @@ action 取值:
 - cancel: 撤销指定挂单
 - modify: 修改挂单价格/数量
 - plan: 仅生成作战计划,不下单(用于盘后或市场判断不明确时)
+
+⚠️ 反例(禁止的输出形式): 不要输出"我建议买入..."、不要输出 markdown 表格/报告、不要输出带 ```json 围栏的代码块。输出必须可以被 json.loads 直接解析。
 """
 
 
@@ -119,6 +123,8 @@ PM_USER_PROMPT_TEMPLATE = """## 当前账户快照
 ## 任务
 
 请基于以上信息、绩效摘要和工具调用结果,做出一个交易决策。如果当前无明确信号,请输出 action="hold" 或 action="plan"。
+
+**输出要求(必须遵守):** 最终回复**只输出 JSON 决策对象**（格式见 system prompt），不要输出分析报告、markdown 表格或任何解释文字。获取账户/持仓状态请使用 paper_trading_get_account_snapshot / paper_trading_list_positions / paper_trading_get_open_orders 工具（paper 账户专用），不要使用 get_portfolio_snapshot（那是 portfolio 账户工具）。
 """
 
 
@@ -556,6 +562,49 @@ class PortfolioManagerAgent:
     # Decision parsing
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
+        """Extract the first balanced {...} JSON object from arbitrary text.
+
+        Handles markdown fences (```json), leading prose, and trailing text.
+        Returns the parsed dict or None if no valid object is found.
+        """
+        if not text:
+            return None
+        start = text.find("{")
+        if start == -1:
+            return None
+        depth = 0
+        in_string = False
+        escape = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+                continue
+            if ch == '"':
+                in_string = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[start:i + 1])
+                    except (TypeError, ValueError):
+                        return None
+        return None
+
+
+    # ------------------------------------------------------------------
+    # Decision parsing
+    # ------------------------------------------------------------------
+
     def _parse_decision(self, raw_text: str) -> PMDecision:
         """Parse the agent's JSON decision leniently.
 
@@ -579,14 +628,18 @@ class PortfolioManagerAgent:
         try:
             verdict = json.loads(raw_text)
         except (TypeError, ValueError):
-            try:
-                fixed = repair_json(raw_text, return_objects=True)
-                if isinstance(fixed, dict):
-                    verdict = fixed
-                else:
-                    verdict = json.loads(fixed)
-            except Exception:
-                verdict = None
+            # Lenient: extract the first balanced JSON object from the text
+            # (tolerates markdown fences / surrounding prose).
+            verdict = self._extract_json_object(raw_text)
+            if verdict is None:
+                try:
+                    fixed = repair_json(raw_text, return_objects=True)
+                    if isinstance(fixed, dict):
+                        verdict = fixed
+                    else:
+                        verdict = json.loads(fixed)
+                except Exception:
+                    verdict = None
 
         if isinstance(verdict, dict) and "action" in verdict:
             action = str(verdict.get("action", "")).strip().lower()
@@ -912,15 +965,17 @@ def register_paper_trading_tools(
             rows = engine.position_mgr.list_positions(acct_id)
             out = []
             for p in rows:
+                # list_positions returns dicts (PositionSnapshot.to_dict()).
+                get = p.get if isinstance(p, dict) else lambda k, d=None: getattr(p, k, d)
                 out.append({
-                    "code": p.code,
-                    "name": p.name,
-                    "quantity": float(p.quantity),
-                    "available_quantity": float(p.available_quantity),
-                    "avg_cost": float(p.avg_cost),
-                    "last_price": float(p.last_price or 0.0),
-                    "stop_loss": float(p.stop_loss or 0.0),
-                    "take_profit": float(p.take_profit or 0.0),
+                    "code": get("code"),
+                    "name": get("name"),
+                    "quantity": float(get("quantity", 0.0) or 0.0),
+                    "available_quantity": float(get("available_quantity", 0.0) or 0.0),
+                    "avg_cost": float(get("avg_cost", 0.0) or 0.0),
+                    "last_price": float(get("last_price", 0.0) or 0.0),
+                    "stop_loss": float(get("stop_loss", 0.0) or 0.0),
+                    "take_profit": float(get("take_profit", 0.0) or 0.0),
                 })
             return {"positions": out, "count": len(out)}
         except Exception as exc:

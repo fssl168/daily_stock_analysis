@@ -2008,6 +2008,22 @@ def build_full_listener(
                 "[build_full_listener] reflection engine unavailable: %s", exc
             )
 
+    # T-10: 成交即复盘 — 默认把 on_trade_executed 接到 reflection engine
+    # (调用方显式传入的回调优先)。
+    if on_trade_executed is None and reflection_engine is not None:
+        def _default_trade_reflection_cb(
+            result: Any, trade_id: Optional[int] = None
+        ) -> None:
+            try:
+                if trade_id is not None:
+                    reflection_engine.reflect_on_trade(trade_id=trade_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "[build_full_listener] post-trade reflection failed: %s", exc
+                )
+
+        on_trade_executed = _default_trade_reflection_cb
+
     # Battle-plan generator (self-reflection).
     battle_plan_generator = None
     if enable_battle_plan:

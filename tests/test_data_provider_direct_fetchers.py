@@ -47,7 +47,9 @@ class TestSinaSymbolMapping(unittest.TestCase):
         self.assertEqual(_to_sina_symbol("920748.BJ"), "bj920748")
 
     def test_unsupported_markets_skipped(self):
-        self.assertEqual(_to_sina_symbol("00700.HK"), "")
+        # HK 已支持 (T-15); 美股走 gb_ 接口被 403 拒, 仍跳过; 空输入跳过
+        self.assertEqual(_to_sina_symbol("00700.HK"), "hk00700")
+        self.assertEqual(_to_sina_symbol("HK00700"), "hk00700")
         self.assertEqual(_to_sina_symbol("AAPL"), "")
         self.assertEqual(_to_sina_symbol(""), "")
 
@@ -104,8 +106,11 @@ class TestEastmoneySecidMapping(unittest.TestCase):
         self.assertEqual(_to_em_secid("830799"), "0.830799")
 
     def test_unsupported_markets_skipped(self):
-        self.assertEqual(_to_em_secid("00700.HK"), "")
-        self.assertEqual(_to_em_secid("AAPL"), "")
+        # HK/US 已支持 (T-15)
+        self.assertEqual(_to_em_secid("00700.HK"), "116.00700")
+        self.assertEqual(_to_em_secid("AAPL"), "105.AAPL")
+        self.assertEqual(_to_em_secid("HK00700"), "116.00700")
+        self.assertEqual(_to_em_secid(""), "")
 
 
 class TestEastmoneyScale(unittest.TestCase):

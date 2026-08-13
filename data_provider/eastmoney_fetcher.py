@@ -99,12 +99,22 @@ class EastmoneyFetcher(BaseFetcher):
         data = payload.get("data") if isinstance(payload, dict) else None
         if not isinstance(data, dict):
             return None
-        return _build_quote(data, stock_code)
+        # 港美股价格字段精度为厘(×1000)，A股为分(×100)
+        divisor = 1000.0 if secid.startswith(("116.", "105.")) else 100.0
+        return _build_quote(data, stock_code, divisor=divisor)
 
 
 def _to_em_secid(stock_code: str) -> str:
     code = normalize_stock_code(stock_code)
-    if not code or not code.isdigit() or len(code) != 6:
+    if not code:
+        return ""
+    # 港股: HK00700 -> 116.00700
+    if code[:2].lower() == "hk" and len(code) == 7 and code[2:].isdigit():
+        return f"116.{code[2:]}"
+    # 美股: AAPL -> 105.AAPL
+    if code.isalpha() and 1 <= len(code) <= 5:
+        return f"105.{code.upper()}"
+    if not code.isdigit() or len(code) != 6:
         return ""
     if is_bse_code(code):
         # 北交所（43/83/87/920 号段）：东财 push2 与深市共用 0 市场段。
@@ -114,12 +124,12 @@ def _to_em_secid(stock_code: str) -> str:
     return f"0.{code}"      # 深交所
 
 
-def _scale(value: Any) -> Optional[float]:
-    """东财价格字段为 ×100 (分), 无效值返回 None.
+def _scale(value: Any, divisor: float = 100.0) -> Optional[float]:
+    """东财价格字段为整数精度 (A股分 ×100 / 港美股厘 ×1000), 无效值返回 None.
 
-    前提：push2 的 f43/f44/f45/f46/f60 等价格字段以「分」为单位返回整数
-    （如 168200 = 1682.00 元）。若某接口改为返回带小数的价格，需要先识别
-    再决定是否缩放，避免整体缩 100 倍。
+    前提：push2 的 f43/f44/f45/f46/f60 等价格字段以整数精度返回
+    （A股以「分」、港美股以「厘」为单位）。若某接口改为返回带小数的价格，
+    需要先识别再决定是否缩放。
     """
     try:
         v = float(value)
@@ -127,15 +137,15 @@ def _scale(value: Any) -> Optional[float]:
         return None
     if v is None or v <= 0 or v > 1e9:
         return None
-    return v / 100.0
+    return v / divisor
 
 
-def _build_quote(data: dict[str, Any], stock_code: str) -> Optional[UnifiedRealtimeQuote]:
-    price = _scale(data.get("f43"))
-    pre_close = _scale(data.get("f60"))
-    open_price = _scale(data.get("f46"))
-    high = _scale(data.get("f44"))
-    low = _scale(data.get("f45"))
+def _build_quote(data: dict[str, Any], stock_code: str, divisor: float = 100.0) -> Optional[UnifiedRealtimeQuote]:
+    price = _scale(data.get("f43"), divisor)
+    pre_close = _scale(data.get("f60"), divisor)
+    open_price = _scale(data.get("f46"), divisor)
+    high = _scale(data.get("f44"), divisor)
+    low = _scale(data.get("f45"), divisor)
     if price is None:
         return None
 

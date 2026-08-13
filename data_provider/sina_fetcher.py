@@ -121,7 +121,12 @@ class SinaFetcher(BaseFetcher):
 
 def _to_sina_symbol(stock_code: str) -> str:
     code = normalize_stock_code(stock_code)
-    if not code or not code.isdigit() or len(code) != 6:
+    if not code:
+        return ""
+    # 港股: HK00700 -> hk00700 (新浪港股接口)
+    if code[:2].lower() == "hk" and len(code) == 7 and code[2:].isdigit():
+        return f"hk{code[2:]}"
+    if not code.isdigit() or len(code) != 6:
         return ""
     if is_bse_code(code):
         return f"bj{code}"
@@ -164,7 +169,11 @@ def _to_number(value: Any) -> Any:
 
 
 def _parse_realtime(content: bytes, stock_code: str, symbol: str) -> Optional[UnifiedRealtimeQuote]:
-    """Parse `var hq_str_sh600519="name,open,pre_close,price,high,low,...,vol,amount,...";` (GBK)."""
+    """Parse ``var hq_str_xxx="...";`` (GBK).
+
+    A-share: name, open, pre_close, price, high, low, ..., volume(股), amount(元)
+    HK:      code_en, name, open, pre_close, high, low, price, change_amount, change_pct
+    """
     try:
         text = content.decode("gbk", errors="replace")
     except Exception:
@@ -173,28 +182,58 @@ def _parse_realtime(content: bytes, stock_code: str, symbol: str) -> Optional[Un
     if not m:
         return None
     fields = m.group(1).split(",")
-    if len(fields) < 10:
-        return None
-    try:
-        price = float(fields[3]) if fields[3] else None
-        pre_close = float(fields[2]) if fields[2] else None
-        open_price = float(fields[1]) if fields[1] else None
-        high = float(fields[4]) if fields[4] else None
-        low = float(fields[5]) if fields[5] else None
-        volume = int(float(fields[8])) if fields[8] else None
-        amount = float(fields[9]) if fields[9] else None
-    except (ValueError, IndexError):
-        return None
+    is_hk = symbol.startswith("hk")
 
-    change_amount = None
-    change_pct = None
-    if price is not None and pre_close:
-        change_amount = price - pre_close
-        change_pct = change_amount / pre_close * 100.0
+    if is_hk:
+        # 港股: [0]=代码 [1]=名称 [2]=开盘 [3]=昨收 [4]=最高 [5]=最低 [6]=现价
+        #       [7]=涨跌额 [8]=涨跌幅%
+        if len(fields) < 9:
+            return None
+        try:
+            price = float(fields[6]) if fields[6] else None
+            pre_close = float(fields[3]) if fields[3] else None
+            open_price = float(fields[2]) if fields[2] else None
+            high = float(fields[4]) if fields[4] else None
+            low = float(fields[5]) if fields[5] else None
+        except (ValueError, IndexError):
+            return None
+        name = fields[1]
+        change_amount = None
+        change_pct = None
+        try:
+            if fields[8]:
+                change_pct = float(fields[8])
+        except (ValueError, IndexError):
+            pass
+        if price is not None and pre_close:
+            change_amount = price - pre_close
+            if change_pct is None:
+                change_pct = change_amount / pre_close * 100.0
+        volume = amount = None
+    else:
+        # A股
+        if len(fields) < 10:
+            return None
+        try:
+            price = float(fields[3]) if fields[3] else None
+            pre_close = float(fields[2]) if fields[2] else None
+            open_price = float(fields[1]) if fields[1] else None
+            high = float(fields[4]) if fields[4] else None
+            low = float(fields[5]) if fields[5] else None
+            volume = int(float(fields[8])) if fields[8] else None
+            amount = float(fields[9]) if fields[9] else None
+        except (ValueError, IndexError):
+            return None
+        name = fields[0]
+        change_amount = None
+        change_pct = None
+        if price is not None and pre_close:
+            change_amount = price - pre_close
+            change_pct = change_amount / pre_close * 100.0
 
     return UnifiedRealtimeQuote(
         code=normalize_stock_code(stock_code),
-        name=fields[0],
+        name=name,
         source=RealtimeSource.SINA,
         price=price,
         open_price=open_price,

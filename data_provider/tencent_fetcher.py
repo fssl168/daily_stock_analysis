@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
@@ -16,6 +17,7 @@ except ImportError:  # pragma: no cover - dependency is present in supported ins
     xcals = None
 
 from .base import BaseFetcher, DataFetchError, STANDARD_COLUMNS, normalize_stock_code, is_bse_code
+from .realtime_types import RealtimeSource, UnifiedRealtimeQuote
 
 logger = logging.getLogger(__name__)
 
@@ -96,10 +98,38 @@ class TencentFetcher(BaseFetcher):
         normalized = normalized[["date", "open", "high", "low", "close", "volume", "amount", "pct_chg"]]
         return normalized
 
+    # ------------------------------------------------------------------
+    # Realtime quote (A-share / HK / US)
+    # ------------------------------------------------------------------
+
+    def get_realtime_quote(self, stock_code: str) -> Optional[UnifiedRealtimeQuote]:
+        symbol = _to_tencent_symbol(stock_code)
+        if not symbol:
+            return None
+        try:
+            resp = requests.get(
+                f"https://qt.gtimg.cn/q={symbol}",
+                headers={"User-Agent": "Mozilla/5.0", "Referer": "https://gu.qq.com/"},
+                timeout=self._HTTP_TIMEOUT_SECONDS,
+            )
+            resp.raise_for_status()
+        except Exception as exc:
+            logger.debug("TencentFetcher realtime failed for %s: %s", stock_code, exc)
+            return None
+        return _parse_tencent_realtime(resp.content, stock_code, symbol)
+
 
 def _to_tencent_symbol(stock_code: str) -> str:
     code = normalize_stock_code(stock_code)
-    if not code or not code.isdigit() or len(code) != 6:
+    if not code:
+        return ""
+    # 港股: hk00700 (hk + 5 位数字, normalize 后可能为大写 HK00700)
+    if code[:2].lower() == "hk" and len(code) == 7 and code[2:].isdigit():
+        return f"hk{code[2:]}"
+    # 美股: AAPL / NVDA / TSLA (字母代码)
+    if code.isalpha() and 1 <= len(code) <= 5:
+        return f"us{code.upper()}"
+    if not code.isdigit() or len(code) != 6:
         return ""
     if is_bse_code(code):
         return f"bj{code}"
@@ -170,6 +200,81 @@ def _format_tencent_date(date_text: str) -> Optional[str]:
         return datetime.strptime(date_text, "%Y-%m-%d").strftime("%Y-%m-%d")
     except ValueError:
         return None
+
+
+def _parse_tencent_realtime(content: bytes, stock_code: str, symbol: str) -> Optional[UnifiedRealtimeQuote]:
+    """Parse Tencent realtime payload.
+
+    A-share (sh/sz/bj): comma-separated
+      name, open, pre_close, price, high, low, ..., volume(股), amount(元), ...
+    HK/US (~-separated, e.g. ``v_hk00700="100~TENCENT~00700~price~pre_close~open~vol...``):
+      [1]=name [2]=code [3]=price [4]=pre_close [5]=open [6]=volume [..]
+      trailing fields carry change_amount / change_pct.
+    """
+    try:
+        text = content.decode("gbk", errors="replace")
+    except Exception:
+        text = content.decode("utf-8", errors="replace")
+    m = re.search(r'="([^"]*)"', text)
+    if not m or "none_match" in text:
+        return None
+    raw = m.group(1)
+
+    if symbol.startswith(("sh", "sz", "bj")):
+        # A-share comma format
+        f = raw.split(",")
+        if len(f) < 10:
+            return None
+        try:
+            price = float(f[3]) if f[3] else None
+            pre_close = float(f[2]) if f[2] else None
+            open_price = float(f[1]) if f[1] else None
+            high = float(f[4]) if f[4] else None
+            low = float(f[5]) if f[5] else None
+            volume = int(float(f[8])) if f[8] else None
+            amount = float(f[9]) if f[9] else None
+        except (ValueError, IndexError):
+            return None
+        name = f[0]
+    else:
+        # HK/US tilde format
+        f = raw.split("~")
+        if len(f) < 7:
+            return None
+        try:
+            price = float(f[3]) if f[3] else None
+            pre_close = float(f[4]) if f[4] else None
+            open_price = float(f[5]) if f[5] else None
+            volume = int(float(f[6])) if f[6] else None
+        except (ValueError, IndexError):
+            return None
+        high = low = None
+        amount = None
+        name = f[1]
+        # HK/US 涨跌幅从价格差计算（尾部字段结构不稳定）:
+        # change_pct 由下方 price/pre_close 计算得出。
+
+    change_amount = None
+    change_pct = None
+    if price is not None and pre_close:
+        change_amount = price - pre_close
+        change_pct = change_amount / pre_close * 100.0
+
+    return UnifiedRealtimeQuote(
+        code=normalize_stock_code(stock_code),
+        name=name,
+        source=RealtimeSource.TENCENT,
+        price=price,
+        open_price=open_price,
+        high=high,
+        low=low,
+        pre_close=pre_close,
+        change_amount=change_amount,
+        change_pct=change_pct,
+        volume=volume,
+        amount=amount,
+        fetched_at=datetime.now().isoformat(),
+    )
 
 
 def _lots_to_shares(volume: Any) -> Any:

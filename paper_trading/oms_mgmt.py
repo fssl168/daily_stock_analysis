@@ -122,6 +122,7 @@ class OrderManagementSystem:
         quantity = params.quantity
         eff_price = self.fee_model.apply_slippage(ref_price, side)
         fee = self.fee_model.compute_fee(side, eff_price, quantity)
+        trade_id: Optional[int] = None
 
         try:
             if side == "buy":
@@ -142,6 +143,7 @@ class OrderManagementSystem:
                         reason="version conflict; retry",
                     )
                 self.account_mgr.settle_buy(params.account_id, freeze_amount, actual_cost)
+                trade_id = trade.id
                 self.position_mgr.apply_buy(
                     params.account_id, code, quantity, eff_price,
                     name=getattr(params.signal, "name", None),
@@ -161,7 +163,10 @@ class OrderManagementSystem:
                         side=side, code=code, status="retry",
                         reason="version conflict; retry",
                     )
-                self.account_mgr.settle_sell(params.account_id, eff_price, quantity, fee)
+                self.account_mgr.settle_sell(
+                    params.account_id, eff_price * quantity - fee
+                )
+                trade_id = trade.id
 
             return TradeResult(
                 signal_id=params.signal_id,
@@ -175,6 +180,7 @@ class OrderManagementSystem:
                 reason="market order filled",
                 risk_decisions=params.risk_decisions,
                 agent_review=params.agent_review,
+                trade_id=trade_id,
             )
         except Exception as exc:
             logger.error("Market order failed: id=%s code=%s: %s", order_id, code, exc)

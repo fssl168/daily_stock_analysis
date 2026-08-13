@@ -115,8 +115,13 @@ class RiskManagementSystem:
         price: float,
         quantity: float,
         side: str,
+        risk_mandated: bool = False,
     ) -> RiskCheckResult:
         """Run RiskChecker buy/sell checks and aggregate into a single result.
+
+        ``risk_mandated`` (T-09): True for risk-forced exits (stop-loss /
+        liquidation). Such signals skip protection-only sell checks (e.g. the
+        daily-loss limit) so a deep-unwater position can still be closed.
 
         Returns a RiskCheckResult whose ``passed`` field indicates whether the
         trade should proceed.
@@ -124,7 +129,10 @@ class RiskManagementSystem:
         if side == "buy":
             decisions = self.risk.check_buy(account_id, code, price, quantity)
         else:
-            decisions = self.risk.check_sell(account_id, code, price, quantity)
+            decisions = self.risk.check_sell(
+                account_id, code, price, quantity,
+                skip_daily_loss=risk_mandated,
+            )
         overall = self.risk.evaluate(decisions)
         return RiskCheckResult(
             passed=overall.passed,

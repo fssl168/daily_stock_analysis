@@ -69,6 +69,7 @@ class TradeResult:
     reason: str
     risk_decisions: List[Dict[str, Any]] = field(default_factory=list)
     agent_review: Optional[Dict[str, Any]] = None
+    trade_id: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -83,6 +84,7 @@ class TradeResult:
             "reason": self.reason,
             "risk_decisions": self.risk_decisions,
             "agent_review": self.agent_review,
+            "trade_id": self.trade_id,
         }
 
 
@@ -141,6 +143,10 @@ class TradingEngine:
         self._on_trade_executed = on_trade_executed
         self._on_signal_rejected = on_signal_rejected
 
+        # T-13: 请求级幂等 —— 记录已处理的 (account_id, client_request_id)，
+        # 同一请求重复提交直接返回已处理结果，避免重复下单（进程内生效）。
+        self._client_request_ids: set = set()
+
         # T18-A: Pre-trade RMS (Risk Management System) — delegated risk checks
         from paper_trading.rms_mgmt import RiskManagementSystem
 
@@ -197,12 +203,38 @@ class TradingEngine:
         order_type: OrderType = OrderType.MARKET,
         limit_price: Optional[float] = None,
         quantity_override: Optional[float] = None,
+        client_request_id: Optional[str] = None,
     ) -> TradeResult:
         """Process a Signal: persist it, run risk checks, place order.
 
         For market orders: fill immediately and settle.
         For limit orders: persist as pending (caller drives matching).
+
+        ``client_request_id`` (T-13): optional idempotency key. When provided,
+        re-submitting the same (account_id, client_request_id) is a no-op that
+        returns a ``skipped`` result instead of placing a duplicate order.
         """
+        # T-13: request-level idempotency guard (before persisting anything).
+        if client_request_id:
+            key = (account_id, client_request_id)
+            if key in self._client_request_ids:
+                logger.info(
+                    "Idempotent submit skipped: account=%s client_request_id=%s",
+                    account_id, client_request_id,
+                )
+                return TradeResult(
+                    signal_id=None,
+                    order_id=None,
+                    side=signal.side,
+                    code=signal.code,
+                    status="skipped",
+                    fill_price=None,
+                    fill_quantity=None,
+                    fee=None,
+                    reason=f"duplicate client_request_id={client_request_id}",
+                )
+            self._client_request_ids.add(key)
+
         # Persist signal first (always — for audit even if rejected).
         signal_id = self._persist_signal(account_id, signal, status="pending")
 
@@ -276,7 +308,8 @@ class TradingEngine:
 
         # Run risk checks (delegated to RMS — T18-A).
         risk_result = self.rms.pre_trade_check(
-            account_id, signal.code, ref_price, quantity, side
+            account_id, signal.code, ref_price, quantity, side,
+            risk_mandated=bool(getattr(signal, "risk_mandated", False)),
         )
 
         if not risk_result.passed:
@@ -922,6 +955,9 @@ class TradingEngine:
                 trigger_price=float(price),
                 suggested_quantity=pos.get("available_quantity"),
                 reason=f"{triggered} triggered at {price:.4f} (SL={sl}, TP1={tp1}, TP2={tp2})",
+                # T-09: 止损/止盈/熔断强平属风控强制离场，必须可执行，
+                # 不被日亏限额等保护性限制拦截。
+                risk_mandated=True,
             )
             logger.info(
                 "SL/TP triggered: account=%s code=%s trigger=%s price=%.4f",

@@ -37,6 +37,9 @@ class Signal:
     trigger_price: float
     suggested_quantity: Optional[float]
     reason: str
+    # T-09: 风控强制信号标记（止损/熔断强平）。为 True 时预交易风控豁免
+    # 日亏限额等保护性限制，确保风险离场动作可执行，不被"当日亏损"误伤。
+    risk_mandated: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -48,6 +51,7 @@ class Signal:
             "trigger_price": self.trigger_price,
             "suggested_quantity": self.suggested_quantity,
             "reason": self.reason,
+            "risk_mandated": self.risk_mandated,
         }
 
 

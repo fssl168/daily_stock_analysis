@@ -126,15 +126,31 @@ class RiskChecker:
         code: str,
         price: float,
         quantity: float,
+        skip_daily_loss: bool = False,
     ) -> list[RiskDecision]:
-        """Run all sell-side pre-trade checks."""
+        """Run all sell-side pre-trade checks.
+
+        ``skip_daily_loss`` (T-09): True for risk-forced exits (stop-loss /
+        liquidation). Such signals are protection actions and must not be
+        blocked by the daily-loss limit, otherwise a deep-underwater position
+        can never be closed.
+        """
         decisions: list[RiskDecision] = []
 
         decisions.append(self._check_account_active(account_id))
         decisions.append(self._check_position_available(account_id, code, quantity))
-        decisions.append(
-            self._check_daily_loss_limit(account_id, code, price, quantity)
-        )
+        if not skip_daily_loss:
+            decisions.append(
+                self._check_daily_loss_limit(account_id, code, price, quantity)
+            )
+        else:
+            decisions.append(
+                RiskDecision(
+                    passed=True,
+                    check_name="daily_loss_limit",
+                    reason="risk-mandated exit (stop-loss/liquidation); daily-loss limit skipped",
+                )
+            )
         # Concentration after a sell decreases, so we don't enforce a cap there.
         # But we still record a (passing) decision for audit completeness.
         decisions.append(
@@ -355,7 +371,18 @@ class RiskChecker:
         estimated_additional_loss = 0.0
         if pos is not None and float(pos.avg_cost or 0.0) > 0:
             avg_cost = float(pos.avg_cost)
-            estimated_additional_loss = max(0.0, (avg_cost - price) * quantity)
+            # T-09: 日亏限额限制的是"当日新增亏损"。历史持仓卖出兑现的是
+            # 累计浮亏，不是当日亏损——按 avg_cost 估算会误伤深亏持仓，导致
+            # 永远无法离场。仅对当日新建仓位计算当日新增亏损。
+            created = getattr(pos, "created_at", None)
+            is_same_day = False
+            if created is not None:
+                try:
+                    is_same_day = created.date() == date.today()
+                except Exception:
+                    is_same_day = False
+            if is_same_day:
+                estimated_additional_loss = max(0.0, (avg_cost - price) * quantity)
 
         total_estimated = realized_loss_today + estimated_additional_loss
         if total_estimated > limit + 1e-9:

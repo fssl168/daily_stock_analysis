@@ -2157,7 +2157,7 @@ class TestAgentConstructionChain(unittest.TestCase):
         self.assertIsNotNone(executor.tool_registry)
         self.assertIsNotNone(executor.llm_adapter)
 
-    @patch("src.agent.llm_adapter.Router")
+    @patch("litellm.Router")
     def test_llm_adapter_call_completion_uses_effective_agent_models_order(self, _mock_router):
         """call_completion should use Agent effective model chain in order."""
         mock_cfg = MagicMock()
@@ -2190,7 +2190,7 @@ class TestAgentConstructionChain(unittest.TestCase):
         self.assertEqual(calls, ["openai/gpt-4o-mini", "anthropic/claude-3-5-sonnet-20241022"])
         self.assertEqual(result.content, "ok")
 
-    @patch("src.agent.llm_adapter.Router")
+    @patch("litellm.Router")
     def test_llm_adapter_normalizes_kimi_k26_temperature(self, _mock_router):
         """Agent direct LiteLLM calls should not send unsupported temperatures to Kimi K2.6."""
         mock_cfg = SimpleNamespace(
@@ -2221,7 +2221,7 @@ class TestAgentConstructionChain(unittest.TestCase):
             usage=SimpleNamespace(prompt_tokens=1, completion_tokens=2, total_tokens=3),
         )
 
-        with patch("src.agent.llm_adapter.litellm.completion", return_value=response) as mock_completion:
+        with patch("litellm.completion", return_value=response) as mock_completion:
             result = adapter._call_litellm_model(
                 [{"role": "user", "content": "hi"}],
                 [],
@@ -2232,7 +2232,7 @@ class TestAgentConstructionChain(unittest.TestCase):
         self.assertEqual(result.content, "agent ok")
         self.assertEqual(mock_completion.call_args.kwargs["temperature"], 1.0)
 
-    @patch("src.agent.llm_adapter.Router")
+    @patch("litellm.Router")
     def test_llm_adapter_normalizes_kimi_k26_temperature_for_yaml_alias(self, _mock_router):
         """Agent direct LiteLLM calls should normalize through routed YAML aliases."""
         mock_cfg = SimpleNamespace(
@@ -2268,7 +2268,7 @@ class TestAgentConstructionChain(unittest.TestCase):
             usage=SimpleNamespace(prompt_tokens=1, completion_tokens=2, total_tokens=3),
         )
 
-        with patch("src.agent.llm_adapter.litellm.completion", return_value=response) as mock_completion:
+        with patch("litellm.completion", return_value=response) as mock_completion:
             result = adapter._call_litellm_model(
                 [{"role": "user", "content": "hi"}],
                 [],
@@ -2279,7 +2279,7 @@ class TestAgentConstructionChain(unittest.TestCase):
         self.assertEqual(result.content, "agent ok")
         self.assertEqual(mock_completion.call_args.kwargs["temperature"], 1.0)
 
-    @patch("src.agent.llm_adapter.Router")
+    @patch("litellm.Router")
     def test_llm_adapter_normalizes_kimi_k26_temperature_for_non_thinking_yaml_alias(self, _mock_router):
         """Agent direct LiteLLM calls should honor non-thinking Kimi YAML overrides."""
         mock_cfg = SimpleNamespace(
@@ -2318,7 +2318,7 @@ class TestAgentConstructionChain(unittest.TestCase):
             usage=SimpleNamespace(prompt_tokens=1, completion_tokens=2, total_tokens=3),
         )
 
-        with patch("src.agent.llm_adapter.litellm.completion", return_value=response) as mock_completion:
+        with patch("litellm.completion", return_value=response) as mock_completion:
             result = adapter._call_litellm_model(
                 [{"role": "user", "content": "hi"}],
                 [],
@@ -2329,7 +2329,7 @@ class TestAgentConstructionChain(unittest.TestCase):
         self.assertEqual(result.content, "agent ok")
         self.assertEqual(mock_completion.call_args.kwargs["temperature"], 0.6)
 
-    @patch("src.agent.llm_adapter.Router")
+    @patch("litellm.Router")
     def test_llm_adapter_omits_temperature_for_gpt5_family(self, _mock_router):
         """Agent direct LiteLLM calls should omit temperature for strict default-temperature models."""
         mock_cfg = SimpleNamespace(
@@ -2360,7 +2360,7 @@ class TestAgentConstructionChain(unittest.TestCase):
             usage=SimpleNamespace(prompt_tokens=1, completion_tokens=2, total_tokens=3),
         )
 
-        with patch("src.agent.llm_adapter.litellm.completion", return_value=response) as mock_completion:
+        with patch("litellm.completion", return_value=response) as mock_completion:
             result = adapter._call_litellm_model(
                 [{"role": "user", "content": "hi"}],
                 [],
@@ -2371,7 +2371,7 @@ class TestAgentConstructionChain(unittest.TestCase):
         self.assertEqual(result.content, "agent ok")
         self.assertNotIn("temperature", mock_completion.call_args.kwargs)
 
-    @patch("src.agent.llm_adapter.Router")
+    @patch("litellm.Router")
     def test_llm_adapter_recovers_from_unsupported_temperature(self, _mock_router):
         """Agent direct LiteLLM calls should retry once with a request-scoped parameter repair."""
         from src.llm.generation_params import clear_litellm_generation_param_recovery_cache
@@ -2405,7 +2405,7 @@ class TestAgentConstructionChain(unittest.TestCase):
             usage=SimpleNamespace(prompt_tokens=1, completion_tokens=2, total_tokens=3),
         )
 
-        with patch("src.agent.llm_adapter.litellm.completion") as mock_completion:
+        with patch("litellm.completion") as mock_completion:
             mock_completion.side_effect = [
                 RuntimeError("Unsupported parameter: temperature is not supported"),
                 response,
@@ -2421,7 +2421,7 @@ class TestAgentConstructionChain(unittest.TestCase):
         self.assertEqual(mock_completion.call_args_list[0].kwargs["temperature"], 0.2)
         self.assertNotIn("temperature", mock_completion.call_args_list[1].kwargs)
 
-    @patch("src.agent.llm_adapter.Router")
+    @patch("litellm.Router")
     def test_llm_adapter_legacy_router_recovery_cache_is_scoped_to_endpoint(self, mock_router):
         """Legacy multi-key Router recoveries should not leak across base URLs."""
         from src.llm.generation_params import clear_litellm_generation_param_recovery_cache
@@ -2495,7 +2495,7 @@ class TestAgentConstructionChain(unittest.TestCase):
         self.assertNotIn("temperature", strict_router.completion.call_args_list[1].kwargs)
         self.assertEqual(flex_router.completion.call_args.kwargs["temperature"], 0.2)
 
-    @patch("src.agent.llm_adapter.Router")
+    @patch("litellm.Router")
     def test_llm_adapter_fallback_does_not_leak_kimi_fixed_temperature(self, _mock_router):
         """Non-Kimi fallbacks should keep the requested temperature after a Kimi failure."""
         mock_cfg = SimpleNamespace(
@@ -2532,7 +2532,7 @@ class TestAgentConstructionChain(unittest.TestCase):
                 raise RuntimeError("primary failed")
             return response
 
-        with patch("src.agent.llm_adapter.litellm.completion", side_effect=fake_completion):
+        with patch("litellm.completion", side_effect=fake_completion):
             result = adapter.call_completion(
                 messages=[{"role": "user", "content": "hi"}],
                 tools=[],
@@ -2545,7 +2545,7 @@ class TestAgentConstructionChain(unittest.TestCase):
             [("openai/kimi-k2.6", 1.0), ("openai/gpt-4o-mini", 0.2)],
         )
 
-    @patch("src.agent.llm_adapter.Router")
+    @patch("litellm.Router")
     def test_llm_adapter_recomputes_timeout_for_each_fallback_attempt(self, _mock_router):
         """Each fallback model attempt should receive only the remaining timeout budget."""
         mock_cfg = MagicMock()
@@ -2584,7 +2584,7 @@ class TestAgentConstructionChain(unittest.TestCase):
         self.assertEqual(timeouts[0], ("openai/gpt-4o-mini", 10.0))
         self.assertEqual(timeouts[1], ("anthropic/claude-3-5-sonnet-20241022", 3.0))
 
-    @patch("src.agent.llm_adapter.Router")
+    @patch("litellm.Router")
     def test_llm_adapter_rate_limit_backoff_is_bounded_by_remaining_timeout(self, _mock_router):
         """Rate-limit backoff should sleep, but never longer than the remaining timeout budget."""
         mock_cfg = MagicMock()
@@ -2625,7 +2625,7 @@ class TestAgentConstructionChain(unittest.TestCase):
 
         adapter._call_litellm_model = MagicMock(side_effect=fake_call)
 
-        with patch("src.agent.llm_adapter.litellm.RateLimitError", FakeRateLimitError), \
+        with patch("litellm.RateLimitError", FakeRateLimitError), \
              patch("src.agent.llm_adapter.logger.warning"), \
              patch("src.agent.llm_adapter.time.time", side_effect=fake_time), \
              patch("src.agent.llm_adapter.time.sleep", side_effect=fake_sleep) as mock_sleep:
@@ -2646,7 +2646,7 @@ class TestAgentConstructionChain(unittest.TestCase):
         self.assertAlmostEqual(sleep_calls[0], expected_backoff)
         self.assertAlmostEqual(clock["value"], 8.0 + expected_backoff)
 
-    @patch("src.agent.llm_adapter.Router")
+    @patch("litellm.Router")
     def test_llm_adapter_context_window_error_skips_sleep(self, _mock_router):
         """Context-window errors should continue fallback immediately without backoff."""
         mock_cfg = MagicMock()
@@ -2675,7 +2675,7 @@ class TestAgentConstructionChain(unittest.TestCase):
         adapter._call_litellm_model = MagicMock(side_effect=fake_call)
 
         with patch(
-            "src.agent.llm_adapter.litellm.ContextWindowExceededError",
+            "litellm.ContextWindowExceededError",
             FakeContextWindowExceededError,
         ), patch("src.agent.llm_adapter.time.sleep") as mock_sleep:
             result = adapter.call_completion(messages=[{"role": "user", "content": "hi"}], tools=[])
@@ -2683,7 +2683,7 @@ class TestAgentConstructionChain(unittest.TestCase):
         self.assertEqual(result.content, "ok")
         mock_sleep.assert_not_called()
 
-    @patch("src.agent.llm_adapter.Router")
+    @patch("litellm.Router")
     def test_llm_adapter_reports_rate_limit_suffix_when_any_fallback_hit_limit(self, _mock_router):
         """Final error should note earlier rate limiting even if the last error differs."""
         mock_cfg = MagicMock()
@@ -2714,9 +2714,9 @@ class TestAgentConstructionChain(unittest.TestCase):
 
         adapter._call_litellm_model = MagicMock(side_effect=fake_call)
 
-        with patch("src.agent.llm_adapter.litellm.RateLimitError", FakeRateLimitError), \
+        with patch("litellm.RateLimitError", FakeRateLimitError), \
              patch(
-                 "src.agent.llm_adapter.litellm.ContextWindowExceededError",
+                 "litellm.ContextWindowExceededError",
                  FakeContextWindowExceededError,
              ), \
              patch("src.agent.llm_adapter.time.sleep") as mock_sleep:
@@ -2727,7 +2727,7 @@ class TestAgentConstructionChain(unittest.TestCase):
         self.assertIn("window exceeded", result.content)
         mock_sleep.assert_not_called()
 
-    @patch("src.agent.llm_adapter.Router")
+    @patch("litellm.Router")
     def test_llm_adapter_reports_missing_configuration_without_generic_none_error(self, _mock_router):
         """Missing Agent model config should return a stable, actionable error message."""
         mock_cfg = SimpleNamespace(

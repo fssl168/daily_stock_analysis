@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- [修复] T-09 风控冲突：止损/熔断强平信号（`Signal.risk_mandated`）经 RMS 透传豁免日亏限额，深亏持仓可止损离场（此前 389 条止损单全被日亏限额拒绝）；日亏限额仅对当日新建仓位的亏损计估（历史浮亏不再误算为当日亏损）
+- [修复] OMS `settle_sell` 契约漂移：卖出结算改为 `proceeds = 成交价×数量 − 费`（此前误传 4 参触发 `settle_sell() takes 3 positional arguments`，market sell 成交即 500）
+- [修复] `TradeResult` 缺失 `trade_id`：OMS 成交结果携带 `trade_id`，使成交回调（复盘触发）能拿到真实 trade 而非 None
+- [新功能] T-08 统一生产装配 `build_full_listener`：`run_listener.py`/supervisor 与 API `start_listener` 装配对齐，PM Agent/复盘/作战卡/漂移检测/延迟统计/特征管线按 `.env` flag 注入，消除「配置启用但未接线」
+- [新功能] T-10 反思回路闭环：`build_full_listener` 透传 `on_trade_executed`/`on_signal_rejected`，API `start_listener` 接入复盘回调，成交即触发 `reflect_on_trade` 落库
+- [新功能] T-12 AISignalWorker 生产接线：新增 `PAPER_TRADING_ENABLE_AI_SIGNAL_WORKER`/`PAPER_TRADING_AI_SIGNAL_WORKER_INTERVAL_SECONDS` 配置，`run_listener.py` 启动独立 AI 信号线程；supervisor 新增 `--no-ai-signal-worker` 覆盖
+- [新功能] T-13 订单级幂等：`submit_signal` 支持 `client_request_id`，同 `(account_id, client_request_id)` 重复提交返回 `skipped` 不重复下单；`DecisionSignalOutcome` 注册每日定时任务（替代纯手动端点）
+- [改进] T-11 PM 决策解析：关键词推断结果标记 `used_fallback=True` 并明确 reason（不再以低置信度推断冒充真实决策）
+- [测试] 新增 T-09~T-14 回归测试：`test_paper_trading_risk_sltp_conflict.py`（6）/`test_paper_trading_assembly.py`（5）/`test_paper_trading_reflection_loop.py`（3）/`test_paper_trading_ai_signal_worker.py`（4）/`test_paper_trading_idempotency.py`（3）/`test_paper_trading_pm_decision_parse.py`（4）
+- [chore] `build_default_listener`/`build_full_listener` 支持 `db_manager` 注入（测试隔离/装配复用）
 - [文档] 新增 L1/L2 架构回头望归纳文档 `docs/L1_L2_RETROSPECTIVE.md`
 - [文档] L1/L2 Retrospective 整改：修正 14 个模块归属（TaskQueue/RuntimeScheduler/SystemConfigService/AgentModelService/GenerationBackendStatusService/StockIndexRemoteService/StockCodeUtils/MarketSymbolUtils/NameToCodeResolver/StockListParser/ImportParser/RunDiagnostics/RunFlow/NotificationDiagnostics 从 L2 移至 L1）+ 补充 Agent/LLM/NotificationSender 三个整层遗漏 + L2 关键设计特征重审（Agent 故障→L3 修复 / Agent 认知偏差→L4 反思）
 - [新功能] L3 架构自修复系统 (Phase 1-4 全部完成)：SelfHealingAction 抽象基类（检测→修复→验证→启动模板方法 + 升级链）+ ModuleRestartAgent 模块重启引擎（健康检查 + 优雅 SIGTERM/SIGKILL + 启动验证 + 冷却期 + 数据库/网络线程保护）+ RepairEffectivenessLog 修复效果日志（fault_pattern 匹配 + 成功率统计 + 降级原因归因 + 160 tests）+ CodeAwareRepairAgent AST 级代码感知修复（10 种 FaultCategory + None guard / KeyError .get() / ImportError 诊断 三种启发式策略 + 合约校验 + LLM 辅助修复 + SelfHealingAction 适配器，51 tests）

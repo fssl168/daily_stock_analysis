@@ -790,6 +790,7 @@ class PortfolioManagerAgent:
                     params = {}
 
             # Resolve order type and price.
+            from paper_trading.order import OrderSide, OrderType
             order_type_str = str(params.get("order_type") or "limit").strip().lower()
             order_type = OrderType.LIMIT if order_type_str == "limit" else OrderType.MARKET
             limit_price = params.get("limit_price")

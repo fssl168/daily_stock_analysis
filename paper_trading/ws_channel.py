@@ -81,7 +81,12 @@ class WebSocketChannel:
         headers = {}
         if auth_token:
             headers["Authorization"] = f"Bearer {auth_token}"
-        ws = await websockets.connect(url, extra_headers=headers or None)
+        # websockets >= 12 renamed extra_headers -> additional_headers;
+        # pass dict only when non-empty to avoid connection rejection.
+        ws = await websockets.connect(
+            url,
+            **(dict(additional_headers=headers) if headers else {}),
+        )
 
         self._ws = ws
         self._connected = True

@@ -108,7 +108,16 @@ const NetValueSparkline: React.FC<{ data: NetValuePoint[]; width?: number; heigh
   height = 120,
 }) => {
   const { t } = useUiLanguage();
-  if (data.length < 2) {
+
+  // Single point (account just created / first settle): synthesize the
+  // account's initial net value (1.0) as the curve start so the card still
+  // renders a line (1.0 -> current) instead of degrading to a bare number.
+  // Multi-point data renders the real curve unchanged.
+  const plotData: NetValuePoint[] = data.length === 1
+    ? [{ date: '', netValue: 1.0, cash: 0, marketValue: 0, returnPct: 0 }, data[0]]
+    : data;
+
+  if (plotData.length < 2) {
     return (
       <div className="flex items-center justify-center h-full text-xs text-muted">
         {t('paperTrading.noNetValueData')}
@@ -116,31 +125,37 @@ const NetValueSparkline: React.FC<{ data: NetValuePoint[]; width?: number; heigh
     );
   }
 
-  const values = data.map(d => d.netValue);
+  const values = plotData.map(d => d.netValue);
   const min = Math.min(...values);
   const max = Math.max(...values);
   const range = max - min || 1;
+  const span = max - min;
   const padding = 6;
   const chartWidth = width - padding * 2;
   const chartHeight = height - padding * 2;
+  // 数据全相同时画在图表中间，避免贴底水平线视觉上"有数据却看不见"。
+  const midY = padding + chartHeight / 2;
 
-  const points = data.map((d, i) => {
-    const x = padding + (i / (data.length - 1)) * chartWidth;
-    const y = padding + chartHeight - ((d.netValue - min) / range) * chartHeight;
+  const points = plotData.map((d, i) => {
+    const x = padding + (i / (plotData.length - 1)) * chartWidth;
+    const y = span === 0
+      ? midY
+      : padding + chartHeight - ((d.netValue - min) / range) * chartHeight;
     return `${x},${y}`;
   }).join(' ');
 
   const areaPoints = `${padding},${height - padding} ${points} ${width - padding},${height - padding}`;
-  const baseLine = data[0]?.netValue ?? 1;
-  const current = data[data.length - 1]?.netValue ?? baseLine;
+  const baseLine = plotData[0]?.netValue ?? 1;
+  const current = plotData[plotData.length - 1]?.netValue ?? baseLine;
   const isUp = current >= baseLine;
 
   return (
-    <svg width={width} height={height} className="overflow-visible">
-      <defs>
-        <linearGradient id="netValueGradient" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={isUp ? '#00ff88' : '#ff4466'} stopOpacity="0.3" />
-          <stop offset="100%" stopColor={isUp ? '#00ff88' : '#ff4466'} stopOpacity="0" />
+    <>
+      <svg width={width} height={height} className="overflow-visible">
+        <defs>
+          <linearGradient id="netValueGradient" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={isUp ? '#00ff88' : '#ff4466'} stopOpacity="0.3" />
+            <stop offset="100%" stopColor={isUp ? '#00ff88' : '#ff4466'} stopOpacity="0" />
         </linearGradient>
       </defs>
       <polygon points={areaPoints} fill="url(#netValueGradient)" />
@@ -152,7 +167,19 @@ const NetValueSparkline: React.FC<{ data: NetValuePoint[]; width?: number; heigh
         strokeLinecap="round"
         strokeLinejoin="round"
       />
-    </svg>
+      </svg>
+      {data.length === 1 && (
+        <div
+          className="mt-1 flex items-center justify-center gap-1"
+          data-testid="net-value-single-point"
+        >
+          <span className="text-lg font-mono font-semibold text-white">
+            {current.toFixed(4)}
+          </span>
+          <span className="text-xxs text-muted">当前净值</span>
+        </div>
+      )}
+    </>
   );
 };
 
@@ -1948,7 +1975,7 @@ const PaperTradingPage: React.FC = () => {
       const [accountsRes, snap, nv, pos, ord, trd, sig, dec, ref, plans] = await requestQueue.enqueueBatch([
         () => paperTradingApi.getAccounts(),
         () => paperTradingApi.getAccountSnapshot(accountId),
-        () => paperTradingApi.getNetValueCurve(accountId, 90),
+        () => paperTradingApi.getNetValueCurve(accountId, 300),
         () => paperTradingApi.listPositions(accountId),
         () => paperTradingApi.listOrders(accountId, { limit: 100 }),
         () => paperTradingApi.listTrades(accountId, { limit: 100 }),

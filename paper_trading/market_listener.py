@@ -405,6 +405,8 @@ class MarketListener:
         self._last_signal_at: Dict[Tuple[str, str, str], datetime] = {}  # (code, strat, side) -> ts
         self._last_settle_date: Optional[date] = None
         self._market_was_open: Dict[str, bool] = {}  # market -> was open on previous tick
+        # Intraday net-value snapshot cadence (unix ts of last snapshot).
+        self._last_intraday_ts: float = 0.0
         # P1-C: PM decision cadence tracking (per-market last-triggered ts).
         self._last_pm_decision_at: Dict[str, datetime] = {}
         # P1-C: Battle plan is generated once per day, per account, after close.
@@ -412,6 +414,18 @@ class MarketListener:
         self._last_daily_reflection_date: Optional[date] = None
         # P0-C: Position review cadence tracking (last-triggered ts).
         self._last_position_review_ts: Optional[datetime] = None
+
+        # Observability: per-tick data-source health + strategy-output summary
+        # (throttled so the console shows the listener is alive without spam).
+        self._tick_stats: Dict[str, Any] = {
+            "market": "cn",
+            "prices_fetched": 0,
+            "codes_total": 0,
+            "evaluated": 0,
+            "signals": 0,
+            "ts": 0.0,
+        }
+        self._last_tick_summary_ts: float = 0.0
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -488,12 +502,84 @@ class MarketListener:
 
             self._market_was_open[market] = open_now
 
+        # Intraday net-value snapshots while any market is open: gives the
+        # net-value curve live shape during trading hours.
+        if any_open:
+            self._maybe_intraday_snapshot()
+
         # Fallback: if no markets are open but it's after close on a trading
         # day and we haven't settled, settle anyway (handles listener restart
         # after session close).
         if not any_open:
             for market in self.config.markets:
                 self._maybe_daily_settle(market)
+
+    # ------------------------------------------------------------------
+    # Intraday net-value snapshots
+    # ------------------------------------------------------------------
+
+    def _maybe_intraday_snapshot(self) -> None:
+        """Record an intraday net-value point for every active paper account
+        while any market is open (rate-limited to the snapshot interval).
+
+        Gives the net-value curve live shape during trading hours instead of
+        a single end-of-day point per account.
+        """
+        interval = float(
+            getattr(self.config, "intraday_snapshot_interval_seconds", 300) or 300
+        )
+        now = time.time()
+        if now - self._last_intraday_ts < interval:
+            return
+        accounts = self.engine.account_mgr.list_accounts(status="active")
+        for acc in accounts:
+            try:
+                self.engine.account_mgr.record_intraday_net_value(acc.id)
+            except Exception as exc:
+                logger.exception(
+                    "[MarketListener] intraday snapshot failed for account=%s: %s",
+                    acc.id, exc,
+                )
+        self._last_intraday_ts = now
+        logger.info(
+            "[MarketListener] intraday net-value snapshot: accounts=%d",
+            len(accounts),
+        )
+
+    def _maybe_log_tick_summary(self) -> None:
+        """Throttled per-tick observability log (data-source health + strategy output).
+
+        Logs at most once per 60s so the listener stays observable on the
+        console without spamming every tick. Picks up the latest ``_tick_stats``
+        (prices fetched / total codes, codes evaluated, signals produced), which
+        is enough to tell apart "data source down" from "strategies not firing".
+        """
+        now = time.time()
+        if now - self._last_tick_summary_ts < 60.0:
+            return
+        self._last_tick_summary_ts = now
+        s = self._tick_stats
+        missing = int(s["codes_total"] - s["prices_fetched"])
+        if s["prices_fetched"] <= 0:
+            logger.warning(
+                "[MarketListener] %s tick: prices 0/%d (行情源未通) "
+                "evaluated=%d signals=%d",
+                s["market"], s["codes_total"], s["evaluated"], s["signals"],
+            )
+        elif missing > 0:
+            logger.info(
+                "[MarketListener] %s tick: prices %d/%d (missing %d) "
+                "evaluated=%d signals=%d",
+                s["market"], s["prices_fetched"], s["codes_total"], missing,
+                s["evaluated"], s["signals"],
+            )
+        else:
+            logger.info(
+                "[MarketListener] %s tick: prices %d/%d OK "
+                "evaluated=%d signals=%d",
+                s["market"], s["prices_fetched"], s["codes_total"],
+                s["evaluated"], s["signals"],
+            )
 
     def _tick_market(self, market: str) -> None:
         """Run one tick for a single open market."""
@@ -508,8 +594,17 @@ class MarketListener:
 
         latest_prices = self._fetch_latest_prices(codes)
         span.mark("data_fetch", codes=len(latest_prices))
+        self._tick_stats.update(
+            market=market,
+            prices_fetched=len(latest_prices),
+            codes_total=len(codes),
+            evaluated=0,
+            signals=0,
+            ts=time.time(),
+        )
         if not latest_prices:
             logger.debug("[MarketListener] %s: no prices fetched", market)
+            self._maybe_log_tick_summary()
             return
 
         # 1) Consume AI analysis signals first (before rule-based strategies).
@@ -557,6 +652,7 @@ class MarketListener:
         if self.config.enable_strategies and self.strategies:
             self._evaluate_strategies(codes, latest_prices, market)
         span.mark("signal_calc")
+        self._maybe_log_tick_summary()
 
         # T-008: RiskDaemon — per-tick VaR + liquidity + market anomaly check.
         if self._risk_daemon is not None:
@@ -934,6 +1030,8 @@ class MarketListener:
         multiple strategies are fused per-code before submission.
         """
         fusion = self._signal_fusion
+        evaluated = 0  # codes actually evaluated by at least one strategy
+        produced = 0   # signals passed dedupe and were submitted to the engine
         for code in codes:
             price = latest_prices.get(code)
             if price is None or price <= 0:
@@ -946,6 +1044,7 @@ class MarketListener:
                 data = self._get_strategy_data(code, timeframes)
                 if data is None:
                     continue
+                evaluated += 1
 
                 try:
                     if len(timeframes) == 1:
@@ -990,6 +1089,7 @@ class MarketListener:
             for signal in targets:
                 if not self._should_emit_signal(signal, market):
                     continue
+                produced += 1
                 try:
                     result = self.engine.submit_signal(
                         account_id=self.config.account_id,
@@ -1007,6 +1107,10 @@ class MarketListener:
                         "[MarketListener] submit_signal failed: %s %s: %s",
                         signal.side, code, exc,
                     )
+
+        # Publish per-tick observability counters for the throttled summary.
+        self._tick_stats["evaluated"] += evaluated
+        self._tick_stats["signals"] += produced
 
     def _get_strategy_data(
         self,
@@ -1100,6 +1204,10 @@ class MarketListener:
                     type(self.fetcher).__name__,
                 )
                 return None
+            # DataFetcherManager / MultiSourceDataFetcher return
+            # (DataFrame, source_name) tuples — unwrap to a plain DataFrame.
+            if isinstance(df, tuple):
+                df = df[0] if df else None
         except Exception as exc:
             logger.debug(
                 "[MarketListener] get_daily_data failed for %s: %s", code, exc
@@ -1137,7 +1245,12 @@ class MarketListener:
     # ------------------------------------------------------------------
 
     def _maybe_daily_settle(self, market: str) -> None:
-        """Run daily_settle once per (account, trading day) after session close."""
+        """Run daily_settle once per (account, trading day) after session close.
+
+        Settles ALL active paper accounts (not just the listener's bound
+        account) so every account accumulates its own net-value curve; a
+        single account failure never blocks the others.
+        """
         today = date.today()
         if self._last_settle_date == today:
             return
@@ -1164,29 +1277,63 @@ class MarketListener:
                 )
                 return
 
-        # Fetch final prices for accurate mark-to-market.
-        codes = self._codes_for_market(market)
+        # Fetch final prices for accurate mark-to-market. Aggregate codes
+        # across ALL active paper accounts so a single price fetch covers
+        # every account's positions (net-value curve is per-account, not
+        # just the listener's bound account).
+        accounts = self.engine.account_mgr.list_accounts(status="active")
+        codes = set(self._codes_for_market(market))
+        for acc in accounts:
+            codes.update(
+                p["code"] for p in self.engine.position_mgr.list_positions(acc.id)
+            )
+        codes = sorted(codes)
         latest_prices = self._fetch_latest_prices(codes) if codes else {}
 
-        try:
-            result = self.engine.daily_settle(
-                account_id=self.config.account_id,
-                target_date=today,
-                latest_prices=latest_prices or None,
-            )
-            self._last_settle_date = today
-            logger.info(
-                "[MarketListener] daily_settle complete: account=%s rolled=%s date=%s",
-                self.config.account_id,
-                result.get("positions_rolled"),
-                result.get("date"),
-            )
-        except Exception as exc:
-            logger.exception(
-                "[MarketListener] daily_settle failed for account=%s: %s",
-                self.config.account_id, exc,
-            )
+        settled_any = False
+        for acc in accounts:
+            acc_market = (getattr(acc, "market", None) or "cn").lower()
+            try:
+                if acc_market == market:
+                    # Same-market account: full settle (T+1 roll + net value).
+                    result = self.engine.daily_settle(
+                        account_id=acc.id,
+                        target_date=today,
+                        latest_prices=latest_prices or None,
+                    )
+                else:
+                    # Other-market account: valuation only — mark positions to
+                    # the latest price and record the net-value point. T+1 roll
+                    # is market-specific and must not run early against a
+                    # market that has not closed yet (e.g. US still trading at
+                    # CN close).
+                    if latest_prices:
+                        for code, price in latest_prices.items():
+                            self.engine.position_mgr.update_last_price(
+                                acc.id, code, price
+                            )
+                    self.engine.account_mgr.record_daily_net_value(
+                        acc.id, target_date=today
+                    )
+                    result = {"positions_rolled": 0, "date": today.isoformat()}
+                settled_any = True
+                logger.info(
+                    "[MarketListener] daily_settle complete: account=%s rolled=%s date=%s market=%s",
+                    acc.id,
+                    result.get("positions_rolled"),
+                    result.get("date"),
+                    acc_market,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "[MarketListener] daily_settle failed for account=%s: %s",
+                    acc.id, exc,
+                )
+                continue
+
+        if not settled_any:
             return
+        self._last_settle_date = today
 
         # P1-C: post-settle hooks — daily reflection + next-day battle plan.
         # These run once per day, after daily_settle succeeds. They are

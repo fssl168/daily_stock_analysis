@@ -7,10 +7,18 @@ unavailable. This ensures that the MarketListener can continue operating even
 when certain data sources fail.
 
 Supported data sources (in default order):
-1. tickflow - TickFlow data provider (highest priority for A-shares)
-2. tushare - Tushare Pro (comprehensive financial data)
-3. yfinance - Yahoo Finance (global markets)
-4. akshare - AkShare (open source financial data)
+1. tickflow  - TickFlow data provider (highest priority for A-shares)
+2. tushare   - Tushare Pro (comprehensive financial data)
+3. efinance  - Eastmoney via efinance library
+4. tencent   - Tencent direct quotes
+5. sina      - Sina direct quotes (free, no key)
+6. eastmoney_direct - Eastmoney direct quotes (free, no key)
+7. yfinance  - Yahoo Finance (global markets)
+8. akshare   - AkShare (open source financial data)
+
+NOTE: the effective priority for the live listener is driven by the
+`realtime_source_priority` config (src/config.py + REALTIME_SOURCE_PRIORITY
+env), which overrides ``DEFAULT_PRIORITY`` whenever it is non-empty.
 """
 
 from typing import Any, Optional, List, Tuple, Dict
@@ -30,7 +38,10 @@ class MultiSourceDataFetcher:
         df = fetcher.get_daily_historical("600519", days=120)
     """
 
-    DEFAULT_PRIORITY = ["tickflow", "tushare", "yfinance", "akshare"]
+    DEFAULT_PRIORITY = [
+        "tickflow", "tushare", "efinance", "tencent", "sina",
+        "eastmoney_direct", "yfinance", "akshare",
+    ]
 
     def __init__(self, source_priority: Optional[List[str]] = None, cache_ttl: int = 60):
         self.source_priority = source_priority or self.DEFAULT_PRIORITY
@@ -60,9 +71,21 @@ class MultiSourceDataFetcher:
             elif source_name == "yfinance":
                 from data_provider.yfinance_fetcher import YFinanceFetcher
                 adapter = YFinanceFetcher()
-            elif source_name == "akshare":
-                from data_provider.akshare_fetcher import AkShareFetcher
-                adapter = AkShareFetcher()
+            elif source_name in ("akshare", "akshare_em", "akshare_sina"):
+                from data_provider.akshare_fetcher import AkshareFetcher
+                adapter = AkshareFetcher()
+            elif source_name in ("efinance", "eastmoney"):
+                from data_provider.efinance_fetcher import EfinanceFetcher
+                adapter = EfinanceFetcher()
+            elif source_name in ("tencent", "qq"):
+                from data_provider.tencent_fetcher import TencentFetcher
+                adapter = TencentFetcher()
+            elif source_name in ("sina", "sina_direct"):
+                from data_provider.sina_fetcher import SinaFetcher
+                adapter = SinaFetcher()
+            elif source_name in ("eastmoney_direct", "em_direct"):
+                from data_provider.eastmoney_fetcher import EastmoneyFetcher
+                adapter = EastmoneyFetcher()
             else:
                 logger.warning("Unknown data source: %s", source_name)
                 adapter = None
@@ -91,6 +114,8 @@ class MultiSourceDataFetcher:
         每个数据源的 get_daily_historical 方法应接受 (code: str, days: int)
         并返回 pd.DataFrame 或 None。
         """
+        from data_provider.base import normalize_stock_code
+        code = normalize_stock_code(code)
         cache_key = f"hist_{code}_{days}"
         if self._is_cache_valid(cache_key):
             return self._cache.get(cache_key)
@@ -101,8 +126,15 @@ class MultiSourceDataFetcher:
                 continue
 
             try:
-                # 调用统一的接口获取日线数据
-                df = adapter.get_daily_historical(code, days)
+                # 统一接口:优先 get_daily_historical,兼容 get_daily_data
+                if hasattr(adapter, "get_daily_historical"):
+                    df = adapter.get_daily_historical(code, days)
+                else:
+                    df = adapter.get_daily_data(code, days=days)
+                # DataFetcherManager / MultiSourceDataFetcher 返回
+                # (DataFrame, source_name) tuple — 解包成 DataFrame。
+                if isinstance(df, tuple):
+                    df = df[0] if df else None
                 if df is not None and not df.empty and len(df) >= min(10, days):
                     logger.info("Daily historical data for %s fetched from %s", code, source_name)
                     self._set_cache(cache_key, df)
@@ -120,6 +152,8 @@ class MultiSourceDataFetcher:
 
         期望返回的字典包含至少 'price' 字段（float），以及可选的 'code', 'volume' 等.
         """
+        from data_provider.base import normalize_stock_code
+        code = normalize_stock_code(code)
         cache_key = f"real_{code}"
         if self._is_cache_valid(cache_key):
             return self._cache.get(cache_key)
@@ -131,7 +165,16 @@ class MultiSourceDataFetcher:
 
             try:
                 quote = adapter.get_realtime_quote(code)
-                if quote is not None and isinstance(quote, dict) and 'price' in quote:
+                if quote is None:
+                    continue
+                # Fetchers return UnifiedRealtimeQuote objects (or dicts in
+                # legacy paths) — accept both; require a valid positive price.
+                price = (
+                    quote.get("price")
+                    if isinstance(quote, dict)
+                    else getattr(quote, "price", None)
+                )
+                if price is not None and float(price) > 0:
                     logger.info("Realtime quote for %s from %s", code, source_name)
                     self._set_cache(cache_key, quote)
                     return quote
@@ -154,7 +197,13 @@ class MultiSourceDataFetcher:
                 continue
 
             try:
-                df = adapter.get_kline(code, period)
+                # 统一接口:优先 get_kline,兼容 get_daily_data/get_daily_historical
+                if hasattr(adapter, "get_kline"):
+                    df = adapter.get_kline(code, period)
+                else:
+                    df = adapter.get_daily_data(code, days=60)
+                if isinstance(df, tuple):
+                    df = df[0] if df else None
                 if df is not None and not df.empty:
                     return df, source_name
             except Exception as e:
@@ -163,4 +212,5 @@ class MultiSourceDataFetcher:
         return None, None
 
     # Alias for compatibility with existing code expectations
-    get_daily_data = get_daily_historical
+    def get_daily_data(self, code, days=120):
+        return self.get_daily_historical(code, days)

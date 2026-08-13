@@ -398,10 +398,17 @@ class PaperAccountManager:
     # Net-value curve
     # ------------------------------------------------------------------
 
-    def record_daily_net_value(self, account_id: int, target_date: Optional[date] = None) -> None:
-        """Persist (or upsert) today's net-value snapshot.
+    def record_daily_net_value(
+        self, account_id: int, target_date: Optional[date] = None,
+        mode: str = 'upsert',
+    ) -> None:
+        """Persist today's net-value snapshot.
 
-        Idempotent: re-running on the same date overwrites the row.
+        mode='upsert' (default): overwrite the existing row for the same date
+            (idempotent — re-running on the same date updates in place).
+        mode='insert': always append a new row (used by end-of-day settle so
+            intraday snapshots taken the same day are preserved and the curve
+            accumulates multiple points per day).
         """
         target_date = target_date or date.today()
         snap = self.snapshot(account_id)
@@ -426,6 +433,23 @@ class PaperAccountManager:
                 daily_return_pct = (
                     (snap.total_assets - float(prev.total_assets)) / float(prev.total_assets) * 100.0
                 )
+
+            if mode == 'insert':
+                # Append a new point (intraday snapshots / end-of-day point
+                # coexist for the same date; ordering falls back to id).
+                session.add(
+                    PaperNetValue(
+                        account_id=account_id,
+                        date=target_date,
+                        total_assets=snap.total_assets,
+                        cash=snap.cash + snap.frozen_cash,
+                        market_value=snap.market_value,
+                        net_value=net_value,
+                        return_pct=snap.pnl_pct,
+                        daily_return_pct=daily_return_pct,
+                    )
+                )
+                return
 
             existing = session.execute(
                 select(PaperNetValue).where(
@@ -457,6 +481,14 @@ class PaperAccountManager:
                     )
                 )
 
+    def record_intraday_net_value(self, account_id: int) -> None:
+        """Append an intraday net-value snapshot (multiple per day allowed).
+
+        Used by the market listener during trading hours so the net-value
+        curve shows live movement instead of a single daily point.
+        """
+        self.record_daily_net_value(account_id, mode='insert')
+
     def get_net_value_series(
         self, account_id: int, limit: int = 90
     ) -> list[Dict[str, Any]]:
@@ -465,7 +497,7 @@ class PaperAccountManager:
             rows = session.execute(
                 select(PaperNetValue)
                 .where(PaperNetValue.account_id == account_id)
-                .order_by(desc(PaperNetValue.date))
+                .order_by(desc(PaperNetValue.date), desc(PaperNetValue.id))
                 .limit(limit)
             ).scalars().all()
             rows = list(reversed(rows))

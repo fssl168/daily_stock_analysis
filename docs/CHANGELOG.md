@@ -103,3 +103,8 @@ All notable changes to this project will be documented in this file.
 - [新功能] WebSocket 行情推送 feed `paper_trading/ws_quote_feed.py`（方案 3）：订阅外部行情 WS，行情到达更新共享 `quote_cache`；MarketListener 主循环 push 优先、轮询兜底。`run_listener.py` 支持 `PAPER_TRADING_WS_QUOTE_URL` 配置启动 feed（未配置则轮询）
 - [测试] ws_quote_feed 消息解析（dict/JSON/Longbridge 字段）与 cache 更新测试
 - [改进] 纸面交易页移除前端"行情监听器"手动启动/停止区域（行情监听改由 `scripts/paper_trading_supervisor.py` 或 `run_listener.py` 管理）
+- [修复] 纸面交易页净值曲线：数据全相同时曲线贴底不可见（"有数据却不显示"）→ 改为居中显示水平线
+- [改进] MarketListener 新增节流 tick 摘要日志（每 60s 一条：行情 X/Y、评估 N 只、产出 M 信号），区分行情源故障与策略未触发，便于独立进程常驻时观测
+- [修复] 实时行情源优先级接线：新增的 sina/eastmoney_direct 直连源此前未进入生效的 `REALTIME_SOURCE_PRIORITY`（config 默认串与 `.env` 均不含），导致两个新 fetcher 不被调用；已把 `sina,eastmoney_direct` 加入默认优先级、`.env` 与 `.env.example` 示例，并补齐 `DataFetcherManager` 实时行情分发分支（此前只认 efinance/akshare/tencent/tushare/tickflow）
+- [修复] eastmoney 直连 secid 北交所映射：`_to_em_secid` 接入 `is_bse_code`（920/43/83/87 号段归 `0.` 市场段，900xxx 沪B 保持 `1.`）；直连源改用独立 `RealtimeSource.EASTMONEY` 标签，避免诊断时误标为 akshare_em
+- [测试] 新增 `tests/test_data_provider_direct_fetchers.py` 离线解析测试：Sina JSONP/GBK 解析、东财字段缩放与 secid/北交所映射、`MultiSourceDataFetcher.get_realtime_quote` 对象报价回归（根因防回归）

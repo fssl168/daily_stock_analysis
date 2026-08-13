@@ -933,10 +933,6 @@ class PaperNetValue(Base):
     daily_return_pct = Column(Float, default=0.0)
     created_at = Column(DateTime, default=datetime.now)
 
-    __table_args__ = (
-        UniqueConstraint('account_id', 'date', name='uix_paper_net_value_account_date'),
-    )
-
     def __repr__(self) -> str:
         return f"<PaperNetValue(date={self.date}, total={self.total_assets}, nv={self.net_value})>"
 

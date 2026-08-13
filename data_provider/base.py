@@ -1154,6 +1154,8 @@ class DataFetcherManager:
         from src.config import get_config
         from .efinance_fetcher import EfinanceFetcher
         from .tencent_fetcher import TencentFetcher
+        from .sina_fetcher import SinaFetcher
+        from .eastmoney_fetcher import EastmoneyFetcher
         from .akshare_fetcher import AkshareFetcher
         from .tushare_fetcher import TushareFetcher
         from .tickflow_fetcher import TickFlowFetcher
@@ -1165,6 +1167,8 @@ class DataFetcherManager:
         # 创建所有数据源实例（优先级在各 Fetcher 的 __init__ 中确定）
         efinance = EfinanceFetcher()
         tencent = TencentFetcher()
+        sina = SinaFetcher()          # 新浪直连（K线 + 实时，免费无 key）
+        eastmoney = EastmoneyFetcher()  # 东财直连（实时行情，K线网络受限）
         akshare = AkshareFetcher()
         pytdx = PytdxFetcher()      # 通达信数据源（可配 PYTDX_HOST/PYTDX_PORT）
         baostock = BaostockFetcher()
@@ -1216,6 +1220,8 @@ class DataFetcherManager:
             self._fetchers = [
                 efinance,
                 tencent,
+                sina,
+                eastmoney,
                 akshare,
                 pytdx,
                 baostock,
@@ -1986,6 +1992,26 @@ class DataFetcherManager:
                             operation="get_realtime_quote",
                         )
                         quote = self._call_fetcher_method(fetcher, 'get_realtime_quote', stock_code, source="tencent")
+
+                elif source == "sina":
+                    fetcher = self._get_fetcher_by_name("SinaFetcher", capability="realtime_quote")
+                    if fetcher is not None and hasattr(fetcher, 'get_realtime_quote'):
+                        record_provider_run_started(
+                            data_type="realtime_quote",
+                            provider=fetcher.name,
+                            operation="get_realtime_quote",
+                        )
+                        quote = self._call_fetcher_method(fetcher, 'get_realtime_quote', stock_code)
+
+                elif source in ("eastmoney_direct", "em_direct"):
+                    fetcher = self._get_fetcher_by_name("EastmoneyFetcher", capability="realtime_quote")
+                    if fetcher is not None and hasattr(fetcher, 'get_realtime_quote'):
+                        record_provider_run_started(
+                            data_type="realtime_quote",
+                            provider=fetcher.name,
+                            operation="get_realtime_quote",
+                        )
+                        quote = self._call_fetcher_method(fetcher, 'get_realtime_quote', stock_code)
                 
                 elif source == "tushare":
                     fetcher = self._get_fetcher_by_name("TushareFetcher", capability="realtime_quote")

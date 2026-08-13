@@ -1048,12 +1048,14 @@ class Config:
     # 东财接口补丁开关
     enable_eastmoney_patch: bool = False
     # 实时行情数据源优先级（逗号分隔）
-    # 推荐顺序：tencent > akshare_sina > efinance > akshare_em > tushare
+    # 推荐顺序：tushare > tencent > efinance > sina > eastmoney_direct > akshare_sina > akshare_em
     # - tencent: 腾讯财经，有量比/换手率/市盈率等，单股查询稳定（推荐）
-    # - akshare_sina: 新浪财经，基本行情稳定，但无量比
-    # - efinance/akshare_em: 东财全量接口，数据最全但容易被封
+    # - sina: 新浪直连（免费无 key，K线 + 实时行情）
+    # - eastmoney_direct: 东财直连（免费无 key，实时行情，需 curl_cffi TLS 指纹）
+    # - akshare_sina/akshare_em: akshare 库封装的新浪/东财，功能全但较重较慢
+    # - efinance: 东财全量接口（efinance 库），数据最全但容易被封
     # - tushare: Tushare Pro，需要2000积分，数据全面（付费用户可优先使用）
-    realtime_source_priority: str = "tencent,akshare_sina,efinance,akshare_em"
+    realtime_source_priority: str = "tencent,efinance,sina,eastmoney_direct,akshare_sina,akshare_em"
     # 实时行情缓存时间（秒）
     realtime_cache_ttl: int = 600
     # 熔断器冷却时间（秒）
@@ -2886,7 +2888,7 @@ class Config:
         so that the paid data source is utilized for realtime quotes as well.
         """
         explicit = os.getenv('REALTIME_SOURCE_PRIORITY')
-        default_priority = 'tencent,akshare_sina,efinance,akshare_em'
+        default_priority = 'tencent,efinance,sina,eastmoney_direct,akshare_sina,akshare_em'
 
         if explicit:
             # User explicitly set priority, respect it

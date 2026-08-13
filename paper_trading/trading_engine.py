@@ -1067,7 +1067,11 @@ class TradingEngine:
                 self.position_mgr.update_last_price(account_id, code, price)
 
         rolled = self.position_mgr.daily_roll_available(account_id)
-        self.account_mgr.record_daily_net_value(account_id, target_date=target_date)
+        # insert mode: append the end-of-day point so intraday snapshots taken
+        # the same day are preserved (net-value curve keeps its intraday shape).
+        self.account_mgr.record_daily_net_value(
+            account_id, target_date=target_date, mode='insert'
+        )
 
         logger.info(
             "Daily settle complete: account=%s positions_rolled=%s",

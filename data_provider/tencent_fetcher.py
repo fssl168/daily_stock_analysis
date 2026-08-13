@@ -39,6 +39,9 @@ class TencentFetcher(BaseFetcher):
         symbol = _to_tencent_symbol(code)
         if not symbol:
             raise DataFetchError(f"TencentFetcher unsupported stock code: {stock_code}")
+        # 美股 K 线接口需要交易所后缀 (usAAPL -> usAAPL.OQ); 实时行情则用无后缀。
+        if symbol.startswith("us") and not symbol.endswith((".OQ", ".O")):
+            symbol = f"{symbol}.OQ"
 
         lookback = _estimate_lookback_days(start_date=start_date, end_date=end_date)
         explicit_start = _format_tencent_date(start_date)

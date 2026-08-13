@@ -69,8 +69,8 @@ class MultiSourceDataFetcher:
                 from data_provider.tushare_fetcher import TushareFetcher
                 adapter = TushareFetcher()
             elif source_name == "yfinance":
-                from data_provider.yfinance_fetcher import YFinanceFetcher
-                adapter = YFinanceFetcher()
+                from data_provider.yfinance_fetcher import YfinanceFetcher
+                adapter = YfinanceFetcher()
             elif source_name in ("akshare", "akshare_em", "akshare_sina"):
                 from data_provider.akshare_fetcher import AkshareFetcher
                 adapter = AkshareFetcher()

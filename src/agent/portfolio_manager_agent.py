@@ -796,6 +796,21 @@ class PortfolioManagerAgent:
             entry_price = params.get("entry_price")
             trigger_price = params.get("trigger_price")
 
+            # T-16: 止损离场强制市价单 —— PM 决策的卖出默认挂 limit，深亏时
+            # 现价已跌破挂价，limit 卖单永不成交。双通道识别止损语义：
+            # ① reason 关键词 ② 现价已破 params.stop_loss。命中则强制
+            # MARKET 并标记 risk_mandated（对齐 T-09 日亏豁免），确保离场可执行。
+            risk_mandated = False
+            if row.action == "sell":
+                current_price = self._fetch_current_price(acct_id, row.code)
+                if self._is_risk_exit(params, row.reason or "", current_price):
+                    order_type = OrderType.MARKET
+                    risk_mandated = True
+                    logger.info(
+                        "[PortfolioManagerAgent] Decision %s forced to MARKET (risk exit) code=%s price=%s",
+                        decision_id, row.code, current_price,
+                    )
+
             if order_type == OrderType.LIMIT:
                 ref_price = float(limit_price or entry_price or trigger_price or 0.0)
             else:
@@ -819,6 +834,7 @@ class PortfolioManagerAgent:
                 trigger_price=ref_price,
                 suggested_quantity=quantity,
                 reason=row.reason or f"Manual execution of PM decision {decision_id}",
+                risk_mandated=risk_mandated,  # T-16: 止损离场跳过日亏限额等保护性限制
             )
 
             result = self.trading_engine.submit_signal(
@@ -863,6 +879,63 @@ class PortfolioManagerAgent:
             )
             return result.to_dict()
 
+    # ------------------------------------------------------------------
+    # Risk-exit detection (T-16)
+    # ------------------------------------------------------------------
+
+    # 止损语义关键词（精准词表，避免误伤止盈/正常卖出）
+    _RISK_EXIT_KEYWORDS = ("止损", "离场", "割肉", "跌破", "破位", "清仓")
+
+    def _fetch_current_price(self, account_id: int, code: str) -> Optional[float]:
+        """Best-effort latest price: quote cache -> position last_price -> fetcher."""
+        try:
+            engine = self.trading_engine
+            if engine is not None:
+                qc = getattr(engine, "quote_cache", None)
+                if qc is not None:
+                    q = qc.get(code)
+                    if q is not None and getattr(q, "price", None):
+                        return float(q.price)
+                pm = getattr(engine, "position_mgr", None)
+                if pm is not None:
+                    for p in pm.list_positions(account_id):
+                        if p.get("code") == code and p.get("last_price"):
+                            return float(p["last_price"])
+        except Exception as exc:
+            logger.debug("[PortfolioManagerAgent] current price fetch failed: %s", exc)
+        try:
+            from src.data_fetcher import MultiSourceDataFetcher
+            q = MultiSourceDataFetcher(cache_ttl=15).get_realtime_quote(code)
+            if q is not None:
+                price = float(getattr(q, "price", 0.0) or 0.0)
+                if price > 0:
+                    return price
+        except Exception as exc:
+            logger.debug("[PortfolioManagerAgent] fetcher quote failed: %s", exc)
+        return None
+
+    def _is_risk_exit(
+        self,
+        params: Dict[str, Any],
+        reason: str,
+        current_price: Optional[float],
+    ) -> bool:
+        """Detect stop-loss exit intent (double channel).
+
+        Channel 1: reason keyword (止损/离场/割肉/跌破/破位/清仓).
+        Channel 2: current price already breached params.stop_loss.
+        """
+        if reason and any(kw in reason for kw in self._RISK_EXIT_KEYWORDS):
+            return True
+        sl = params.get("stop_loss")
+        if sl and current_price:
+            try:
+                if current_price <= float(sl):
+                    return True
+            except (TypeError, ValueError):
+                pass
+        return False
+
     def ignore_decision(
         self,
         decision_id: int,
@@ -904,6 +977,50 @@ class PortfolioManagerAgent:
 # ---------------------------------------------------------------------------
 # Paper-trading tool registration
 # ---------------------------------------------------------------------------
+
+_STOP_LOSS_KEYWORDS = (
+    "止损", "止亏", "平仓", "割肉", "风控离场",
+    "stop-loss", "stop loss", "cut loss", "risk exit",
+)
+
+
+def _force_market_for_stop_loss(
+    engine: Any,
+    acct_id: int,
+    code: str,
+    side: str,
+    reason: Optional[str],
+    order_type: Any,
+    deep_loss_pct: float = -0.10,
+):
+    """止损语义或深亏持仓的卖出，强制市价单（风控离场）。
+
+    PM 自主下单默认用 limit 单（挂现价），深亏持仓的止损挂限价单可能永不成交
+    （下跌时价格不会触及挂单价）。对「含止损语义」或「持仓浮亏 ≤ deep_loss_pct」
+    的卖出，改为市价单并标记 risk_mandated（豁免日亏限额），确保能立即离场。
+
+    返回 (order_type, risk_mandated)。
+    """
+    from paper_trading.order import OrderType
+
+    if side != "sell" or order_type == OrderType.MARKET:
+        return order_type, False
+    low = (reason or "").lower()
+    is_stop = any(k in low for k in _STOP_LOSS_KEYWORDS)
+    if not is_stop and engine is not None:
+        try:
+            pos = engine.position_mgr.get_position(acct_id, code)
+            if pos is not None:
+                avg_cost = float(getattr(pos, "avg_cost", 0) or 0)
+                last = float(getattr(pos, "last_price", 0) or 0)
+                if avg_cost > 0 and last > 0 and (last - avg_cost) / avg_cost <= deep_loss_pct:
+                    is_stop = True
+        except Exception:
+            pass
+    if is_stop:
+        return OrderType.MARKET, True
+    return order_type, False
+
 
 def register_paper_trading_tools(
     registry: ToolRegistry,
@@ -1064,6 +1181,10 @@ def register_paper_trading_tools(
             # persistence.
             from paper_trading.strategies.engine.rule_engine import Signal
             ot = OrderType.LIMIT if order_type == "limit" else OrderType.MARKET
+            # 止损兜底：PM 自主卖出若为止损语义或持仓深亏，强制市价单并标记风控离场。
+            ot, risk_mandated = _force_market_for_stop_loss(
+                engine, acct_id, code, side, reason, ot,
+            )
             if ot == OrderType.LIMIT:
                 trigger_price = float(
                     limit_price or entry_price or trigger_price_kw or 0.0
@@ -1086,6 +1207,7 @@ def register_paper_trading_tools(
                 trigger_price=trigger_price,
                 suggested_quantity=quantity,
                 reason=reason or f"PM agent autonomous {side} {quantity} {code}",
+                risk_mandated=risk_mandated,
             )
             result = engine.submit_signal(
                 account_id=acct_id,

@@ -88,3 +88,13 @@ static/
 /apps/dsa-desktop/dist/
 /apps/dsa-desktop/node_modules/
 docs/specs/
+
+# 构建缓存与本地产物
+.vite/
+apps/dsa-web/.npm-cache/
+
+# 本地临时产物（脚本/截图/报告）
+tmp/
+
+# config_rollback 生成的 .env 快照备份（敏感）
+.snapshots/

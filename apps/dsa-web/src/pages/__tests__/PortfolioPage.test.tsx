@@ -1,4 +1,5 @@
 import type React from 'react';
+import { MemoryRouter } from 'react-router-dom';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { decisionSignalsApi } from '../../api/decisionSignals';
@@ -30,6 +31,7 @@ const {
   analyzePosition,
   listDecisionSignals,
   getLatestDecisionSignals,
+  getPaperAccounts,
 } = vi.hoisted(() => ({
   getAccounts: vi.fn(),
   getSnapshot: vi.fn(),
@@ -52,6 +54,7 @@ const {
   analyzePosition: vi.fn(),
   listDecisionSignals: vi.fn(),
   getLatestDecisionSignals: vi.fn(),
+  getPaperAccounts: vi.fn(),
 }));
 
 vi.mock('../../api/decisionSignals', () => ({
@@ -82,6 +85,12 @@ vi.mock('../../api/portfolio', () => ({
     createAccount,
     deleteAccount,
     analyzePosition,
+  },
+}));
+
+vi.mock('../../api/paperTrading', () => ({
+  paperTradingApi: {
+    getAccounts: getPaperAccounts,
   },
 }));
 
@@ -288,6 +297,8 @@ describe('PortfolioPage FX refresh', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.localStorage.clear();
+    // 测试环境 navigator.language=en-US, 显式固定中文避免回落英文
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'zh');
 
     getAccounts.mockResolvedValue(makeAccounts());
     getSnapshot.mockImplementation(async ({ accountId }: { accountId?: number } = {}) => makeSnapshot({ accountId, fxStale: true }));
@@ -334,19 +345,24 @@ describe('PortfolioPage FX refresh', () => {
       analysisPhase: 'auto',
     });
     getLatestDecisionSignals.mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 1 });
+    getPaperAccounts.mockResolvedValue({ accounts: [] });
   });
 
-  function renderEnglishPage() {
-    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'en');
-    render(
-      <UiLanguageProvider>
-        <PortfolioPage />
-      </UiLanguageProvider>,
+  function renderPage(ui: React.ReactNode) {
+    return render(
+      <MemoryRouter>
+        <UiLanguageProvider>{ui}</UiLanguageProvider>
+      </MemoryRouter>,
     );
   }
 
+  function renderEnglishPage() {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'en');
+    renderPage(<PortfolioPage />);
+  }
+
   it('renders stale FX status with a manual refresh button', async () => {
-    render(<PortfolioPage />);
+    renderPage(<PortfolioPage />);
 
     await waitForInitialLoad();
 
@@ -360,7 +376,7 @@ describe('PortfolioPage FX refresh', () => {
       limitations: ['realtime_quote_best_effort', 'fx_and_cost_basis_partial'],
     }));
 
-    render(<PortfolioPage />);
+    renderPage(<PortfolioPage />);
 
     await waitForInitialLoad();
 
@@ -408,7 +424,7 @@ describe('PortfolioPage FX refresh', () => {
       },
     }));
 
-    render(<PortfolioPage />);
+    renderPage(<PortfolioPage />);
 
     await waitForInitialLoad();
 
@@ -458,7 +474,7 @@ describe('PortfolioPage FX refresh', () => {
       },
     }));
 
-    render(<PortfolioPage />);
+    renderPage(<PortfolioPage />);
 
     await waitForInitialLoad();
 
@@ -471,7 +487,7 @@ describe('PortfolioPage FX refresh', () => {
       .mockResolvedValueOnce(makeSnapshot({ accountId: 1, fxStale: true }))
       .mockResolvedValueOnce(makeSnapshot({ accountId: 1, fxStale: false }));
 
-    render(<PortfolioPage />);
+    renderPage(<PortfolioPage />);
 
     await waitForInitialLoad();
 
@@ -510,7 +526,7 @@ describe('PortfolioPage FX refresh', () => {
       errorCount: 0,
     });
 
-    render(<PortfolioPage />);
+    renderPage(<PortfolioPage />);
 
     await waitForInitialLoad();
 
@@ -531,7 +547,7 @@ describe('PortfolioPage FX refresh', () => {
       errorCount: 0,
     });
 
-    render(<PortfolioPage />);
+    renderPage(<PortfolioPage />);
 
     await waitForInitialLoad();
 
@@ -546,7 +562,7 @@ describe('PortfolioPage FX refresh', () => {
       { symbol: 'AAPL', market: 'us', currency: 'USD', quantity: 5, avgCost: 100, totalCost: 500, lastPrice: 0, marketValueBase: 0, unrealizedPnlBase: 0, unrealizedPnlPct: null, valuationCurrency: 'USD', priceSource: 'missing', priceDate: null, priceStale: true, priceAvailable: false },
     ] }));
 
-    render(<PortfolioPage />);
+    renderPage(<PortfolioPage />);
 
     await waitForInitialLoad();
 
@@ -581,7 +597,7 @@ describe('PortfolioPage FX refresh', () => {
     });
     getLatestDecisionSignals.mockResolvedValueOnce({ items: [latestSignal], total: 1, page: 1, pageSize: 1 });
 
-    render(<PortfolioPage />);
+    renderPage(<PortfolioPage />);
 
     expect(await screen.findByText('600519')).toBeInTheDocument();
     expect(await screen.findByText('分页后的风险摘要')).toBeInTheDocument();
@@ -609,7 +625,7 @@ describe('PortfolioPage FX refresh', () => {
         pageSize: 1,
       });
 
-    render(<PortfolioPage />);
+    renderPage(<PortfolioPage />);
 
     expect(await screen.findByText('旧 AI 风险')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '刷新数据' }));
@@ -640,7 +656,7 @@ describe('PortfolioPage FX refresh', () => {
       pageSize: 1,
     });
 
-    render(<PortfolioPage />);
+    renderPage(<PortfolioPage />);
 
     expect(await screen.findByText('账号信号')).toBeInTheDocument();
     const signalCallsBeforeSwitch = getLatestDecisionSignals.mock.calls.length;
@@ -705,7 +721,7 @@ describe('PortfolioPage FX refresh', () => {
         pageSize: 1,
       });
 
-    render(<PortfolioPage />);
+    renderPage(<PortfolioPage />);
 
     expect(await screen.findByText('600519')).toBeInTheDocument();
 
@@ -755,7 +771,7 @@ describe('PortfolioPage FX refresh', () => {
       return { items: [], total: 0, page: 1, pageSize: 1 };
     });
 
-    render(<PortfolioPage />);
+    renderPage(<PortfolioPage />);
 
     expect(await screen.findAllByText('A 股风险')).toHaveLength(2);
     expect(screen.getByText('港股风险')).toBeInTheDocument();
@@ -785,7 +801,7 @@ describe('PortfolioPage FX refresh', () => {
       })
       .mockRejectedValueOnce(new Error('latest AAPL failed'));
 
-    render(<PortfolioPage />);
+    renderPage(<PortfolioPage />);
 
     expect(await screen.findByText('已加载风险')).toBeInTheDocument();
     expect(await screen.findByText('AI 建议降级')).toBeInTheDocument();
@@ -804,7 +820,7 @@ describe('PortfolioPage FX refresh', () => {
       pageSize: 1,
     });
 
-    render(<PortfolioPage />);
+    renderPage(<PortfolioPage />);
 
     expect(await screen.findAllByText('唯一 latest 风险')).toHaveLength(2);
     expect(getLatestDecisionSignals).toHaveBeenCalledTimes(1);
@@ -830,7 +846,7 @@ describe('PortfolioPage FX refresh', () => {
       return { items: [], total: 0, page: 1, pageSize: 1 };
     });
 
-    render(<PortfolioPage />);
+    renderPage(<PortfolioPage />);
 
     expect(await screen.findByText('AAPL0')).toBeInTheDocument();
     await waitFor(() => expect(getLatestDecisionSignals).toHaveBeenCalledTimes(10));
@@ -843,7 +859,7 @@ describe('PortfolioPage FX refresh', () => {
       { symbol: 'HK00700', market: 'hk', currency: 'HKD', quantity: 10, avgCost: 400, totalCost: 4000, lastPrice: 420, marketValueBase: 4200, unrealizedPnlBase: 200, unrealizedPnlPct: 5, valuationCurrency: 'HKD', priceSource: 'history_close', priceDate: '2026-03-18', priceStale: true, priceAvailable: true },
     ] }));
 
-    render(<PortfolioPage />);
+    renderPage(<PortfolioPage />);
 
     await waitForInitialLoad();
 
@@ -873,7 +889,7 @@ describe('PortfolioPage FX refresh', () => {
       errorCount: 0,
     });
 
-    render(<PortfolioPage />);
+    renderPage(<PortfolioPage />);
 
     await waitForInitialLoad();
 
@@ -893,7 +909,7 @@ describe('PortfolioPage FX refresh', () => {
       errorCount: 0,
     });
 
-    render(<PortfolioPage />);
+    renderPage(<PortfolioPage />);
 
     await waitForInitialLoad();
 
@@ -912,7 +928,7 @@ describe('PortfolioPage FX refresh', () => {
       errorCount: 1,
     });
 
-    render(<PortfolioPage />);
+    renderPage(<PortfolioPage />);
 
     await waitForInitialLoad();
 
@@ -940,7 +956,7 @@ describe('PortfolioPage FX refresh', () => {
       ),
     );
 
-    render(<PortfolioPage />);
+    renderPage(<PortfolioPage />);
 
     await waitForInitialLoad();
 
@@ -964,7 +980,7 @@ describe('PortfolioPage FX refresh', () => {
         ),
       );
 
-    render(<PortfolioPage />);
+    renderPage(<PortfolioPage />);
 
     await waitForInitialLoad();
 
@@ -995,7 +1011,7 @@ describe('PortfolioPage FX refresh', () => {
     }>();
     refreshFx.mockImplementationOnce(() => pendingRefresh.promise);
 
-    render(<PortfolioPage />);
+    renderPage(<PortfolioPage />);
 
     await waitForInitialLoad();
 
@@ -1041,7 +1057,7 @@ describe('PortfolioPage FX refresh', () => {
     }>();
     refreshFx.mockImplementationOnce(() => pendingRefresh.promise);
 
-    render(<PortfolioPage />);
+    renderPage(<PortfolioPage />);
 
     await waitForInitialLoad();
 
@@ -1079,7 +1095,7 @@ describe('PortfolioPage FX refresh', () => {
       .mockResolvedValueOnce(makeAccounts([{ id: 1, name: 'Main' }, { id: 2, name: 'Alt' }]))
       .mockResolvedValueOnce(makeAccounts([{ id: 2, name: 'Alt' }]));
 
-    render(<PortfolioPage />);
+    renderPage(<PortfolioPage />);
 
     await waitForInitialLoad();
 

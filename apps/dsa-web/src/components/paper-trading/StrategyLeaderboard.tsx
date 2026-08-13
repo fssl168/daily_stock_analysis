@@ -99,7 +99,7 @@ export function StrategyLeaderboard({ accountId, className = "" }: Props) {
                 {idx === 0 ? <Trophy size={12} className="text-amber-500 inline" /> : idx + 1}
               </td>
               <td className="py-1 pr-4 font-semibold truncate max-w-[120px]">
-                <span className={STATUS_COLOR[s.status]} title={s.status}>{s.name}</span>
+                <span className={STATUS_COLOR[s.status]} aria-label={s.status}>{s.name}</span>
               </td>
               <td className={`py-1 px-2 text-right font-mono tabular-nums ${s.sharpeRatio > 1 ? "text-green-500" : s.sharpeRatio < 0 ? "text-red-500" : ""}`}>
                 {s.sharpeRatio.toFixed(2)}

@@ -81,7 +81,7 @@ export function LatencyPanel({ accountId, className = "" }: Props) {
             p99: <span className="font-mono font-semibold text-foreground">{tickTotalMs.p99.toFixed(0)}ms</span>
           </span>
           {totalWarn && (
-            <span title="p95 > 1000ms">
+            <span aria-label="p95 > 1000ms" className="inline-flex items-center">
               <AlertCircle size={14} className="text-amber-500" />
             </span>
           )}

@@ -553,13 +553,13 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               value={code}
               onChange={(e) => setCode(e.target.value.toUpperCase())}
               placeholder={t('paperTrading.order.placeholder.code')}
-              className="input-terminal"
+              className=""
               data-testid="order-code-input"
             />
             <select
               value={side}
               onChange={(e) => setSide(e.target.value as 'buy' | 'sell')}
-              className="input-terminal bg-elevated"
+              className="bg-elevated"
               data-testid="order-side-select"
             >
               <option value="buy">{t('paperTrading.order.side.buy')}</option>
@@ -574,13 +574,13 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               placeholder={t('paperTrading.order.placeholder.quantity')}
               min={0.01}
               step={0.01}
-              className="input-terminal"
+              className=""
               data-testid="order-quantity-input"
             />
             <select
               value={orderType}
               onChange={(e) => setOrderType(e.target.value as 'market' | 'limit')}
-              className="input-terminal bg-elevated"
+              className="bg-elevated"
               data-testid="order-type-select"
             >
               <option value="market">{t('paperTrading.order.type.market')}</option>
@@ -595,7 +595,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               placeholder={t('paperTrading.order.placeholder.limitPrice')}
               min={0.01}
               step={0.01}
-              className="input-terminal"
+              className=""
               data-testid="order-limit-price-input"
             />
           )}
@@ -618,13 +618,13 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               value={code}
               onChange={(e) => setCode(e.target.value.toUpperCase())}
               placeholder={t('paperTrading.order.placeholder.code')}
-              className="input-terminal"
+              className=""
               data-testid="conditional-code-input"
             />
             <select
               value={side}
               onChange={(e) => setSide(e.target.value as 'buy' | 'sell')}
-              className="input-terminal bg-elevated"
+              className="bg-elevated"
               data-testid="conditional-side-select"
             >
               <option value="buy">{t('paperTrading.order.side.buy')}</option>
@@ -639,13 +639,13 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
               placeholder={t('paperTrading.order.placeholder.quantity')}
               min={0.01}
               step={0.01}
-              className="input-terminal"
+              className=""
               data-testid="conditional-quantity-input"
             />
             <select
               value={conditionalType}
               onChange={(e) => setConditionalType(e.target.value as 'stop_loss' | 'take_profit')}
-              className="input-terminal bg-elevated"
+              className="bg-elevated"
               data-testid="conditional-type-select"
             >
               <option value="stop_loss">{t('paperTrading.order.conditionalType.stopLoss')}</option>
@@ -659,14 +659,14 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
             placeholder={t('paperTrading.order.placeholder.triggerPrice')}
             min={0.01}
             step={0.01}
-            className="input-terminal"
+            className=""
             data-testid="conditional-trigger-price-input"
           />
           <div className="grid grid-cols-2 gap-3">
             <select
               value={orderType}
               onChange={(e) => setOrderType(e.target.value as 'market' | 'limit')}
-              className="input-terminal bg-elevated"
+              className="bg-elevated"
               data-testid="conditional-order-type-select"
             >
               <option value="market">{t('paperTrading.order.type.market')}</option>
@@ -680,7 +680,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
                 placeholder={t('paperTrading.order.placeholder.limitPrice')}
                 min={0.01}
                 step={0.01}
-                className="input-terminal"
+                className=""
                 data-testid="conditional-limit-price-input"
               />
             )}
@@ -719,13 +719,13 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
                     value={row.code}
                     onChange={(e) => updateBatchRow(row.id, 'code', e.target.value.toUpperCase())}
                     placeholder={t('paperTrading.order.placeholder.code')}
-                    className="input-terminal text-xs py-1.5"
+                    className="text-xs py-1.5"
                     data-testid={`batch-code-input-${index}`}
                   />
                   <select
                     value={row.side}
                     onChange={(e) => updateBatchRow(row.id, 'side', e.target.value)}
-                    className="input-terminal bg-elevated text-xs py-1.5"
+                    className="bg-elevated text-xs py-1.5"
                     data-testid={`batch-side-select-${index}`}
                   >
                     <option value="buy">{t('paperTrading.order.side.buy')}</option>
@@ -740,13 +740,13 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
                     placeholder={t('paperTrading.order.placeholder.quantity')}
                     min={0.01}
                     step={0.01}
-                    className="input-terminal text-xs py-1.5"
+                    className="text-xs py-1.5"
                     data-testid={`batch-quantity-input-${index}`}
                   />
                   <select
                     value={row.orderType}
                     onChange={(e) => updateBatchRow(row.id, 'orderType', e.target.value)}
-                    className="input-terminal bg-elevated text-xs py-1.5"
+                    className="bg-elevated text-xs py-1.5"
                     data-testid={`batch-type-select-${index}`}
                   >
                     <option value="market">{t('paperTrading.order.type.market')}</option>
@@ -761,7 +761,7 @@ const OrderForm: React.FC<{ accountId: number; onSubmitted: () => void }> = ({ a
                     placeholder={t('paperTrading.order.placeholder.limitPrice')}
                     min={0.01}
                     step={0.01}
-                    className="input-terminal text-xs py-1.5 w-full"
+                    className="text-xs py-1.5 w-full"
                     data-testid={`batch-limit-price-input-${index}`}
                   />
                 )}
@@ -921,7 +921,7 @@ const OrdersTable: React.FC<{
         <select
           value={filters.status}
           onChange={(e) => onFiltersChange({ ...filters, status: e.target.value })}
-          className="input-terminal bg-elevated text-xs py-1.5"
+          className="bg-elevated text-xs py-1.5"
           data-testid="orders-filter-status"
         >
           <option value="">{t('paperTrading.orders.filter.allStatus')}</option>
@@ -934,7 +934,7 @@ const OrdersTable: React.FC<{
         <select
           value={filters.side}
           onChange={(e) => onFiltersChange({ ...filters, side: e.target.value })}
-          className="input-terminal bg-elevated text-xs py-1.5"
+          className="bg-elevated text-xs py-1.5"
           data-testid="orders-filter-side"
         >
           <option value="">{t('paperTrading.orders.filter.allSides')}</option>
@@ -946,7 +946,7 @@ const OrdersTable: React.FC<{
           value={filters.code}
           onChange={(e) => onFiltersChange({ ...filters, code: e.target.value.toUpperCase() })}
           placeholder={t('paperTrading.orders.filter.placeholder')}
-          className="input-terminal text-xs py-1.5 flex-1 min-w-[120px]"
+          className="text-xs py-1.5 flex-1 min-w-[120px]"
           data-testid="orders-filter-code"
         />
         <span className="text-xs text-muted" data-testid="orders-filter-count">
@@ -1023,7 +1023,7 @@ const OrdersTable: React.FC<{
                             placeholder={t('paperTrading.orders.newLimitPrice')}
                             min={0.01}
                             step={0.01}
-                            className="input-terminal text-xs py-1.5 w-36"
+                            className="text-xs py-1.5 w-36"
                             data-testid="order-modify-price-input"
                           />
                           <input
@@ -1033,7 +1033,7 @@ const OrdersTable: React.FC<{
                             placeholder={t('paperTrading.orders.newQuantity')}
                             min={0.01}
                             step={0.01}
-                            className="input-terminal text-xs py-1.5 w-32"
+                            className="text-xs py-1.5 w-32"
                             data-testid="order-modify-quantity-input"
                           />
                           <button
@@ -1235,7 +1235,7 @@ const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> =
                         placeholder={t('paperTrading.orders.newLimitPrice')}
                         min={0.01}
                         step={0.01}
-                        className="input-terminal text-xs py-1.5 w-36"
+                        className="text-xs py-1.5 w-36"
                         data-testid="signal-modify-price-input"
                       />
                       <input
@@ -1245,7 +1245,7 @@ const SignalsTable: React.FC<{ signals: SignalItem[]; onRefresh: () => void }> =
                         placeholder={t('paperTrading.orders.newQuantity')}
                         min={0.01}
                         step={0.01}
-                        className="input-terminal text-xs py-1.5 w-32"
+                        className="text-xs py-1.5 w-32"
                         data-testid="signal-modify-quantity-input"
                       />
                       <button
@@ -1677,7 +1677,7 @@ const AccountManager: React.FC<AccountManagerProps> = ({
                   value={createName}
                   onChange={(e) => setCreateName(e.target.value)}
                   placeholder={t('paperTrading.accountManager.namePlaceholder')}
-                  className="input-terminal text-xs py-1.5 px-2 w-36"
+                  className="text-xs py-1.5 px-2 w-36"
                 />
                 <input
                   type="number"
@@ -1686,7 +1686,7 @@ const AccountManager: React.FC<AccountManagerProps> = ({
                   placeholder={t('paperTrading.accountManager.capitalPlaceholder')}
                   min={1}
                   step={1}
-                  className="input-terminal text-xs py-1.5 px-2 w-28"
+                  className="text-xs py-1.5 px-2 w-28"
                 />
                 <button
                   type="button"
@@ -1719,7 +1719,7 @@ const AccountManager: React.FC<AccountManagerProps> = ({
                           type="text"
                           value={editName}
                           onChange={(e) => setEditName(e.target.value)}
-                          className="input-terminal text-xs py-1 px-2 w-32"
+                          className="text-xs py-1 px-2 w-32"
                         />
                       ) : (
                         <span className="text-sm font-medium text-white">{a.name}</span>
@@ -1757,7 +1757,7 @@ const AccountManager: React.FC<AccountManagerProps> = ({
                           value={editCapital}
                           onChange={(e) => setEditCapital(e.target.value)}
                           placeholder={t('paperTrading.accountManager.capitalPlaceholder')}
-                          className="input-terminal text-xs py-1 px-2 w-28"
+                          className="text-xs py-1 px-2 w-28"
                         />
                         <button
                           type="button"
@@ -1882,7 +1882,7 @@ const DailyReportTab: React.FC<{ accountId: number }> = ({ accountId }) => {
           type="date"
           value={reportDate}
           onChange={(e) => setReportDate(e.target.value)}
-          className="input-terminal text-xs py-1.5"
+          className="text-xs py-1.5"
           data-testid="daily-report-date-input"
         />
         <button

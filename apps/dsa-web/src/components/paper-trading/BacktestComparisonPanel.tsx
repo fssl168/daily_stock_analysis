@@ -129,7 +129,7 @@ export const BacktestComparisonPanel: React.FC<{ accountId: number }> = ({ accou
             <select
               value={strategyName}
               onChange={(e) => setStrategyName(e.target.value)}
-              className="input-terminal text-xs py-1.5"
+              className="text-xs py-1.5"
               aria-label={t('paperTrading.backtestComparison.strategyLabel')}
             >
               <option value="default">default</option>

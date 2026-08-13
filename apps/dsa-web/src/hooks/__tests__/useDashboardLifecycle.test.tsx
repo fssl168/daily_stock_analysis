@@ -3,6 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useDashboardLifecycle } from '../useDashboardLifecycle';
 import { useTaskStream } from '../useTaskStream';
 
+// requestQueue 全局并发队列是异步排队执行, 测试中 mock 为立即执行,
+// 避免 fake timers + 微任务时序导致断言不稳定。
+vi.mock('../../utils/requestQueue', () => ({
+  requestQueue: {
+    enqueue: <T,>(fn: () => Promise<T>): Promise<T> => fn(),
+    enqueueBatch: async <T,>(fns: Array<() => Promise<T>>): Promise<T[]> =>
+      Promise.all(fns.map((fn) => fn())),
+  },
+}));
+
 vi.mock('../useTaskStream', () => ({
   useTaskStream: vi.fn(),
 }));

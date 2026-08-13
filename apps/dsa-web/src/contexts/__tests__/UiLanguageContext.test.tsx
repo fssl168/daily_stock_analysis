@@ -93,11 +93,27 @@ describe('UiLanguageContext', () => {
       },
     });
 
+    const originalLangDescriptor = Object.getOwnPropertyDescriptor(window.navigator, 'language');
+    const originalLangsDescriptor = Object.getOwnPropertyDescriptor(window.navigator, 'languages');
+    Object.defineProperty(window.navigator, 'language', {
+      configurable: true,
+      value: 'en-US',
+    });
+    Object.defineProperty(window.navigator, 'languages', {
+      configurable: true,
+      value: ['en-US'],
+    });
     try {
       expect(getRuntimeInitialLanguage()).toBe('en');
     } finally {
       if (originalDescriptor) {
         Object.defineProperty(window, 'localStorage', originalDescriptor);
+      }
+      if (originalLangDescriptor) {
+        Object.defineProperty(window.navigator, 'language', originalLangDescriptor);
+      }
+      if (originalLangsDescriptor) {
+        Object.defineProperty(window.navigator, 'languages', originalLangsDescriptor);
       }
     }
   });

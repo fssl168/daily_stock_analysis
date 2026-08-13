@@ -117,7 +117,7 @@ const FixedIncomePage: React.FC = () => {
           <label className="text-xs text-muted">
             票息%{' '}
             <input
-              className="input-terminal text-xs py-1.5 w-20"
+              className="text-xs py-1.5 w-20"
               value={coupon}
               onChange={(e) => setCoupon(e.target.value)}
               type="number" step="0.1" min="0"
@@ -126,7 +126,7 @@ const FixedIncomePage: React.FC = () => {
           <label className="text-xs text-muted">
             年限{' '}
             <input
-              className="input-terminal text-xs py-1.5 w-20"
+              className="text-xs py-1.5 w-20"
               value={years}
               onChange={(e) => setYears(e.target.value)}
               type="number" step="1" min="1"
@@ -135,7 +135,7 @@ const FixedIncomePage: React.FC = () => {
           <label className="text-xs text-muted">
             收益率%{' '}
             <input
-              className="input-terminal text-xs py-1.5 w-20"
+              className="text-xs py-1.5 w-20"
               value={yRate}
               onChange={(e) => setYRate(e.target.value)}
               type="number" step="0.1" min="0"
@@ -174,7 +174,7 @@ const FixedIncomePage: React.FC = () => {
           <label className="text-xs text-muted">
             信用债%{' '}
             <input
-              className="input-terminal text-xs py-1.5 w-20"
+              className="text-xs py-1.5 w-20"
               value={corpYield}
               onChange={(e) => setCorpYield(e.target.value)}
               type="number" step="0.1" min="0"
@@ -183,7 +183,7 @@ const FixedIncomePage: React.FC = () => {
           <label className="text-xs text-muted">
             国债%{' '}
             <input
-              className="input-terminal text-xs py-1.5 w-20"
+              className="text-xs py-1.5 w-20"
               value={treasuryYield}
               onChange={(e) => setTreasuryYield(e.target.value)}
               type="number" step="0.1" min="0"

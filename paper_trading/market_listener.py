@@ -1843,6 +1843,49 @@ def build_default_listener(
     )
 
 
+def _resolve_active_account_markets(db_manager: Optional[Any] = None) -> Optional[Set[str]]:
+    """Collect market tags (cn/hk/us) of all active paper accounts.
+
+    Used to derive the listener's market coverage (T-14) so hk/us accounts
+    are ticked during their own sessions. Returns None on any failure.
+    """
+    try:
+        from src.storage import get_db
+        from paper_trading.account import PaperAccountManager
+
+        db = db_manager or get_db()
+        accounts = PaperAccountManager(db_manager=db).list_accounts(status="active")
+        markets = {
+            (getattr(a, "market", None) or "cn").lower()
+            for a in accounts
+        }
+        return markets or None
+    except Exception as exc:
+        logger.warning("[build_full_listener] resolve account markets failed: %s", exc)
+        return None
+
+
+def _resolve_active_position_codes(db_manager: Optional[Any] = None) -> List[str]:
+    """Collect codes of all open positions across active paper accounts."""
+    try:
+        from src.storage import get_db
+        from paper_trading.account import PaperAccountManager
+        from paper_trading.position import PositionManager
+
+        db = db_manager or get_db()
+        position_mgr = PositionManager(db)
+        codes: List[str] = []
+        for acc in PaperAccountManager(db_manager=db).list_accounts(status="active"):
+            for pos in position_mgr.list_positions(acc.id):
+                c = pos.get("code")
+                if c:
+                    codes.append(c)
+        return codes
+    except Exception as exc:
+        logger.warning("[build_full_listener] resolve position codes failed: %s", exc)
+        return []
+
+
 def build_full_listener(
     config: Any,
     account_id: int,
@@ -1890,6 +1933,37 @@ def build_full_listener(
         enable_battle_plan = bool(
             getattr(config, "paper_trading_listener_enable_battle_plan", True)
         )
+
+    # Multi-market coverage (T-14): if markets not explicitly given, derive
+    # them from the active paper accounts so hk/us accounts get listener
+    # coverage during their own sessions (not just cn).
+    if not markets:
+        markets = _resolve_active_account_markets(db_manager) or {"cn"}
+        logger.info(
+            "[build_full_listener] derived markets from active accounts: %s",
+            sorted(markets),
+        )
+
+    # Extend watched_codes with positions held by active accounts across all
+    # markets, so hk/us holdings are polled/assessed in their market sessions.
+    if not watched_codes:
+        from paper_trading import get_watched_codes as _get_watchcodes
+
+        watched_codes = list(_get_watchcodes(account_id))
+        try:
+            pos_codes = _resolve_active_position_codes(db_manager)
+            if pos_codes:
+                seen = set(watched_codes)
+                for c in pos_codes:
+                    if c not in seen:
+                        watched_codes.append(c)
+                        seen.add(c)
+                logger.info(
+                    "[build_full_listener] watched codes extended with %d held codes -> %d total",
+                    len(pos_codes), len(watched_codes),
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[build_full_listener] extend watched codes failed: %s", exc)
 
     # Shared quote cache + tick latency aggregator (single instances).
     if quote_cache is None:

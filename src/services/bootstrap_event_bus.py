@@ -163,7 +163,10 @@ class L3ConfigObserver:
 # ===================================================================
 
 
-def bootstrap_event_bus(log_path: Optional[Path] = None) -> SystemEventBus:
+def bootstrap_event_bus(
+    log_path: Optional[Path] = None,
+    auto_reflect: bool = True,
+) -> SystemEventBus:
     """初始化系统事件总线并注册各层观察者。幂等。
 
     Args:
@@ -193,12 +196,13 @@ def bootstrap_event_bus(log_path: Optional[Path] = None) -> SystemEventBus:
     except Exception:
         logger.exception("Failed to load historical events; starting with empty log")
 
-    # L4 元认知观察者（订阅全部事件）
+    # L4 元认知观察者（订阅全部事件）—— auto_reflect=True: 由自我认识
+    # （偏差检测/决策计数）自动触发内省报告，无需人工按钮。
     try:
-        observer = MetaCognitiveObserver(auto_reflect=False)
+        observer = MetaCognitiveObserver(auto_reflect=auto_reflect)
         bus.subscribe_all(observer.handle)
         _META_OBSERVER = observer
-        logger.info("L4 MetaCognitiveObserver attached (subscribe_all)")
+        logger.info("L4 MetaCognitiveObserver attached (subscribe_all, auto_reflect=%s)", auto_reflect)
     except Exception:
         logger.exception("Failed to attach L4 MetaCognitiveObserver; EventBus still usable")
 

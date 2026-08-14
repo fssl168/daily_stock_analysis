@@ -263,6 +263,14 @@ async def app_lifespan(app: FastAPI):
     os.environ.pop(RUNTIME_SCHEDULER_RUN_IMMEDIATELY_ENV, None)
     os.environ.pop(RUNTIME_SCHEDULER_SUPPRESS_START_ENV, None)
     os.environ.pop(RUNTIME_SCHEDULER_ARGS_ENV, None)
+    # L4 元认知装配（幂等）: server 进程获得 MetaCognitiveEngine,
+    # auto_reflect=True 由自我认识自动生成内省报告 (事件驱动 + 调度兜底)。
+    try:
+        from src.services.bootstrap_event_bus import bootstrap_event_bus
+
+        bootstrap_event_bus(auto_reflect=True)
+    except Exception:
+        logger.warning("L4 meta-cognitive bootstrap failed (degraded)", exc_info=True)
     runtime_scheduler_service = RuntimeSchedulerService(
         owns_schedule=runtime_owns_schedule,
         force_enabled=runtime_force_enabled,

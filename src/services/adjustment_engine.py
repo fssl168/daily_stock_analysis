@@ -171,6 +171,10 @@ class AdjustmentEngine:
         self._history = (commands + self._history)[: self._max_history]
         return commands
 
+    def recent(self, limit: int = 10) -> List[AdjustmentCommand]:
+        """最近提案（只读，供 GET 端点展示）。"""
+        return self._history[:limit]
+
     def apply(self, cmd: AdjustmentCommand, actor: str = "manual", reflection_id: str = "") -> bool:
         """应用一条调整指令（人工确认或自动）。写 ADJUSTMENT_APPLIED 事件。"""
         if cmd.param_name not in SAFE_PARAMS:

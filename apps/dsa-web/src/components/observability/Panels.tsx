@@ -8,7 +8,6 @@ import type {
   HealthTrendResponse,
   IntrospectionResponse,
   MetaObservationsResponse,
-  ReflectResponse,
   RegressionsResponse,
   RepairEffectivenessResponse,
 } from '../../types/observability';
@@ -96,7 +95,6 @@ export const MetaIntrospectionPanel: React.FC = () => {
   const [proposals, setProposals] = useState<AdjustmentProposal[]>([]);
   const [history, setHistory] = useState<AdjustmentHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [reflecting, setReflecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const loadHistory = useCallback(async () => {
@@ -114,6 +112,7 @@ export const MetaIntrospectionPanel: React.FC = () => {
     try {
       const resp = await observabilityApi.getIntrospection();
       setReport(resp.report);
+      setProposals(resp.proposed_adjustments ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : '内省报告加载失败');
     } finally {
@@ -124,23 +123,12 @@ export const MetaIntrospectionPanel: React.FC = () => {
   useEffect(() => {
     void load();
     void loadHistory();
+    // 后台自主生成: 每 30s 轮询最新报告 (生成时机由自我认识决定)
+    const interval = window.setInterval(() => {
+      void load();
+    }, 30_000);
+    return () => window.clearInterval(interval);
   }, [load, loadHistory]);
-
-  const triggerReflect = async () => {
-    if (reflecting) return;
-    setReflecting(true);
-    setError(null);
-    try {
-      const resp: ReflectResponse = await observabilityApi.triggerReflect();
-      setReport(resp.report);
-      setProposals(resp.proposed_adjustments ?? []);
-      void loadHistory();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '反思触发失败');
-    } finally {
-      setReflecting(false);
-    }
-  };
 
   const handleApply = async (p: AdjustmentProposal) => {
     setError(null);
@@ -167,15 +155,7 @@ export const MetaIntrospectionPanel: React.FC = () => {
   return (
     <Card title="L4 内省报告" subtitle="元认知 · 门控干预模式">
       <div className="mb-2 flex items-center justify-between">
-        <button
-          type="button"
-          className="btn-primary"
-          onClick={() => void triggerReflect()}
-          disabled={reflecting}
-        >
-          {reflecting ? '反思中...' : '触发反思'}
-        </button>
-        <span className="text-xs text-muted-foreground">仅产出报告，不干预策略</span>
+        <span className="text-xs text-muted-foreground">后台自主生成 · 时机由自我认识决定</span>
       </div>
       {error && <InlineAlert variant="danger" title="操作失败" message={error} />}
       {loading && !report ? <Skeleton lines={5} /> : (
@@ -198,7 +178,7 @@ export const MetaIntrospectionPanel: React.FC = () => {
               </pre>
             ) : null}
           </div>
-        ) : <EmptyState title="尚无内省报告" description="点击「触发反思」生成第一份报告" />
+        ) : <EmptyState title="尚无内省报告" description="系统将持续观测并在检测到认知偏差时自动生成" />
       )}
 
       {/* 调整提案（门控干预） */}

@@ -232,6 +232,31 @@ class RuntimeSchedulerService:
         except Exception as exc:  # noqa: BLE001 — 兜底任务注册失败不影响主调度
             logger.warning("runtime_scheduler: register decision_signal_converter failed: %s", exc)
 
+        # ── L4 内省报告周期兜底：每 4 小时自动反思一次 ──
+        # 事件驱动的 auto_reflect 已覆盖偏差/决策触发；此任务保证即使
+        # 事件稀疏也有定期自我认识（生成时机 = 自我认识 + 周期兜底）。
+        try:
+            def _meta_introspection_job() -> None:
+                try:
+                    from src.services.bootstrap_event_bus import get_meta_cognitive_engine
+                    engine = get_meta_cognitive_engine()
+                    if engine is not None:
+                        engine.force_reflection()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("runtime_scheduler: meta introspection job failed: %s", exc)
+
+            meta_name = "meta_introspection"
+            if meta_name not in self._background_task_registered_names:
+                tasks.append({
+                    "task": _meta_introspection_job,
+                    "interval_seconds": 4 * 3600,
+                    "run_immediately": False,
+                    "name": meta_name,
+                })
+                self._background_task_registered_names.add(meta_name)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("runtime_scheduler: register meta_introspection failed: %s", exc)
+
         # ── 周重算：策略回测 → 融合权重更新（每 7 天一次，首次不立即跑）──
         # 避免与盘中 listener 抢数据源；回测结果落库并刷新融合权重。
         try:

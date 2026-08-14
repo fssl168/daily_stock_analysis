@@ -263,10 +263,29 @@ def meta_introspection() -> Dict[str, Any]:
         if engine is None:
             raise _not_found("MetaCognitiveEngine not bootstrapped")
         report = engine.get_latest_introspection()
+        # 附带最近调整提案（后台自主生成链路产出）
+        proposed = []
+        try:
+            from src.services.adjustment_engine import get_adjustment_engine
+
+            proposed = [
+                {
+                    "param_name": c.param_name,
+                    "param_value": str(c.param_value),
+                    "reason": c.reason,
+                    "applied": c.applied,
+                }
+                for c in get_adjustment_engine().recent(limit=10)
+            ]
+        except Exception:
+            proposed = []
         if report is None:
-            return {"report": None}
+            return {"report": None, "proposed_adjustments": proposed}
         # 裁剪为可序列化 dict
-        return {"report": _introspection_to_dict(report)}
+        return {
+            "report": _introspection_to_dict(report),
+            "proposed_adjustments": proposed,
+        }
     except HTTPException:
         raise
     except Exception as exc:

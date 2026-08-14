@@ -1138,6 +1138,21 @@ class MetaCognitiveEngine:
             self._latest_introspection = self._reflection_engine.reflect(
                 recent, bias_findings, circularity
             )
+            # 后台自主生成: 报告产出后自动进入调整提案门控 (白名单, 仅提案
+            # 不应用, 除非 ADJUSTMENT_AUTO_APPLY)。
+            try:
+                hints = list(getattr(self._latest_introspection, "improvement_hints", []) or [])
+                if hints:
+                    from src.services.adjustment_engine import get_adjustment_engine
+
+                    reflection_id = str(
+                        getattr(self._latest_introspection, "generated_at", "")
+                    )
+                    get_adjustment_engine().propose(
+                        hints, reflection_id=reflection_id
+                    )
+            except Exception as exc:
+                logger.debug("L4 auto adjustment proposal failed: %s", exc)
             return self._latest_introspection
 
     def get_introspection_prompt(self) -> str:

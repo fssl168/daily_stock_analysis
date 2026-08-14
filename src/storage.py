@@ -1021,6 +1021,10 @@ class PaperDecision(Base):
     # Optional related signal/order IDs.
     signal_id = Column(Integer, index=True)
     order_id = Column(Integer)
+    # P1-2: PM 决策质量指标 — LLM 输出是否成功解析为 JSON 决策.
+    parse_ok = Column(Boolean, default=False)
+    # P1-2: 质量分 = confidence × parse × action 可执行性 (0.0~1.0).
+    quality_score = Column(Float, default=0.0)
     created_at = Column(DateTime, default=datetime.now, index=True)
 
     def __repr__(self) -> str:

@@ -132,3 +132,4 @@ All notable changes to this project will be documented in this file.
 - [修复] 实时行情源优先级接线：新增的 sina/eastmoney_direct 直连源此前未进入生效的 `REALTIME_SOURCE_PRIORITY`（config 默认串与 `.env` 均不含），导致两个新 fetcher 不被调用；已把 `sina,eastmoney_direct` 加入默认优先级、`.env` 与 `.env.example` 示例，并补齐 `DataFetcherManager` 实时行情分发分支（此前只认 efinance/akshare/tencent/tushare/tickflow）
 - [修复] eastmoney 直连 secid 北交所映射：`_to_em_secid` 接入 `is_bse_code`（920/43/83/87 号段归 `0.` 市场段，900xxx 沪B 保持 `1.`）；直连源改用独立 `RealtimeSource.EASTMONEY` 标签，避免诊断时误标为 akshare_em
 - [测试] 新增 `tests/test_data_provider_direct_fetchers.py` 离线解析测试：Sina JSONP/GBK 解析、东财字段缩放与 secid/北交所映射、`MultiSourceDataFetcher.get_realtime_quote` 对象报价回归（根因防回归）
+- [新功能] PM 决策质量指标化（P1-2）：`paper_decisions` 新增 `parse_ok`/`quality_score` 列（quality = confidence × parse × action 可执行性）；`PMDecision.to_dict`/API `PMDecisionItem` 暴露质量字段；契约检查自动校验 dataclass to_dict 覆盖

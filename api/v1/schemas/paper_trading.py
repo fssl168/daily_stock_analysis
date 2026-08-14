@@ -421,6 +421,8 @@ class PMDecisionItem(BaseModel):
     status: str = Field("pending", description="pending / executed / rejected / skipped")
     signal_id: Optional[int] = None
     order_id: Optional[int] = None
+    parse_ok: bool = False
+    quality_score: float = 0.0
     created_at: str
 
 

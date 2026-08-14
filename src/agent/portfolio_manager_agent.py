@@ -146,6 +146,10 @@ class PMDecision:
     error: Optional[str] = None
     elapsed_seconds: float = 0.0
     used_fallback: bool = False
+    # P1-2: 质量指标 — LLM 输出是否成功解析为 JSON 决策.
+    parse_ok: bool = False
+    # P1-2: 质量分 = confidence × parse × action 可执行性 (0.0~1.0).
+    quality_score: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -159,6 +163,8 @@ class PMDecision:
             "error": self.error,
             "elapsed_seconds": self.elapsed_seconds,
             "used_fallback": self.used_fallback,
+            "parse_ok": self.parse_ok,
+            "quality_score": self.quality_score,
         }
 
 
@@ -664,6 +670,7 @@ class PortfolioManagerAgent:
                 reason=reason,
                 confidence=confidence,
                 raw_response=raw_text,
+                parse_ok=True,  # P1-2: JSON 解析成功
             )
 
         # Fallback: keyword detection.
@@ -715,6 +722,13 @@ class PortfolioManagerAgent:
             params_json = json.dumps(
                 decision.params, ensure_ascii=False, default=str
             ) if decision.params else None
+            # P1-2: 质量分 = confidence × parse × action 可执行性.
+            quality = float(decision.confidence or 0.0)
+            if not decision.parse_ok:
+                quality *= 0.5
+            if decision.action not in ("buy", "sell"):
+                quality *= 0.5
+            decision.quality_score = round(quality, 4)
             with db.session_scope() as session:
                 row = PaperDecision(
                     account_id=account_id,
@@ -727,6 +741,8 @@ class PortfolioManagerAgent:
                     source="pm_agent",
                     status="pending",
                     raw_response=decision.raw_response,
+                    parse_ok=bool(decision.parse_ok),
+                    quality_score=decision.quality_score,
                 )
                 session.add(row)
                 session.flush()

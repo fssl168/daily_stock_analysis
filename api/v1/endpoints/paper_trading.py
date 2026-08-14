@@ -601,6 +601,8 @@ def _row_to_decision_dict(row: PaperDecision) -> Dict[str, Any]:
         "status": row.status or "pending",
         "signal_id": row.signal_id,
         "order_id": row.order_id,
+        "parse_ok": bool(getattr(row, "parse_ok", False)),
+        "quality_score": float(getattr(row, "quality_score", 0.0) or 0.0),
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 

@@ -136,3 +136,4 @@ All notable changes to this project will be documented in this file.
 - [修复] eastmoney 直连 secid 北交所映射：`_to_em_secid` 接入 `is_bse_code`（920/43/83/87 号段归 `0.` 市场段，900xxx 沪B 保持 `1.`）；直连源改用独立 `RealtimeSource.EASTMONEY` 标签，避免诊断时误标为 akshare_em
 - [测试] 新增 `tests/test_data_provider_direct_fetchers.py` 离线解析测试：Sina JSONP/GBK 解析、东财字段缩放与 secid/北交所映射、`MultiSourceDataFetcher.get_realtime_quote` 对象报价回归（根因防回归）
 - [新功能] PM 决策质量指标化（P1-2）：`paper_decisions` 新增 `parse_ok`/`quality_score` 列（quality = confidence × parse × action 可执行性）；`PMDecision.to_dict`/API `PMDecisionItem` 暴露质量字段；契约检查自动校验 dataclass to_dict 覆盖
+- [新功能] 日终对账脚本（P2-2 §8.2 落地）：`scripts/reconcile_positions.py`——`--mode paper` 本地自洽对账（持仓市值现价口径+现金 vs 总资产，千分之一容差，5 账户实测全过）/ `--mode broker` 券商对账（EastMoneyBroker 持仓/资金 vs 本地，需 Windows 登录环境）

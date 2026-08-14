@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- [修复] PM 自主下单（`paper_trading_place_order`）止损兜底：对「含止损语义」或「持仓浮亏 ≤ -10%」的卖出强制市价单 + `risk_mandated`（对齐 T-16 decision 入口），避免深亏持仓止损挂限价单（挂现价）在下跌时永不成交（数据实证：000858/601012 深亏止损曾挂 limit 挂现价）
+- [测试] 新增 `tests/test_paper_trading_pm_stop_loss.py`（止损市价兜底 5 用例）
+- [修复] `AgentReviewResult.to_dict` 补全 `action`/`code`/`quantity`/`stop_loss`/`take_profit` 字段（此前仅序列化 8 个基础字段，`action` 等核心业务字段遗漏）
+- [改进] 契约检查扩展：`scripts/check_contract_consistency.py` 从 paper_trading 扩展到四层——配置三处同步 + 核心 dataclass to_dict（10 类，`Optional=None` 内部字段可省略）+ API schema 健康（Pydantic 字段类型注解）+ 自动发现（`--strict` 明细）；`.github/workflows/ci.yml` backend-gate 新增 `Contract consistency check` 步骤
+- [修复] 配置契约漂移：`paper_trading_enable_ai_signal_source`/`ai_signal_min_confidence`/`ai_signal_cooldown_seconds`/`include_targeted_webhooks_when_using_ns`/`sync_stock_list`/`use_notification_service`/`notification_channels` 此前无 env 读取（死配置）或 key 命名漂移（`ENABLE_AI_SOURCE` 缺 `_SIGNAL_`），用户配置无效 → 补 `_load_from_env` 读取 + 兼容旧别名 key
+- [修复] `.env.example` key 漂移：修正 `PAPER_TRADING_ENABLE_AI_SIGNAL_SOURCE`/`PAPER_TRADING_AI_SIGNAL_MIN_CONFIDENCE`/`PAPER_TRADING_INCLUDE_TARGETED_WEBHOOKS_WHEN_USING_NS` 全名，补全通知（LARK/DINGTALK/BROADCAST）与 AI 信号配置项
+- [修复] 复盘 prompt↔解析器契约漂移：复盘 prompt 未定义 JSON 结构、解析器假设另一结构，导致复盘落库但内容空 → prompt 明确输出 schema（转义 `{{}}` 兼容 `.format`）+ 解析器兼容嵌套结构（`trade_review`/`entry_analysis`/`daily_review`），真实复盘内容可提取
+- [新功能] 契约一致性检查脚本 `scripts/check_contract_consistency.py`：静态扫描配置三处同步（字段↔env↔.env.example）与 dataclass to_dict 覆盖，退出码可作 CI 门禁
+- [chore] `scripts/ci_gate.sh` 新增 `contract` 阶段并纳入 `run_all`（backend-gate CI 自动拦截配置/序列化契约漂移）
+- [文档] 新增 `docs/contract-consistency-framework.md`：契约定义、防治机制、重构/新增配置 Checklist
+- [测试] 真实密钥验收（P0-1）：复盘（`reflect_on_daily`）subject/summary/takeaway 非空、作战卡（`battle_plan.generate`）非 fallback（market_review 为 LLM 真实生成）、PM 决策非 fallback（confidence 卡模型指令遵循，agnes-2.0-flash 不填字段，待换模型）；验收报告 `docs/pm-real-key-acceptance.md`
+- [修复] 运行数据健康化（P0-2）：新增 `scripts/fix_demo_positions.py`——seed 演示价失真（写死 1651/146/23/857 等）导致账户 3/4/5 假深亏/假盈利，按现价对齐成本（偏差 >15% 触发）并重算 SL；修复 6 个持仓（600519/000858/601012/09988/NVDA/TSLA + 03690 SL），全部浮亏进入 ±15% 合理区间、SL < 现价
+- [改进] 契约检查增强（P0-3）：`scripts/check_contract_consistency.py` 新增 serializer→Pydantic schema 契约（3 对：decision/reflection/signal）+ prompt 声明字段⊆解析器读取字段（2 对：PM/复盘）；修复 `_class_block` 顶层 def 终止与 CRLF 兼容
+- [测试] 新增 `tests/test_reflection_parse_compat.py`（复盘解析兼容 4 用例）；`test_config_registry.py`/`test_paper_trading_config_aliases.py` 覆盖新 key 注册与别名
 - [修复] T-09 风控冲突：止损/熔断强平信号（`Signal.risk_mandated`）经 RMS 透传豁免日亏限额，深亏持仓可止损离场（此前 389 条止损单全被日亏限额拒绝）；日亏限额仅对当日新建仓位的亏损计估（历史浮亏不再误算为当日亏损）
 - [修复] OMS `settle_sell` 契约漂移：卖出结算改为 `proceeds = 成交价×数量 − 费`（此前误传 4 参触发 `settle_sell() takes 3 positional arguments`，market sell 成交即 500）
 - [修复] `TradeResult` 缺失 `trade_id`：OMS 成交结果携带 `trade_id`，使成交回调（复盘触发）能拿到真实 trade 而非 None

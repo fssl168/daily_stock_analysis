@@ -106,9 +106,89 @@ class L2Fetcher(BaseFetcher):
     # ------------------------------------------------------------------
 
     def get_level2_quote(self, stock_code: str) -> Optional[Level2Quote]:
-        """Return the most recent L2 snapshot for *stock_code*, or None."""
+        """Return the most recent L2 snapshot for *stock_code*.
+
+        优先返回 WS 推送缓存; 缓存缺失时主动拉取腾讯五档盘口
+        (qt.gtimg.cn, 免费; 填充前 5 档, 后 5 档为 0)。
+        """
         code = str(stock_code).strip().upper()
-        return self._last_quote.get(code)
+        cached = self._last_quote.get(code)
+        if cached is not None:
+            return cached
+        try:
+            quote = self._fetch_tencent_depth(code)
+            if quote is not None:
+                self._last_quote[code] = quote
+                self._available = True
+            return quote
+        except Exception as exc:
+            logger.debug("L2 tencent depth fetch failed for %s: %s", code, exc)
+            return None
+
+    # ------------------------------------------------------------------
+    # Tencent five-level depth fallback (free; A-share only)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _to_tencent_symbol(code: str) -> str:
+        if code.isdigit() and len(code) == 6:
+            if code.startswith(("6", "5", "9")):
+                return f"sh{code}"
+            return f"sz{code}"
+        return ""
+
+    def _fetch_tencent_depth(self, code: str) -> Optional[Level2Quote]:
+        """拉取腾讯五档盘口并填充 Level2Quote 前 5 档."""
+        symbol = self._to_tencent_symbol(code)
+        if not symbol:
+            return None
+        import re
+        import urllib.request
+
+        req = urllib.request.Request(
+            f"https://qt.gtimg.cn/q={symbol}",
+            headers={"User-Agent": "Mozilla/5.0", "Referer": "https://gu.qq.com/"},
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            raw = resp.read().decode("gbk", errors="replace")
+        m = re.search(r"=\"([^\"]*)\"", raw)
+        if not m:
+            return None
+        f = m.group(1).split("~")
+        if len(f) < 29:
+            return None
+
+        bid_prices = [0.0] * 10
+        bid_volumes = [0] * 10
+        ask_prices = [0.0] * 10
+        ask_volumes = [0] * 10
+        # 腾讯 ~ 格式: 买1价@9 买1量@10 ... 买5价@17 买5量@18;
+        # 卖1价@19 卖1量@20 ... 卖5价@27 卖5量@28
+        for i in range(5):
+            try:
+                bid_prices[i] = float(f[9 + i * 2]) if f[9 + i * 2] else 0.0
+                bid_volumes[i] = int(float(f[10 + i * 2])) if f[10 + i * 2] else 0
+                ask_prices[i] = float(f[19 + i * 2]) if f[19 + i * 2] else 0.0
+                ask_volumes[i] = int(float(f[20 + i * 2])) if f[20 + i * 2] else 0
+            except (ValueError, IndexError):
+                break
+        best_bid = bid_prices[0] or 0.0
+        best_ask = ask_prices[0] or 0.0
+        imbalance = 0.0
+        if best_bid > 0 and best_ask > 0:
+            bid_vol = sum(bid_volumes[:5])
+            ask_vol = sum(ask_volumes[:5])
+            total = bid_vol + ask_vol
+            if total > 0:
+                imbalance = (bid_vol - ask_vol) / total
+        return Level2Quote(
+            code=code,
+            bid_prices=bid_prices,
+            bid_volumes=bid_volumes,
+            ask_prices=ask_prices,
+            ask_volumes=ask_volumes,
+            bid_ask_imbalance=round(imbalance, 4),
+        )
 
     def get_level2_quotes_batch(self, stock_codes: List[str]) -> Dict[str, Level2Quote]:
         """Return the latest L2 snapshots for all requested codes."""

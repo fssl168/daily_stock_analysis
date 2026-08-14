@@ -2558,7 +2558,7 @@ def get_l2_depth(
             asks=asks,
             bid_ask_imbalance=quote.bid_ask_imbalance,
             depth_weighted_spread=quote.depth_weighted_spread,
-            source="tickflow",
+            source="tencent",
         )
     except Exception as exc:
         logger.warning("[paper_trading] l2 depth failed for %s: %s", code, exc)

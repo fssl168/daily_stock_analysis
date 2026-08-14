@@ -2269,11 +2269,11 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         context_profile_schema = items["AGENT_CONTEXT_COMPRESSION_PROFILE"]["schema"]
         self.assertEqual(
             [option["label"] for option in context_profile_schema["options"]],
-            ["成本优先", "均衡推荐", "长上下文原文优先"],
+            ["激进压缩", "成本优先", "均衡推荐", "保守压缩", "长上下文原文优先"],
         )
         self.assertEqual(
             context_profile_schema["validation"]["enum"],
-            ["cost", "balanced", "long_context_raw_first"],
+            ["aggressive", "cost", "balanced", "conservative", "long_context_raw_first"],
         )
         market_review_schema = items["MARKET_REVIEW_REGION"]["schema"]
         self.assertEqual(

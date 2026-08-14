@@ -2644,8 +2644,13 @@ async def ws_events(websocket: WebSocket, account_id: int) -> None:
     """Push paper-trading events + risk alerts (pending-api §3).
 
     Subscribes to the ``PaperTradingEventBus`` and forwards each payload
-    as-is (already in the frontend contract shape). Recent events are replayed
-    on connect. The subscription is removed on disconnect to avoid leaks.
+    as-is (already in the frontend contract shape). Recent events are
+    replayed on connect. The subscription is removed on disconnect to
+    avoid leaks.
+
+    Events produced by the listener subprocess are persisted to the
+    ``paper_events`` table (cross-process bridge); this endpoint polls the
+    table for new rows in addition to the in-process bus.
     """
     try:
         verify_ws_account_ownership(websocket, account_id)
@@ -2659,21 +2664,86 @@ async def ws_events(websocket: WebSocket, account_id: int) -> None:
     from paper_trading.events import PaperTradingEventBus
 
     bus = PaperTradingEventBus.instance()
-    queue: "deque[Dict[str, Any]]" = deque(maxlen=200)
+    queue: "deque[Dict[str, Any]]" = deque(maxlen=400)
+    last_db_id = 0
 
     def _on_event(payload: Dict[str, Any]) -> None:
         queue.append(payload)
 
     bus.subscribe(_on_event)
-    # Replay recent events so a freshly-connected feed shows recent activity.
-    for payload in bus.replay():
-        queue.append(payload)
+
+    def _load_recent() -> None:
+        """从 paper_events 表加载最近事件 (跨进程兜底 + 连接重放)."""
+        nonlocal last_db_id
+        try:
+            from src.storage import PaperEvent, get_db
+            from sqlalchemy import select
+
+            db = get_db()
+            with db.session_scope() as session:
+                rows = session.execute(
+                    select(PaperEvent)
+                    .where(PaperEvent.account_id == account_id)
+                    .order_by(PaperEvent.id.desc())
+                    .limit(50)
+                ).scalars().all()
+            for row in reversed(rows):
+                if row.id > last_db_id:
+                    last_db_id = row.id
+                try:
+                    import json as _json
+                    payload = _json.loads(row.payload_json or "{}")
+                except (ValueError, TypeError):
+                    payload = {
+                        "eventId": row.event_id,
+                        "eventType": row.event_type,
+                        "code": row.code,
+                        "orderId": row.order_id,
+                        "side": row.side,
+                        "price": row.price,
+                        "quantity": row.quantity,
+                        "strategyName": row.strategy_name,
+                        "reason": row.reason,
+                        "timestamp": row.created_at.isoformat()
+                        if row.created_at else None,
+                    }
+                queue.append(payload)
+        except Exception as exc:
+            logger.debug("[paper_trading] ws/events db load failed: %s", exc)
+
+    _load_recent()
 
     try:
-        while True:
-            import asyncio
+        import asyncio
 
+        while True:
             await asyncio.sleep(0.2)
+            # 轮询 DB 增量 (listener 子进程写入的事件)
+            try:
+                from src.storage import PaperEvent, get_db
+                from sqlalchemy import select
+
+                db = get_db()
+                with db.session_scope() as session:
+                    rows = session.execute(
+                        select(PaperEvent)
+                        .where(
+                            PaperEvent.account_id == account_id,
+                            PaperEvent.id > last_db_id,
+                        )
+                        .order_by(PaperEvent.id)
+                        .limit(50)
+                    ).scalars().all()
+                for row in rows:
+                    last_db_id = row.id
+                    try:
+                        import json as _json
+                        payload = _json.loads(row.payload_json or "{}")
+                    except (ValueError, TypeError):
+                        payload = {"eventId": row.event_id, "eventType": row.event_type}
+                    queue.append(payload)
+            except Exception as exc:
+                logger.debug("[paper_trading] ws/events db poll failed: %s", exc)
             if queue:
                 await websocket.send_json(queue.popleft())
     except WebSocketDisconnect:

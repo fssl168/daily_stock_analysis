@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import itertools
+import json
 import logging
 import threading
 from collections import deque
@@ -100,6 +101,7 @@ def _next_event_id() -> str:
 def emit_trade_event(
     event_type: str,
     *,
+    account_id: Optional[int] = None,
     code: Optional[str] = None,
     order_id: Optional[int] = None,
     side: Optional[str] = None,
@@ -109,10 +111,15 @@ def emit_trade_event(
     reason: Optional[str] = None,
     timestamp: Optional[str] = None,
 ) -> None:
-    """发布一条交易事件（eventType 判别）。"""
+    """发布一条交易事件（eventType 判别）。
+
+    同时写入 ``paper_events`` 表（跨进程: listener 子进程 → API server
+    WS 端点）并推送到进程内 EventBus（同进程实时）。任一失败不抛异常。
+    """
     payload = {
         "eventId": _next_event_id(),
         "eventType": event_type,
+        "accountId": account_id,
         "code": code,
         "orderId": order_id,
         "side": side,
@@ -122,6 +129,28 @@ def emit_trade_event(
         "reason": reason,
         "timestamp": timestamp or datetime.now().isoformat(),
     }
+    # 1) 持久化 (best-effort)
+    try:
+        from src.storage import PaperEvent, get_db
+
+        db = get_db()
+        with db.session_scope() as session:
+            session.add(PaperEvent(
+                event_id=payload["eventId"],
+                account_id=account_id,
+                event_type=event_type,
+                code=code,
+                order_id=order_id,
+                side=side,
+                price=price,
+                quantity=quantity,
+                strategy_name=strategy_name,
+                reason=reason,
+                payload_json=json.dumps(payload, ensure_ascii=False, default=str),
+            ))
+    except Exception as exc:
+        logger.debug("PaperEvent persist failed: %s", exc)
+    # 2) 进程内广播
     PaperTradingEventBus.instance().publish(payload)
 
 

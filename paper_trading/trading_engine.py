@@ -214,6 +214,8 @@ class TradingEngine:
         re-submitting the same (account_id, client_request_id) is a no-op that
         returns a ``skipped`` result instead of placing a duplicate order.
         """
+        # 供 _emit 事件发布携带账户上下文 (事件持久化用)
+        self._last_account_id = account_id
         # T-13: request-level idempotency guard (before persisting anything).
         if client_request_id:
             key = (account_id, client_request_id)
@@ -1328,14 +1330,15 @@ class TradingEngine:
     def _emit(self, event_type: str, **fields: Any) -> None:
         """Emit a paper-trading trade event (best-effort, never raises).
 
-        Pushes into ``paper_trading.events.PaperTradingEventBus`` which feeds
-        the ``WS /ws/events`` endpoint. A subscriber failure must never break
-        the trading pipeline.
+        Pushes into ``paper_trading.events.PaperTradingEventBus`` (and the
+        persistent ``paper_events`` table) which feeds the ``WS /ws/events``
+        endpoint. A subscriber failure must never break the trading pipeline.
         """
         try:
             from paper_trading.events import emit_trade_event
 
-            emit_trade_event(event_type, **fields)
+            account_id = getattr(self, "_last_account_id", None)
+            emit_trade_event(event_type, account_id=account_id, **fields)
         except Exception:
             logger.debug("[TradingEngine] event emission failed", exc_info=True)
 

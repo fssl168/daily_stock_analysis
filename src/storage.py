@@ -1341,6 +1341,30 @@ _PAPER_REFLECTIONS_BACKFILL_COLUMN_SQL: Dict[str, str] = {
 }
 
 
+class PaperEvent(Base):
+    """持久化 paper-trading 实时事件（跨进程: listener 子进程写入,
+    API server 的 /ws/events 读取推送）。"""
+
+    __tablename__ = 'paper_events'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    event_id = Column(String(40), nullable=False, unique=True, index=True)
+    account_id = Column(Integer, index=True)
+    event_type = Column(String(40), nullable=False, index=True)
+    code = Column(String(16), index=True)
+    order_id = Column(Integer)
+    side = Column(String(8))
+    price = Column(Float)
+    quantity = Column(Float)
+    strategy_name = Column(String(64))
+    reason = Column(Text)
+    payload_json = Column(Text, nullable=False, default='{}')
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+    def __repr__(self) -> str:
+        return f"<PaperEvent(id={self.id}, type={self.event_type}, code={self.code})>"
+
+
 class AlertRuleRecord(Base):
     """Persisted alert rule managed through the Alert API."""
 

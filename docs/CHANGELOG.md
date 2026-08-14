@@ -17,6 +17,9 @@ All notable changes to this project will be documented in this file.
 - [测试] 真实密钥验收（P0-1）：复盘（`reflect_on_daily`）subject/summary/takeaway 非空、作战卡（`battle_plan.generate`）非 fallback（market_review 为 LLM 真实生成）、PM 决策非 fallback（confidence 卡模型指令遵循，agnes-2.0-flash 不填字段，待换模型）；验收报告 `docs/pm-real-key-acceptance.md`
 - [修复] 运行数据健康化（P0-2）：新增 `scripts/fix_demo_positions.py`——seed 演示价失真（写死 1651/146/23/857 等）导致账户 3/4/5 假深亏/假盈利，按现价对齐成本（偏差 >15% 触发）并重算 SL；修复 6 个持仓（600519/000858/601012/09988/NVDA/TSLA + 03690 SL），全部浮亏进入 ±15% 合理区间、SL < 现价
 - [改进] 契约检查增强（P0-3）：`scripts/check_contract_consistency.py` 新增 serializer→Pydantic schema 契约（3 对：decision/reflection/signal）+ prompt 声明字段⊆解析器读取字段（2 对：PM/复盘）；修复 `_class_block` 顶层 def 终止与 CRLF 兼容
+- [新功能] 5 日稳定性演练（P1-3）：新增 `scripts/simulate_trading_days.py`——真实密钥下模拟 N 个交易日（日终结算全账户 + 复盘 + 作战卡 + 落库验证），验收 5 日无异常、每日复盘/作战卡齐全
+- [文档] 功能精简评审 ADR（P2-1）：`docs/feature_review_decision.md`——20 功能面三维打分，决策：保留 20 / 冻结 3（桌面端 Electron、多语言 ko/jp、Bot 扩展渠道）/ 裁剪候选 1（图片导入 OCR）
+- [文档] 实盘前置 4 缺口方案（P2-2）：`docs/live-trading-switch-checklist.md` 新增 §8——日终对账（reconcile 脚本+调度+告警）/实盘人工确认流程（pending_confirmation 状态机）/风控参数校准（回放+评审+熔断演练）；券商 sandbox 方案见 `docs/broker-sandbox-verification.md`
 - [测试] 新增 `tests/test_reflection_parse_compat.py`（复盘解析兼容 4 用例）；`test_config_registry.py`/`test_paper_trading_config_aliases.py` 覆盖新 key 注册与别名
 - [修复] T-09 风控冲突：止损/熔断强平信号（`Signal.risk_mandated`）经 RMS 透传豁免日亏限额，深亏持仓可止损离场（此前 389 条止损单全被日亏限额拒绝）；日亏限额仅对当日新建仓位的亏损计估（历史浮亏不再误算为当日亏损）
 - [修复] OMS `settle_sell` 契约漂移：卖出结算改为 `proceeds = 成交价×数量 − 费`（此前误传 4 参触发 `settle_sell() takes 3 positional arguments`，market sell 成交即 500）

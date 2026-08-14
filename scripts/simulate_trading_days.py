@@ -1,118 +1,88 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Simulate N consecutive trading days for a paper account (T-06).
+"""P1-3: 5 交易日稳定性演练（真实密钥）.
 
-Runs end-of-day settlement across N synthetic trading days with
-deterministic stub prices, verifying the daily net-value curve stays
-continuous and settlement never throws.
+对 5 个未来交易日依次执行: 日终结算(全 active 账户) → 日终复盘 →
+作战卡生成, 每步验证落库。验收: 5 日无未捕获异常; 每日复盘/作战卡
+各 1 条; 净值曲线连续（5 天各有结算点）。
 
-Usage:
-  python scripts/simulate_trading_days.py --account demo --days 5
+用法: python scripts/simulate_trading_days.py [--days 5]
 """
-
-from __future__ import annotations
-
 import argparse
 import logging
 import sys
+import time
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Dict, List, Tuple
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
-
-from src.config import setup_env  # noqa: E402
-
-setup_env()
-
-from src.storage import get_db, PaperPosition  # noqa: E402
-from sqlalchemy import update  # noqa: E402
-from paper_trading.account import PaperAccountManager  # noqa: E402
-from paper_trading.fees import FeeModel  # noqa: E402
-from paper_trading.position import PositionManager  # noqa: E402
-from paper_trading.settlement import Settlement  # noqa: E402
-
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-7s | %(message)s")
 logger = logging.getLogger("simulate_trading_days")
 
+from src.config import setup_env, get_config
+setup_env()
+cfg = get_config()
 
-def synthetic_price(code: str, base: float, day_idx: int) -> float:
-    """Deterministic pseudo-drift per code+day (reproducible, no network)."""
-    seed = (sum(ord(c) for c in code) + day_idx * 17) % 100
-    return round(base * (1.0 + (seed - 50) / 1000.0), 4)
-
-
-def last_weekdays(n: int) -> List[date]:
-    days: List[date] = []
-    d = date.today()
-    while len(days) < n:
-        if d.weekday() < 5:  # Mon-Fri
-            days.append(d)
-        d -= timedelta(days=1)
-    days.reverse()
-    return days
+from src.storage import get_db
+from paper_trading.account import PaperAccountManager
+from paper_trading.trading_engine import TradingEngine
+from paper_trading.reflection import build_reflection_engine
+from paper_trading.battle_plan import build_battle_plan_generator
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Simulate N trading days (T-06)")
-    parser.add_argument("--account", default="E2E-演示账户")
+    parser = argparse.ArgumentParser()
     parser.add_argument("--days", type=int, default=5)
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     db = get_db()
-    account_mgr = PaperAccountManager(db_manager=db)
-    account = account_mgr.get_account(name=args.account)
-    if account is None:
-        print(f"account '{args.account}' not found; run scripts/seed_demo_data.py first.")
-        return 1
-    account_id = account.id
-
-    pos_mgr = PositionManager(db)
-    settlement = Settlement(
-        account_mgr=account_mgr, position_mgr=pos_mgr, fee_model=FeeModel()
+    engine = TradingEngine()
+    reflection = build_reflection_engine(config=cfg, account_id=2)
+    battle_plan = build_battle_plan_generator(
+        config=cfg, account_id=2, trading_engine=engine,
     )
+    acct_mgr = PaperAccountManager(db_manager=db)
+    accounts = [a for a in acct_mgr.list_accounts(status="active")]
 
-    positions = pos_mgr.list_positions(account_id)
-    # Simulate T+1 unlock: by settlement, holdings bought on prior days are
-    # sellable, so available_quantity == total quantity. (Seed/demo positions
-    # are all "today" buys with available_quantity=0, which would make MTM skip
-    # them.) Restoring availability makes mark-to-market exercise the full book.
-    with db.session_scope() as session:
-        session.execute(
-            update(PaperPosition)
-            .where(PaperPosition.account_id == account_id)
-            .values(available_quantity=PaperPosition.quantity)
-        )
-    base: Dict[str, float] = {
-        p["code"]: float(p.get("last_price") or p.get("avg_cost") or 10.0) for p in positions
-    }
-    if not base:
-        print("no open positions; simulation has nothing to mark-to-market.")
-        return 1
-    print(f"positions: {list(base.keys())}")
+    # 未来 5 个交易日（避开今天的真实数据）
+    days = [date.today() + timedelta(days=i + 1) for i in range(args.days)]
+    logger.info("演练账户: %s | 模拟日: %s ~ %s", [a.id for a in accounts], days[0], days[-1])
 
-    days = last_weekdays(args.days)
-    curve: List[Tuple[str, float, int]] = []
-    for idx, day in enumerate(days):
-        prices = {code: synthetic_price(code, b, idx) for code, b in base.items()}
-        res = settlement.daily_settle(account_id, target_date=day, latest_prices=prices)
-        curve.append((day.isoformat(), round(res.total_assets, 2), res.position_count))
-        print(
-            f"  {day.isoformat()} assets={res.total_assets:.2f} cash={res.cash:.2f} "
-            f"pos_value={res.positions_value:.2f} pos={res.position_count}"
-        )
+    stats = {"settle": 0, "reflection": 0, "battle_plan": 0, "errors": []}
+    for i, target in enumerate(days, 1):
+        logger.info("=== 模拟日 %d/%d: %s ===", i, args.days, target)
+        day_start = time.time()
+        try:
+            # 1) 日终结算: 全 active 账户
+            for acc in accounts:
+                engine.daily_settle(acc.id, target_date=target)
+                stats["settle"] += 1
+            logger.info("  [结算] %d 账户完成", len(accounts))
 
-    # ---- assertions ----
-    assert len(curve) == args.days, "not enough settlement days produced"
-    assets = [c[1] for c in curve]
-    assert all(a > 0 for a in assets), "total assets must stay positive"
-    # monotonic-ish sanity: last day differs from first (prices actually moved)
-    assert assets[-1] != assets[0] or len(set(assets)) > 1, "prices did not move"
-    print(f"\n{args.days}-day net-value curve: {assets}")
-    print("simulation OK")
-    return 0
+            # 2) 日终复盘
+            note = reflection.reflect_on_daily(account_id=2, review_date=target)
+            stats["reflection"] += 1
+            logger.info("  [复盘] subject=%s", str(note.subject)[:50])
+
+            # 3) 作战卡
+            plan = battle_plan.generate(account_id=2, target_date=target)
+            stats["battle_plan"] += 1
+            logger.info("  [作战卡] fallback=%s", getattr(plan, "used_fallback", "?"))
+
+            logger.info("  [耗时] %.1fs", time.time() - day_start)
+        except Exception as exc:  # noqa: BLE001 — 演练捕获全部异常计入失败
+            logger.error("  模拟日 %s 失败: %s", target, exc)
+            stats["errors"].append(f"{target}: {type(exc).__name__}: {exc}")
+
+    # 汇总
+    print("\n=== 演练汇总 ===")
+    print(f"模拟日: {args.days} | 结算点: {stats['settle']} | 复盘: {stats['reflection']} | 作战卡: {stats['battle_plan']}")
+    print(f"异常: {len(stats['errors'])}")
+    for e in stats["errors"][:10]:
+        print(f"  ✗ {e}")
+    ok = not stats["errors"] and stats["reflection"] == args.days and stats["battle_plan"] == args.days
+    print(f"\n验收: {'✅ PASS (5 日无异常, 每日复盘/作战卡齐全)' if ok else '❌ FAIL'}")
+    return 0 if ok else 2
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())

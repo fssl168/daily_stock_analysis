@@ -72,14 +72,60 @@
 
 ---
 
-## 7. 决策记录
+## 8. 四缺口逐项方案（P2-2）
+
+> 目标：把 4 项缺口从「待办」推进到「有明确方案与验收」。券商 sandbox 方案见 `docs/broker-sandbox-verification.md`（2.2/2.5 已覆盖）。
+
+### 8.1 券商 sandbox 验证（2.2/2.5）——方案已就绪
+
+- 方案：`docs/broker-sandbox-verification.md`（已就绪，待 Windows + 已登录桌面客户端执行）
+- 代码基础：`EastMoneyBroker` 契约完整 + `tests/test_broker_contract.py`（11 项）+ `tests/test_broker_router.py`（5 项）已通过
+- 验收：sandbox 环境提交 1 单 → 收到券商委托号 → 回报状态映射回纸面订单/持仓
+
+### 8.2 日终对账（3.3）——方案
+
+- **目标**：本地持仓/资金 vs 券商持仓/资金每日一致性核验
+- **方案**：
+  1. 新增 `scripts/reconcile_positions.py`：拉取 broker `query_positions`/`query_account`（EastMoneyBroker 已实现）→ 与本地 `paper_positions`/`accounts` 对比
+  2. 对比维度：code/quantity/available/avg_cost（±0.1% 容差）/cash
+  3. 差异输出：结构化 diff（新增/缺失/数量差异/价格差异）→ 通知通道（复用 NotificationService）
+  4. 调度：复用 `RuntimeSchedulerService` 日终任务（收盘后 30 分钟，避开结算窗口）
+  5. 状态：差异为 0 → `reconcile_ok`；有差异 → 告警 + 人工介入标记
+- **验收**：sandbox 环境造 1 笔差异（手动改本地持仓）→ 对账任务检出并告警；0 差异日静默通过
+- **风险**：券商 API 数据延迟（T+1 结算）→ 对账窗口设在 T 日收盘后、T+1 开盘前
+
+### 8.3 实盘确认流程（4.1）——方案
+
+- **目标**：关键操作（大单/风控触发/撤改）人工二次确认，防误操作
+- **方案**：
+  1. 订单新增 `confirm_required`/`confirmed_by`/`confirm_deadline` 字段（纸面 order 表扩展，`pending_confirmation` 状态）
+  2. 触发条件：金额 > 阈值（如 5 万）或风控边缘（接近集中度/日亏限额 80%）或极端行情暂停期间
+  3. 流程：下单请求 → `pending_confirmation` → 通知（微信/Lark）→ 人工确认/拒绝（API 端点）→ 超时（15 分钟）自动取消
+  4. 审计：确认动作记录操作人/时间/决策理由
+- **验收**：模拟大单触发 pending → 拒绝后订单取消、确认后成交；超时自动取消
+- **兼容**：纸面模式 `confirm_required=false`（不改变现有行为）；仅实盘账户启用
+
+### 8.4 风控参数校准（1.1-1.6）——方案
+
+- **目标**：实盘参数从纸面默认值校准到可执行限额
+- **方案**：
+  1. **回放校准**：用 60 日真实行情回放纸面引擎，统计集中度/单笔/日亏的峰值分布 → 设定限额（建议集中度 15-20%、单笔现金 20-30%、日亏 3-5%）
+  2. **滑点模型**：券商真实费率/滑点（sandbox 成交价 vs 委托价差）校准 `FeeModel.slippage_bps`
+  3. **熔断阈值**：soft/hard/liquidation 按账户风险偏好核定（纸面 3/5/8 → 实盘建议 2/4/6 起步）
+  4. **极端行情预案**：`ExtremeMarket` 暂停 buy + 禁市价单的触发参数与人工接管流程演练
+- **验收**：回放报告（峰值分布表）+ 参数评审记录 + 熔断演练（触发→暂停→人工恢复）
+- **交付**：`docs/risk-params-calibration.md`（回放结果与最终参数表）
+
+---
+
+## 9. 决策记录（更新）
 
 | 决策 | 结论 | 日期 | 备注 |
 | --- | --- | --- | --- |
 | 本阶段接入实盘 | 否 | 2026-08-13 | 纸面完备后再切换 |
 | 固收模块（T-04） | 做最小闭环 | 2026-08-13 | 已落地数据源+计算+API |
 | 实盘切换立项 | 待纸面完备 + 本检查单核验后 | — | — |
-
----
+| 券商 sandbox 验证方案 | 已就绪待执行 | 2026-08-13 | `docs/broker-sandbox-verification.md` |
+| 日终对账/实盘确认/风控校准方案 | 已补充（8.2-8.4） | 2026-08-14 | 执行需 sandbox 环境 + 人工评审 |
 
 *本检查单随 `docs/paper_trading_next_phase_plan.md`（T-07）维护；核验结果逐项记录，切换动作需另行确认。*

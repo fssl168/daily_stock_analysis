@@ -196,22 +196,24 @@ const DrawdownSparkline: React.FC<{ data: DrawdownItem[]; width?: number; height
 
   const values = data.map(d => d.drawdownPct);
   const min = Math.min(...values, 0);
-  const max = 0;
+  const max = Math.max(...values, 0);
   const range = max - min || 1;
   const padding = 4;
   const chartWidth = width - padding * 2;
   const chartHeight = height - padding * 2;
 
+  const clampY = (y: number) => Math.min(Math.max(y, padding), height - padding);
+
   const points = data.map((d, i) => {
     const x = padding + (i / (data.length - 1)) * chartWidth;
-    const y = padding + ((max - d.drawdownPct) / range) * chartHeight;
+    const y = clampY(padding + ((max - d.drawdownPct) / range) * chartHeight);
     return `${x},${y}`;
   }).join(' ');
 
   const areaPoints = `${padding},${padding} ${points} ${width - padding},${padding}`;
 
   return (
-    <svg width={width} height={height} className="overflow-visible">
+    <svg width={width} height={height} className="overflow-hidden">
       <defs>
         <linearGradient id="drawdownGradient" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor="#ff4466" stopOpacity="0" />

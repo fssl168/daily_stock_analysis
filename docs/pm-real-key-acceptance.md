@@ -72,3 +72,9 @@ sentiment_score: 42
 
 - 验收脚本（临时）：`paper_trading/_verify_reflection_content.py` / `_verify_battle_plan.py`（已清理）
 - 数据修复（P0-2）后账户 3 持仓浮亏进入 ±15% 合理区间，PM/复盘的分析基础数据已健康化
+
+## 6. 补充验证（2026-08-14 11:31）：agnes-2.5-flash confidence 复核
+
+- 用 `AGENT_LITELLM_MODEL=openai/agnes-2.5-flash` 重跑 make_decision：**非 fallback ✅、parse_ok ✅、reason 真实分析**（茅台资金不足/立讯信号弱等合理判断），但 **raw_response 仍不含 confidence 字段**（confidence=0.0）
+- **结论**：confidence 缺失是 **agnes 系列模型（2.0/2.5）指令遵循共性问题**，非单版本缺陷
+- **建议**：① 实际部署换非 agnes 模型（如 deepseek 系列）验证 confidence ② 或解析层对缺失 confidence 按证据强度推断并标记 `confidence_source="inferred"`（需用户确认——改变验收语义）③ 或接受「非 fallback + 可执行」为 PM 决策达标线，confidence 作为模型侧优化项

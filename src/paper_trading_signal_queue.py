@@ -50,6 +50,7 @@ class AIAnalysisSignal:
     reason: str = ""
     strategy_name: str = "ai_analysis_signal"
     confidence: float = 1.0  # AI confidence score (0-1)
+    decision_id: Optional[int] = None  # 来源 PM 决策 id (回写用)
     timestamp: datetime = field(default_factory=datetime.now)
 
 

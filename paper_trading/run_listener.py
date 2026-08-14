@@ -108,6 +108,7 @@ def main():
                         reason=str(getattr(decision, "reason", "") or "ai_signal_worker"),
                         strategy_name="ai_signal_worker",
                         confidence=conf,
+                        decision_id=getattr(decision, "_row_id", None),
                     )
                 ]
 

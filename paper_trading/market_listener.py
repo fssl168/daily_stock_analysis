@@ -836,6 +836,31 @@ class MarketListener:
                     "[MarketListener] AI signal submitted: %s %s (confidence=%.2f) -> %s",
                     ai_signal.side, ai_signal.code, ai_signal.confidence, result.status,
                 )
+                # 回写来源 PM 决策: status + signal_id (审计闭环)
+                if ai_signal.decision_id is not None:
+                    try:
+                        from src.storage import PaperDecision
+                        from sqlalchemy import select
+                        with self.engine.db.session_scope() as session:
+                            row = session.execute(
+                                select(PaperDecision).where(
+                                    PaperDecision.id == ai_signal.decision_id
+                                )
+                            ).scalar_one_or_none()
+                            if row is not None and row.status == "pending":
+                                row.status = (
+                                    "executed" if result.status == "executed" else "rejected"
+                                )
+                                row.signal_id = result.signal_id
+                        logger.info(
+                            "[MarketListener] AI decision %s status backfilled -> %s (signal_id=%s)",
+                            ai_signal.decision_id, row.status if row is not None else "?",
+                            result.signal_id,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "[MarketListener] AI decision backfill failed: %s", exc
+                        )
             except Exception as exc:
                 logger.warning("[MarketListener] Failed to submit AI signal: %s", exc)
 

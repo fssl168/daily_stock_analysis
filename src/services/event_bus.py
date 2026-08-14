@@ -247,10 +247,39 @@ class SystemEventBus:
         """发布系统事件。
 
         事件会同步分发到所有匹配的订阅者。订阅者异常不会影响其他订阅者。
+        同时 best-effort 持久化到 ``system_events`` 表（跨进程: 观察进程
+        写入, API server 的 /api/v1/observability 读取）。
         """
         with self._lock:
             self._event_counter += 1
             self._event_log.append(event)
+
+        # 持久化 (best-effort, 失败不影响分发)
+        try:
+            from src.storage import SystemEventRecord, get_db
+
+            db = get_db()
+            with db.session_scope() as session:
+                session.add(SystemEventRecord(
+                    event_id=event.event_id,
+                    event_type=(
+                        event.event_type.value
+                        if isinstance(event.event_type, SystemEventType)
+                        else str(event.event_type)
+                    ),
+                    severity=(
+                        event.severity.value if hasattr(event.severity, "value")
+                        else str(event.severity)
+                    ),
+                    source=event.source,
+                    correlation_id=event.correlation_id,
+                    message=str((event.payload or {}).get("message") or "")[:500],
+                    payload_json=json.dumps(
+                        event.payload, ensure_ascii=False, default=str
+                    ) if event.payload else "{}",
+                ))
+        except Exception:
+            pass  # 持久化失败静默降级 (高频事件路径)
 
         # 分发到精确匹配的订阅者
         handlers = self._subscriptions.get(event.event_type, [])

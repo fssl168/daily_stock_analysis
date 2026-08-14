@@ -127,6 +127,25 @@ def _get_bus() -> SystemEventBus:
     return SystemEventBus.instance()
 
 
+def _system_event_row_to_dict(row: Any) -> Dict[str, Any]:
+    """将 system_events 表行转为前端契约 dict (对齐 _event_to_dict)。"""
+    payload = {}
+    try:
+        import json as _json
+        payload = _json.loads(row.payload_json or "{}")
+    except (ValueError, TypeError):
+        payload = {}
+    return {
+        "event_id": row.event_id,
+        "event_type": row.event_type,
+        "severity": row.severity or "info",
+        "source": row.source or "",
+        "timestamp": row.created_at.isoformat() if row.created_at else "",
+        "payload_redacted": _redact_payload(row.event_type, payload),
+        "correlation_id": row.correlation_id,
+    }
+
+
 def _not_found(message: str) -> HTTPException:
     return HTTPException(status_code=404, detail={"error": "not_found", "message": message})
 
@@ -156,30 +175,40 @@ def list_events(
     page_size: int = Query(20, ge=1, le=100, description="每页条数"),
 ) -> Dict[str, Any]:
     try:
-        bus = _get_bus()
-        # 将 str 查询参数转换为枚举（get_recent_events 要求枚举类型）
-        et_enum = None
+        # 跨进程: 事件由分析/观察进程持久化到 system_events 表,
+        # 此处从 DB 读取 (内存 bus 仅覆盖同进程, 不跨 listener/main)。
+        from src.storage import SystemEventRecord, get_db
+        from sqlalchemy import select, func
+
+        db = get_db()
+        filters = []
         if event_type:
             try:
-                et_enum = SystemEventType(event_type)
+                SystemEventType(event_type)
+                filters.append(SystemEventRecord.event_type == event_type)
             except ValueError:
-                pass
-        sev_enum = None
+                filters.append(SystemEventRecord.event_type == event_type)
+        if source:
+            filters.append(SystemEventRecord.source == source)
         if min_severity:
             try:
                 sev_enum = EventSeverity(min_severity)
+                filters.append(SystemEventRecord.severity == sev_enum.value)
             except ValueError:
-                pass
-        events = bus.get_recent_events(
-            event_type=et_enum,
-            source=source,
-            min_severity=sev_enum,
-            limit=page_size,
-        )
-        total = bus.get_event_count()
-        # 简单分页：get_recent_events 已按时间倒序，取 page 对应的切片
-        start = (page - 1) * page_size
-        items = [_event_to_dict(e) for e in events[start:start + page_size]]
+                filters.append(SystemEventRecord.severity == min_severity)
+
+        with db.session_scope() as session:
+            total = session.execute(
+                select(func.count()).select_from(SystemEventRecord).where(*filters)
+            ).scalar_one()
+            rows = session.execute(
+                select(SystemEventRecord)
+                .where(*filters)
+                .order_by(SystemEventRecord.id.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            ).scalars().all()
+        items = [_system_event_row_to_dict(r) for r in rows]
         return {
             "items": items,
             "total": total,

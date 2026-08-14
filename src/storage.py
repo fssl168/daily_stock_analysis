@@ -1365,6 +1365,26 @@ class PaperEvent(Base):
         return f"<PaperEvent(id={self.id}, type={self.event_type}, code={self.code})>"
 
 
+class SystemEventRecord(Base):
+    """持久化系统事件（跨进程: 分析/观察进程写入, API server 读取,
+    供 L1-L4 系统观察面板展示）。"""
+
+    __tablename__ = 'system_events'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    event_id = Column(String(40), nullable=False, unique=True, index=True)
+    event_type = Column(String(48), nullable=False, index=True)
+    severity = Column(String(16), default="info", index=True)
+    source = Column(String(64), index=True)
+    correlation_id = Column(String(40), index=True)
+    message = Column(String(500))
+    payload_json = Column(Text, nullable=False, default='{}')
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+    def __repr__(self) -> str:
+        return f"<SystemEventRecord(id={self.id}, type={self.event_type})>"
+
+
 class AlertRuleRecord(Base):
     """Persisted alert rule managed through the Alert API."""
 

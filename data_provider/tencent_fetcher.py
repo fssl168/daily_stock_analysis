@@ -129,6 +129,9 @@ def _to_tencent_symbol(stock_code: str) -> str:
     # 港股: hk00700 (hk + 5 位数字, normalize 后可能为大写 HK00700)
     if code[:2].lower() == "hk" and len(code) == 7 and code[2:].isdigit():
         return f"hk{code[2:]}"
+    # 港股裸码: 5 位纯数字 (00700/03690/09988; A股均为 6 位)
+    if code.isdigit() and len(code) == 5:
+        return f"hk{code}"
     # 美股: AAPL / NVDA / TSLA (字母代码)
     if code.isalpha() and 1 <= len(code) <= 5:
         return f"us{code.upper()}"

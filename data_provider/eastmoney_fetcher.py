@@ -111,6 +111,9 @@ def _to_em_secid(stock_code: str) -> str:
     # 港股: HK00700 -> 116.00700
     if code[:2].lower() == "hk" and len(code) == 7 and code[2:].isdigit():
         return f"116.{code[2:]}"
+    # 港股裸码: 5 位纯数字 (00700/03690/09988; A股均为 6 位)
+    if code.isdigit() and len(code) == 5:
+        return f"116.{code}"
     # 美股: AAPL -> 105.AAPL
     if code.isalpha() and 1 <= len(code) <= 5:
         return f"105.{code.upper()}"

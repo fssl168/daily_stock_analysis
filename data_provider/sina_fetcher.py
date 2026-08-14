@@ -126,6 +126,9 @@ def _to_sina_symbol(stock_code: str) -> str:
     # 港股: HK00700 -> hk00700 (新浪港股接口)
     if code[:2].lower() == "hk" and len(code) == 7 and code[2:].isdigit():
         return f"hk{code[2:]}"
+    # 港股裸码: 5 位纯数字 (00700/03690/09988; A股均为 6 位)
+    if code.isdigit() and len(code) == 5:
+        return f"hk{code}"
     if not code.isdigit() or len(code) != 6:
         return ""
     if is_bse_code(code):

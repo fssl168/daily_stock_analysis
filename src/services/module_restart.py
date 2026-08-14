@@ -163,7 +163,7 @@ class ModuleAutoRestarter:
         self._states: Dict[str, ModuleHealthState] = {}
         self._on_alert = on_alert
         self._state_file = state_file
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()  # 重入锁: restart_module 内部嵌套调用 save_state 等
 
         # Phase 3: 修复效果日志（延迟初始化，避免循环导入）
         self._effectiveness_log: Optional[Any] = None
